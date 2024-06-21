@@ -12,8 +12,12 @@ dp = Dispatcher()
 
 async def main():
     import handlers
-    dp.include_router(handlers.router)
+    import middlewares
 
+    dp.include_router(handlers.router)
+    for middleware in middlewares.__all__:
+        dp.message.middleware(middleware())
+        dp.callback_query.middleware(middleware())
     await bot.set_my_commands(commands=BOT_COMMANDS)
     await bot.delete_webhook(drop_pending_updates=True)
     await dp.start_polling(bot)
