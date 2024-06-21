@@ -1,0 +1,12 @@
+version: '3'
+
+services:
+  downloader-bot:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    volumes:
+      - .:/app
+    env_file: .env
+    container_name: downloader-bot
+    restart: always
