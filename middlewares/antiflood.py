@@ -1,11 +1,10 @@
-from typing import Any, Awaitable, Callable, Dict, Union
+from typing import Any, Awaitable, Callable, Dict
 
 from aiogram import BaseMiddleware
 from aiogram.dispatcher.flags import get_flag
-from aiogram.types import Message, CallbackQuery
+from aiogram.types import Message
 from cachetools import TTLCache
 
-import database as db
 
 class AntifloodMiddleware(BaseMiddleware):
     caches = {
@@ -19,7 +18,6 @@ class AntifloodMiddleware(BaseMiddleware):
             event: Message,
             data: Dict[str, Any],
     ) -> Any:
-        await db.users.add(event.from_user.id)
         throttling_key = get_flag(handler=data, name="throttling_key", default="default")
         if throttling_key is not None and throttling_key in self.caches:
             chat_id = event.from_user.id
