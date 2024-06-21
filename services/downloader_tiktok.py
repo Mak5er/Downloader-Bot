@@ -70,12 +70,18 @@ class Downloader:
                 .get("href")
             )
             res = get_content(video_url, self.output_dir, self.output_name)
-            os.remove("hasil.html")
+            try:
+                os.remove("hasil.html")
+            except:
+                pass
             return res
 
         except Exception as e:
             print(f"tiktapiocom error : {e}")
-            os.remove("hasil.html")
+            try:
+                os.remove("hasil.html")
+            except:
+                pass
             return False
 
     def tikmatecc(self, url: str):
@@ -140,7 +146,10 @@ class Downloader:
             parsing = bs(res.text, "html.parser")
             allUrlDownload = parsing.findAll("a", attrs={"style": "margin-top:10px;"})
             if len(allUrlDownload) <= 0:
-                os.remove("hasil.html")
+                try:
+                    os.remove("hasil.html")
+                except:
+                    pass
                 return False
 
             i = random.randint(0, 1)
@@ -150,5 +159,8 @@ class Downloader:
 
         except Exception as e:
             print(f"musicaldown error : {e}")
-            os.remove("hasil.html")
+            try:
+                os.remove("hasil.html")
+            except:
+                pass
             return False
