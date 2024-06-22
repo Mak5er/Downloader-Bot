@@ -94,7 +94,10 @@ async def download_music(message: types.Message):
         audio.download(output_path=OUTPUT_DIR, filename=name)
 
         # Check file size
-        file_size = os.path.getsize(audio_file_path)
+        file_size = audio.filesize_kb
+
+        print(file_size)
+        print(MAX_FILE_SIZE)
 
         if file_size > MAX_FILE_SIZE:
             os.remove(audio_file_path)
