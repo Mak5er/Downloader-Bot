@@ -2,5 +2,6 @@ aiogram~=3.8.0
 requests~=2.32.3
 beautifulsoup4~=4.12.3
 python-dotenv~=1.0.0
-cachetools
+cachetools~=5.3.3
 moviepy~=1.0.3
+instaloader~=4.11
