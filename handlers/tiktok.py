@@ -1,11 +1,14 @@
 import datetime
 import os
+import time
 
+import requests
 from aiogram import types, Router, F
 from aiogram.types import FSInputFile
+from aiogram.utils.media_group import MediaGroupBuilder
+from bs4 import BeautifulSoup
 from moviepy.editor import VideoFileClip
 
-from services.downloader_tiktok import DownloaderTikTok
 from helper import expand_tiktok_url
 
 from main import bot
@@ -17,6 +20,54 @@ MAX_FILE_SIZE = 50 * 1024 * 1024
 router = Router()
 
 
+class DownloaderTikTok:
+    def __init__(self, output_dir, filename):
+        self.output_dir = output_dir
+        self.filename = filename
+
+    def tikwm(self, video_id):
+        try:
+            download_url = f"https://tikwm.com/video/media/play/{video_id}.mp4"
+            response = requests.get(download_url, allow_redirects=True)
+            if response.status_code == 200:
+                with open(self.filename, 'wb') as f:
+                    f.write(response.content)
+                return True
+            return False
+        except Exception as e:
+            print(f"Error: {e}")
+            return False
+
+    def download_photos(self, photo_id):
+        try:
+            url = f"https://tikwm.com/video/{photo_id}.html"
+            response = requests.get(url, allow_redirects=True)
+            time.sleep(1)
+            soup = BeautifulSoup(response.content, 'html.parser')
+            photo_links = []
+            for div in soup.find_all("div", class_=["col-lg-2", "col-md-3", "col-sm-4", "col-xs-4"]):
+                a_tag = div.find("a")
+                if a_tag and 'href' in a_tag.attrs:
+                    photo_links.append(a_tag['href'])
+
+            download_dir = os.path.join(self.output_dir, photo_id)
+            os.makedirs(download_dir, exist_ok=True)
+
+            for idx, photo_url in enumerate(photo_links):
+                try:
+                    photo_response = requests.get(photo_url)
+                    if photo_response.status_code == 200:
+                        photo_path = os.path.join(download_dir, f"{idx}.jpg")
+                        with open(photo_path, 'wb') as f:
+                            f.write(photo_response.content)
+                except:
+                    pass
+            return True
+        except Exception as e:
+            print(f"Error: {e}")
+            return False
+
+
 @router.message(F.text.regexp(r"(https?://(www\.)?tiktok\.com/[^\s]+|https?://vm\.tiktok\.com/[^\s]+)"))
 async def process_url_tiktok(message: types.Message):
     await bot.send_chat_action(message.chat.id, "typing")
@@ -26,44 +77,75 @@ async def process_url_tiktok(message: types.Message):
 
     full_url = expand_tiktok_url(url)
 
+    react = types.ReactionTypeEmoji(emoji="👨‍💻")
+    await message.react([react])
+
     if "video" in full_url:
-        react = types.ReactionTypeEmoji(emoji="👨‍💻")
-        await message.react([react])
         time = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-        name = time + "tiktok_video.mp4"
+        video_id = full_url.split('/')[-1].split('?')[0]
+        name = f"{time}_tiktok_video.mp4"
         video_file_path = os.path.join(OUTPUT_DIR, name)
-        downloader = DownloaderTikTok(OUTPUT_DIR, name)
-        services = [
-            downloader.tiktapiocom,
-            downloader.tikmatecc,
-        ]
-        for service in services:
-            if service(full_url):
-                video = FSInputFile(video_file_path)
-                file_size = os.path.getsize(video_file_path)
+        downloader = DownloaderTikTok(OUTPUT_DIR, video_file_path)
 
-                video_clip = VideoFileClip(video_file_path)
+        if downloader.tikwm(video_id):
+            video = FSInputFile(video_file_path)
+            file_size = os.path.getsize(video_file_path)
 
-                width, height = video_clip.size
+            video_clip = VideoFileClip(video_file_path)
+            width, height = video_clip.size
 
-                if file_size < MAX_FILE_SIZE:
-                    await message.reply_video(video=video, width=width,
-                                              height=height,
-                                              caption=f'<a href="{bot_url}">💻Powered by MaxLoad</a>', parse_mode="HTMl")
+            if file_size < MAX_FILE_SIZE:
+                await message.reply_video(
+                    video=video,
+                    width=width,
+                    height=height,
+                    caption=f'<a href="{bot_url}">💻Powered by MaxLoad</a>',
+                    parse_mode="HTML"
+                )
+            else:
+                react = types.ReactionTypeEmoji(emoji="👎")
+                await message.react([react])
+                await message.reply("The video is too large.")
 
-                else:
-                    react = types.ReactionTypeEmoji(emoji="👎")
-                    await message.react([react])
-                    await message.reply("The video is too large.")
+            os.remove(video_file_path)
+        else:
+            react = types.ReactionTypeEmoji(emoji="👎")
+            await message.react([react])
+            await message.reply("Failed to download the video. Please try again.")
 
-                os.remove(video_file_path)
-                return
-        await message.reply("Failed to download the video. Please try again.")
 
     elif "photo" in full_url:
-        react = types.ReactionTypeEmoji(emoji="👎")
-        await message.react([react])
-        await message.reply("Currently, the bot does not support TikTok slideshows.")
+        photo_id = full_url.split('/')[-1].split('?')[0]
+        downloader = DownloaderTikTok(OUTPUT_DIR, "")
+        download_dir = os.path.join("downloads", photo_id)
+
+        if downloader.download_photos(photo_id):
+            all_files = []
+            for root, dirs, files in os.walk(download_dir):
+                for file in files:
+                    file_path = os.path.join(root, file)
+                    if file.endswith(('.jpg', '.jpeg', '.png')):
+                        all_files.append(file_path)
+
+            all_files.sort(key=lambda x: int(os.path.basename(x).split('.')[0]))
+
+            while all_files:
+                media_group = MediaGroupBuilder(caption=f'<a href="{bot_url}">💻Powered by MaxLoad</a>')
+                for _ in range(min(10, len(all_files))):
+                    file_path = all_files.pop(0)
+                    media_group.add_photo(media=FSInputFile(file_path), parse_mode="HTML")
+
+                await bot.send_media_group(chat_id=message.chat.id, media=media_group.build())
+
+            for root, dirs, files in os.walk(download_dir):
+                for file in files:
+                    os.remove(os.path.join(root, file))
+                os.rmdir(download_dir)
+        else:
+            react = types.ReactionTypeEmoji(emoji="👎")
+            await message.react([react])
+            await message.reply("Failed to download photos. Please try again.")
+
     else:
         react = types.ReactionTypeEmoji(emoji="👎")
         await message.react([react])
