@@ -1,4 +1,5 @@
 import logging
+import os
 
 from aiogram import Bot, Dispatcher
 
@@ -9,6 +10,7 @@ logging.basicConfig(level=logging.INFO)
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 
+os.makedirs("downloads", exist_ok=True)
 
 async def main():
     import handlers

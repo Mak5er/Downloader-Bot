@@ -10,7 +10,7 @@ from main import bot
 from config import OUTPUT_DIR, INST_PASS, INST_LOGIN
 
 router = Router()
-
+"""
 L = instaloader.Instaloader()
 L.login(INST_LOGIN, INST_PASS)
 
@@ -64,3 +64,4 @@ async def process_url_instagram(message: types.Message):
         react = types.ReactionTypeEmoji(emoji="👎")
         await message.react([react])
         await message.reply("The URL does not seem to be a valid Instagram video or photo link.")
+"""
