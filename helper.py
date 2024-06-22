@@ -60,7 +60,7 @@ def expand_tiktok_url(short_url: str) -> str:
         return short_url
 
 
-def trim_video(file_path, max_size_mb=30):
+def trim_video(file_path, max_size_mb=49):
     video_clip = VideoFileClip(file_path)
     current_size_mb = os.path.getsize(file_path) / (1024 * 1024)  # Поточний розмір файлу у МБ
 

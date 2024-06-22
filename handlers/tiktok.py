@@ -5,7 +5,7 @@ from aiogram import types, Router, F
 from aiogram.types import FSInputFile
 from moviepy.editor import VideoFileClip
 
-from services.downloader_tiktok import Downloader
+from services.downloader_tiktok import DownloaderTikTok
 from helper import expand_tiktok_url, trim_video
 
 from main import bot
@@ -25,12 +25,10 @@ async def process_url_tiktok(message: types.Message):
         await message.react([react])
         time = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
         name = time + "tiktok_video.mp4"
-        downloader = Downloader(OUTPUT_DIR, name)
+        downloader = DownloaderTikTok(OUTPUT_DIR, name)
         services = [
             downloader.tiktapiocom,
             downloader.tikmatecc,
-            downloader.snaptikpro,
-            downloader.musicaldown
         ]
         for service in services:
             if service(full_url):
