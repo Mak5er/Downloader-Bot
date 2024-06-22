@@ -10,6 +10,7 @@ from helper import expand_tiktok_url
 
 from main import bot
 from config import OUTPUT_DIR
+from handlers.user import update_info
 
 MAX_FILE_SIZE = 50 * 1024 * 1024
 
@@ -67,3 +68,5 @@ async def process_url_tiktok(message: types.Message):
         react = types.ReactionTypeEmoji(emoji="👎")
         await message.react([react])
         await message.reply("The URL does not seem to be a valid TikTok video or photo link.")
+
+    await update_info(message)

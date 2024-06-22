@@ -8,6 +8,7 @@ from moviepy.editor import VideoFileClip
 
 from config import OUTPUT_DIR
 from main import bot
+from handlers.user import update_info
 
 MAX_FILE_SIZE = 50 * 1024
 
@@ -70,6 +71,8 @@ async def download_video(message: types.Message):
         await message.react([react])
         await message.reply("The URL does not seem to be a valid YouTube video link.")
 
+    await update_info(message)
+
 
 @router.message(F.text.regexp(r'(https?://)?(music\.)?(youtube|youtu|youtube-nocookie)\.(com|be)/.+'))
 async def download_music(message: types.Message):
@@ -96,9 +99,6 @@ async def download_music(message: types.Message):
         # Check file size
         file_size = audio.filesize_kb
 
-        print(file_size)
-        print(MAX_FILE_SIZE)
-
         if file_size > MAX_FILE_SIZE:
             os.remove(audio_file_path)
             await message.reply("The audio file is too large.")
@@ -115,3 +115,5 @@ async def download_music(message: types.Message):
         react = types.ReactionTypeEmoji(emoji="👎")
         await message.react([react])
         await message.reply("The URL does not seem to be a valid YouTube music link.")
+
+    await update_info(message)

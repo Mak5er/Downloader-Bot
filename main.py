@@ -4,11 +4,14 @@ import os
 from aiogram import Bot, Dispatcher
 
 from config import BOT_TOKEN, BOT_COMMANDS, OUTPUT_DIR
+from services.db import DataBase
 
 logging.basicConfig(level=logging.INFO)
 
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
+
+db = DataBase()
 
 os.makedirs("downloads", exist_ok=True)
 

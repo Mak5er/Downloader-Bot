@@ -7,6 +7,7 @@ from aiogram.utils.media_group import MediaGroupBuilder
 
 from main import bot
 from config import OUTPUT_DIR, INST_PASS, INST_LOGIN
+from handlers.user import update_info
 
 router = Router()
 
@@ -62,3 +63,5 @@ async def process_url_instagram(message: types.Message):
         react = types.ReactionTypeEmoji(emoji="👎")
         await message.react([react])
         await message.reply("The URL does not seem to be a valid Instagram video or photo link.")
+
+    await update_info(message)
