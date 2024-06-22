@@ -3,7 +3,7 @@ import os
 
 from aiogram import Bot, Dispatcher
 
-from config import BOT_TOKEN, BOT_COMMANDS
+from config import BOT_TOKEN, BOT_COMMANDS, OUTPUT_DIR
 
 logging.basicConfig(level=logging.INFO)
 
@@ -15,6 +15,9 @@ os.makedirs("downloads", exist_ok=True)
 async def main():
     import handlers
     import middlewares
+
+    if not os.path.exists(OUTPUT_DIR):
+        os.makedirs(OUTPUT_DIR)
 
     dp.include_router(handlers.router)
     for middleware in middlewares.__all__:

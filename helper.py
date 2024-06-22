@@ -58,18 +58,3 @@ def expand_tiktok_url(short_url: str) -> str:
     except requests.RequestException as e:
         print(f"Error expanding URL: {e}")
         return short_url
-
-
-def trim_video(file_path, max_size_mb=49):
-    video_clip = VideoFileClip(file_path)
-    current_size_mb = os.path.getsize(file_path) / (1024 * 1024)  # Поточний розмір файлу у МБ
-
-    if current_size_mb > max_size_mb:
-        # Обчислюємо час, який необхідно обрізати з початку, щоб файл не перевищував 30 МБ
-        duration_to_trim = video_clip.duration * (1 - max_size_mb / current_size_mb)
-        # Обрізаємо відео
-        trimmed_clip = video_clip.subclip(t_start=duration_to_trim)
-        # Зберігаємо обрізане відео
-        trimmed_clip.write_videofile(file_path, codec='libx264', bitrate="1000k")
-
-    video_clip.close()
