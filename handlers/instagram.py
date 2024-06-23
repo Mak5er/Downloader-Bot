@@ -5,7 +5,7 @@ from aiogram import Router, F, types
 from aiogram.types import FSInputFile
 from aiogram.utils.media_group import MediaGroupBuilder
 
-from main import bot
+from main import bot, db
 from config import OUTPUT_DIR, INST_PASS, INST_LOGIN
 from handlers.user import update_info
 
@@ -28,19 +28,19 @@ async def process_url_instagram(message: types.Message):
     # Get the Instagram post from URL
     try:
         post = instaloader.Post.from_shortcode(L.context, url.split("/")[-2])
+        user_captions = await db.get_user_captions(message.from_user.id)
+        download_dir = f"{OUTPUT_DIR}.{post.shortcode}"
 
-        dir = f"{OUTPUT_DIR}.{post.shortcode}"
-
-        L.download_post(post, target=dir)
+        L.download_post(post, target=download_dir)
 
         # Create media group
-        if post.caption is not None:
+        if user_captions == "on" and post.caption is not None:
             media_group = MediaGroupBuilder(caption=f'{post.caption}\n\n<a href="{bot_url}">💻Powered by MaxLoad</a>')
         else:
             media_group = MediaGroupBuilder(caption=f'<a href="{bot_url}">💻Powered by MaxLoad</a>')
 
         # Iterate through the downloaded files and add them to the media group
-        for root, dirs, files in os.walk(dir):
+        for root, dirs, files in os.walk(download_dir):
             for file in files:
                 file_path = os.path.join(root, file)
                 if file.endswith(('.jpg', '.jpeg', '.png')):
@@ -53,10 +53,10 @@ async def process_url_instagram(message: types.Message):
             await bot.send_media_group(chat_id=message.chat.id, media=media_group.build())
 
         # Clean up downloaded files and directory
-        for root, dirs, files in os.walk(dir):
+        for root, dirs, files in os.walk(download_dir):
             for file in files:
                 os.remove(os.path.join(root, file))
-            os.rmdir(dir)
+            os.rmdir(download_dir)
 
     except Exception as e:
         print(e)

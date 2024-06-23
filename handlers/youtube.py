@@ -7,7 +7,7 @@ from aiogram.types import FSInputFile
 from moviepy.editor import VideoFileClip
 
 from config import OUTPUT_DIR
-from main import bot
+from main import bot, db
 from handlers.user import update_info
 
 MAX_FILE_SIZE = 50 * 1024
@@ -40,13 +40,13 @@ async def download_video(message: types.Message):
         size = video.filesize_kb
 
         if size < MAX_FILE_SIZE:
+            user_captions = await db.get_user_captions(message.from_user.id)
 
             video_file_path = os.path.join(OUTPUT_DIR, name)
             video.download(output_path=OUTPUT_DIR, filename=name)
 
             # Check file size using moviepy
-
-            if yt.title is not None:
+            if user_captions == "on" and yt.title is not None:
                 caption = f'{yt.title}\n\n<a href="{bot_url}">💻Powered by MaxLoad</a>'
             else:
                 caption = f'<a href="{bot_url}">💻Powered by MaxLoad</a>'

@@ -39,3 +39,22 @@ class DataBase:
         except psycopg2.OperationalError as e:
             print(e)
             pass
+
+    async def get_user_captions(self, user_id):
+        try:
+            with self.connect:
+                self.cursor.execute("SELECT captions FROM users WHERE user_id = %s", (user_id,))
+                return self.cursor.fetchone()[0]
+
+        except psycopg2.OperationalError as e:
+            print(e)
+            pass
+
+    async def update_captions(self, captions, user_id):
+        try:
+            with self.connect:
+                self.cursor.execute("UPDATE users SET captions = %s WHERE user_id = %s",
+                                    (captions, user_id))
+        except psycopg2.OperationalError as e:
+            print(e)
+            pass
