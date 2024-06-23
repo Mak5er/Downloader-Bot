@@ -1,6 +1,7 @@
 import datetime
 import os
 from pytube import YouTube
+from tinytag import TinyTag
 
 from aiogram import types, Router, F
 from aiogram.types import FSInputFile
@@ -9,6 +10,7 @@ from moviepy.editor import VideoFileClip
 from config import OUTPUT_DIR
 from main import bot, db
 from handlers.user import update_info
+import messages as bm
 
 MAX_FILE_SIZE = 50 * 1024
 
@@ -46,10 +48,7 @@ async def download_video(message: types.Message):
             video.download(output_path=OUTPUT_DIR, filename=name)
 
             # Check file size using moviepy
-            if user_captions == "on" and yt.title is not None:
-                caption = f'{yt.title}\n\n<a href="{bot_url}">💻Powered by MaxLoad</a>'
-            else:
-                caption = f'<a href="{bot_url}">💻Powered by MaxLoad</a>'
+            post_caption = yt.title
 
             video_clip = VideoFileClip(video_file_path)
 
@@ -57,7 +56,7 @@ async def download_video(message: types.Message):
             # Send video file
             await bot.send_video(chat_id=message.chat.id, video=FSInputFile(video_file_path), width=width,
                                  height=height,
-                                 caption=caption, parse_mode="HTMl")
+                                 caption=bm.captions(user_captions, post_caption, bot_url), parse_mode="HTMl")
             os.remove(video_file_path)
 
         else:
@@ -104,9 +103,13 @@ async def download_music(message: types.Message):
             await message.reply("The audio file is too large.")
             return
 
-            # Send audio file
+        bitrate_kbps = ''.join(filter(str.isdigit, audio.abr))
+
+        duration_seconds = round((file_size * 8) / int(bitrate_kbps))
+
+        # Send audio file
         await bot.send_audio(chat_id=message.chat.id, audio=FSInputFile(audio_file_path), title=yt.title,
-                             performer=yt.author, caption=f'<a href="{bot_url}">💻Powered by MaxLoad</a>',
+                             performer=yt.author, duration=duration_seconds, caption=bm.captions(None, None, bot_url),
                              parse_mode="HTML")
 
         os.remove(audio_file_path)

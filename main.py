@@ -2,18 +2,23 @@ import logging
 import os
 
 from aiogram import Bot, Dispatcher
+from aiogram.client.default import DefaultBotProperties
+from aiogram.enums.parse_mode import ParseMode
 
 from config import BOT_TOKEN, BOT_COMMANDS, OUTPUT_DIR
 from services.db import DataBase
 
 logging.basicConfig(level=logging.INFO)
 
-bot = Bot(token=BOT_TOKEN)
+default = DefaultBotProperties(parse_mode=ParseMode.HTML)
+bot = Bot(token=BOT_TOKEN, default=default)
+
 dp = Dispatcher()
 
 db = DataBase()
 
 os.makedirs("downloads", exist_ok=True)
+
 
 async def main():
     import handlers

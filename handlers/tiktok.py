@@ -14,6 +14,7 @@ from helper import expand_tiktok_url
 from main import bot
 from config import OUTPUT_DIR
 from handlers.user import update_info
+import messages as bm
 
 MAX_FILE_SIZE = 50 * 1024 * 1024
 
@@ -99,7 +100,7 @@ async def process_url_tiktok(message: types.Message):
                     video=video,
                     width=width,
                     height=height,
-                    caption=f'<a href="{bot_url}">💻Powered by MaxLoad</a>',
+                    caption=bm.captions(None, None, bot_url),
                     parse_mode="HTML"
                 )
             else:
@@ -130,7 +131,7 @@ async def process_url_tiktok(message: types.Message):
             all_files.sort(key=lambda x: int(os.path.basename(x).split('.')[0]))
 
             while all_files:
-                media_group = MediaGroupBuilder(caption=f'<a href="{bot_url}">💻Powered by MaxLoad</a>')
+                media_group = MediaGroupBuilder(caption=bm.captions(None, None, bot_url))
                 for _ in range(min(10, len(all_files))):
                     file_path = all_files.pop(0)
                     media_group.add_photo(media=FSInputFile(file_path), parse_mode="HTML")

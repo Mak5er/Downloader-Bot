@@ -8,6 +8,7 @@ from aiogram.utils.media_group import MediaGroupBuilder
 from main import bot, db
 from config import OUTPUT_DIR, INST_PASS, INST_LOGIN
 from handlers.user import update_info
+import messages as bm
 
 router = Router()
 
@@ -33,11 +34,10 @@ async def process_url_instagram(message: types.Message):
 
         L.download_post(post, target=download_dir)
 
+        post_caption = post.caption
+
         # Create media group
-        if user_captions == "on" and post.caption is not None:
-            media_group = MediaGroupBuilder(caption=f'{post.caption}\n\n<a href="{bot_url}">💻Powered by MaxLoad</a>')
-        else:
-            media_group = MediaGroupBuilder(caption=f'<a href="{bot_url}">💻Powered by MaxLoad</a>')
+        media_group = MediaGroupBuilder(caption=bm.captions(user_captions, post_caption, bot_url))
 
         # Iterate through the downloaded files and add them to the media group
         for root, dirs, files in os.walk(download_dir):
