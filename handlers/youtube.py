@@ -1,7 +1,6 @@
 import datetime
 import os
 from pytube import YouTube
-from tinytag import TinyTag
 
 from aiogram import types, Router, F
 from aiogram.types import FSInputFile
