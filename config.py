@@ -11,7 +11,8 @@ admin_id = int(os.getenv("admin_id"))
 OUTPUT_DIR = "downloads"
 
 BOT_COMMANDS = [
-    {'command': 'start', 'description': '🚀Початок роботи / Get started 🔥'},
+    {'command': 'start', 'description': '🚀Початок роботи / Get started🔥'},
+    {'command': 'settings', 'description': '⚙️Налаштування / Settings🛠'},
 ]
 
 ADMINS_UID = [admin_id]
