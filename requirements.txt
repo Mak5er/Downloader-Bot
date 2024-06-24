@@ -7,4 +7,3 @@ moviepy~=1.0.3
 instaloader~=4.11
 pytube~=15.0.0
 psycopg2-binary
-mutagen~=1.47.0
