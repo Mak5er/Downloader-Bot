@@ -16,7 +16,7 @@ from config import OUTPUT_DIR
 from handlers.user import update_info
 import messages as bm
 
-MAX_FILE_SIZE = 50 * 1024 * 1024
+MAX_FILE_SIZE = 500 * 1024 * 1024
 
 router = Router()
 

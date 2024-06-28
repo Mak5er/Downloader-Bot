@@ -1,3 +1,4 @@
+import asyncio
 import datetime
 import os
 from pytube import YouTube
@@ -11,9 +12,13 @@ from main import bot, db
 from handlers.user import update_info
 import messages as bm
 
-MAX_FILE_SIZE = 50 * 1024
+MAX_FILE_SIZE = 1 * 1024 * 1024
 
 router = Router()
+
+
+def download_youtube_video(video, name):
+    video.download(output_path=OUTPUT_DIR, filename=name)
 
 
 # Download video
@@ -44,7 +49,8 @@ async def download_video(message: types.Message):
             user_captions = await db.get_user_captions(message.from_user.id)
 
             video_file_path = os.path.join(OUTPUT_DIR, name)
-            video.download(output_path=OUTPUT_DIR, filename=name)
+            loop = asyncio.get_event_loop()
+            await loop.run_in_executor(None, download_youtube_video, video, name)
 
             # Check file size using moviepy
             post_caption = yt.title
@@ -67,9 +73,13 @@ async def download_video(message: types.Message):
         print(e)
         react = types.ReactionTypeEmoji(emoji="👎")
         await message.react([react])
-        await message.reply("The URL does not seem to be a valid YouTube video link.")
+        await message.reply(f"An error occurred during the download: {e}")
 
     await update_info(message)
+
+
+def download_youtube_audio(audio, name):
+    audio.download(output_path=OUTPUT_DIR, filename=name)
 
 
 @router.message(F.text.regexp(r'(https?://)?(music\.)?(youtube|youtu|youtube-nocookie)\.(com|be)/.+'))
@@ -92,7 +102,9 @@ async def download_music(message: types.Message):
             return
 
         audio_file_path = os.path.join(OUTPUT_DIR, name)
-        audio.download(output_path=OUTPUT_DIR, filename=name)
+
+        loop = asyncio.get_event_loop()
+        await loop.run_in_executor(None, download_youtube_video, audio, name)
 
         # Check file size
         file_size = audio.filesize_kb
@@ -116,6 +128,6 @@ async def download_music(message: types.Message):
         print(e)
         react = types.ReactionTypeEmoji(emoji="👎")
         await message.react([react])
-        await message.reply("The URL does not seem to be a valid YouTube music link.")
+        await message.reply(f"An error occurred during the download: {e}")
 
     await update_info(message)

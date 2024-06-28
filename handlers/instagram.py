@@ -62,6 +62,6 @@ async def process_url_instagram(message: types.Message):
         print(e)
         react = types.ReactionTypeEmoji(emoji="👎")
         await message.react([react])
-        await message.reply("The URL does not seem to be a valid Instagram video or photo link.")
+        await message.reply(f"An error occurred during the download: {e}")
 
     await update_info(message)

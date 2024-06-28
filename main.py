@@ -3,15 +3,24 @@ import os
 
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
+from aiogram.client.session.aiohttp import AiohttpSession
+from aiogram.client.telegram import TelegramAPIServer
 from aiogram.enums.parse_mode import ParseMode
 
-from config import BOT_TOKEN, BOT_COMMANDS, OUTPUT_DIR
+from config import BOT_TOKEN, BOT_COMMANDS, OUTPUT_DIR, custom_api_url
 from services.db import DataBase
 
 logging.basicConfig(level=logging.INFO)
 
+custom_timeout = 600  # 10 minutes
+
+session = AiohttpSession(
+    api=TelegramAPIServer.from_base(custom_api_url),
+    timeout=custom_timeout
+)
+
 default = DefaultBotProperties(parse_mode=ParseMode.HTML)
-bot = Bot(token=BOT_TOKEN, default=default)
+bot = Bot(token=BOT_TOKEN, default=default, session=session)
 
 dp = Dispatcher()
 

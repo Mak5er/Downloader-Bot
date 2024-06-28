@@ -8,6 +8,7 @@ INST_LOGIN = str(os.getenv("INST_LOGIN"))
 INST_PASS = str(os.getenv("INST_PASS"))
 db_auth = str(os.getenv("db_auth"))
 admin_id = int(os.getenv("admin_id"))
+custom_api_url = str(os.getenv("custom_api_url"))
 OUTPUT_DIR = "downloads"
 
 BOT_COMMANDS = [
