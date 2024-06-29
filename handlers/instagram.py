@@ -37,19 +37,34 @@ async def process_url_instagram(message: types.Message):
         post_caption = post.caption
 
         # Create media group
-        media_group = MediaGroupBuilder(caption=bm.captions(user_captions, post_caption, bot_url))
+        all_files_photo = []
+        all_files_video = []
 
         # Iterate through the downloaded files and add them to the media group
         for root, dirs, files in os.walk(download_dir):
+
             for file in files:
                 file_path = os.path.join(root, file)
                 if file.endswith(('.jpg', '.jpeg', '.png')):
-                    media_group.add_photo(media=FSInputFile(file_path), parse_mode="HTML")
+                    all_files_photo.append(file_path)
                 elif file.endswith('.mp4'):
-                    media_group.add_video(media=FSInputFile(file_path), parse_mode="HTML")
+                    all_files_video.append(file_path)
 
         # Send the media group to the user with one caption
-        if media_group:
+        while all_files_photo:
+            media_group = MediaGroupBuilder(caption=bm.captions(user_captions, post_caption, bot_url))
+            for _ in range(min(10, len(all_files_photo))):
+                file_path = all_files_photo.pop(0)
+                media_group.add_photo(media=FSInputFile(file_path), parse_mode="HTML")
+
+            await bot.send_media_group(chat_id=message.chat.id, media=media_group.build())
+
+        while all_files_video:
+            media_group = MediaGroupBuilder(caption=bm.captions(user_captions, post_caption, bot_url))
+            for _ in range(min(10, len(all_files_photo))):
+                file_path = all_files_photo.pop(0)
+                media_group.add_video(media=FSInputFile(file_path), parse_mode="HTML")
+
             await bot.send_media_group(chat_id=message.chat.id, media=media_group.build())
 
         # Clean up downloaded files and directory
