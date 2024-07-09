@@ -13,7 +13,14 @@ import messages as bm
 router = Router()
 
 L = instaloader.Instaloader()
-L.login(INST_LOGIN, INST_PASS)
+
+try:
+    L.load_session_from_file(INST_LOGIN)
+
+except:
+    L.login(INST_LOGIN, INST_PASS)
+    print("Logged in with password")
+    L.save_session_to_file()
 
 
 @router.message(F.text.regexp(r"(https?://(www\.)?instagram\.com/[^\s]+)"))
@@ -53,19 +60,25 @@ async def process_url_instagram(message: types.Message):
         # Send the media group to the user with one caption
         while all_files_photo:
             media_group = MediaGroupBuilder(caption=bm.captions(user_captions, post_caption, bot_url))
+            photos = 0
             for _ in range(min(10, len(all_files_photo))):
                 file_path = all_files_photo.pop(0)
                 media_group.add_photo(media=FSInputFile(file_path), parse_mode="HTML")
+                photos += 1
 
-            await bot.send_media_group(chat_id=message.chat.id, media=media_group.build())
+            if photos > 0:
+                await bot.send_media_group(chat_id=message.chat.id, media=media_group.build())
 
         while all_files_video:
             media_group = MediaGroupBuilder(caption=bm.captions(user_captions, post_caption, bot_url))
+            videos = 0
             for _ in range(min(10, len(all_files_photo))):
                 file_path = all_files_photo.pop(0)
                 media_group.add_video(media=FSInputFile(file_path), parse_mode="HTML")
+                videos += 1
 
-            await bot.send_media_group(chat_id=message.chat.id, media=media_group.build())
+            if videos > 0:  # Перевірка на наявність файлів у медіагрупі
+                await bot.send_media_group(chat_id=message.chat.id, media=media_group.build())
 
         # Clean up downloaded files and directory
         for root, dirs, files in os.walk(download_dir):
