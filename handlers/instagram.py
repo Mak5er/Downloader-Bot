@@ -33,6 +33,8 @@ async def process_url_instagram(message: types.Message):
     react = types.ReactionTypeEmoji(emoji="👨‍💻")
     await message.react([react])
 
+    chat_id = message.chat.id
+
     # Get the Instagram post from URL
     try:
         post = instaloader.Post.from_shortcode(L.context, url.split("/")[-2])
@@ -43,42 +45,30 @@ async def process_url_instagram(message: types.Message):
 
         post_caption = post.caption
 
+        media_group = MediaGroupBuilder(caption=bm.captions(user_captions, post_caption, bot_url))
+
+        batch_size = 10
+
+        batch = 0
         # Create media group
-        all_files_photo = []
-        all_files_video = []
-
-        # Iterate through the downloaded files and add them to the media group
-        for root, dirs, files in os.walk(download_dir):
-
+        for root, _, files in os.walk(download_dir):
             for file in files:
                 file_path = os.path.join(root, file)
                 if file.endswith(('.jpg', '.jpeg', '.png')):
-                    all_files_photo.append(file_path)
+                    media_group.add_photo(media=FSInputFile(file_path), parse_mode="HTML")
+                    batch += 1
                 elif file.endswith('.mp4'):
-                    all_files_video.append(file_path)
+                    media_group.add_video(media=FSInputFile(file_path), parse_mode="HTML")
+                    batch += 1
 
-        # Send the media group to the user with one caption
-        while all_files_photo:
-            media_group = MediaGroupBuilder(caption=bm.captions(user_captions, post_caption, bot_url))
-            photos = 0
-            for _ in range(min(10, len(all_files_photo))):
-                file_path = all_files_photo.pop(0)
-                media_group.add_photo(media=FSInputFile(file_path), parse_mode="HTML")
-                photos += 1
+                # Check if media group is full
+                if batch == batch_size:
+                    await bot.send_media_group(chat_id=chat_id, media=media_group.build())
+                    media_group = MediaGroupBuilder(caption=bm.captions(user_captions, post_caption, bot_url))
 
-            if photos > 0:
-                await bot.send_media_group(chat_id=message.chat.id, media=media_group.build())
-
-        while all_files_video:
-            media_group = MediaGroupBuilder(caption=bm.captions(user_captions, post_caption, bot_url))
-            videos = 0
-            for _ in range(min(10, len(all_files_photo))):
-                file_path = all_files_photo.pop(0)
-                media_group.add_video(media=FSInputFile(file_path), parse_mode="HTML")
-                videos += 1
-
-            if videos > 0:  # Перевірка на наявність файлів у медіагрупі
-                await bot.send_media_group(chat_id=message.chat.id, media=media_group.build())
+        # Send remaining media if any
+        if batch > 0:
+            await bot.send_media_group(chat_id=chat_id, media=media_group.build())
 
         # Clean up downloaded files and directory
         for root, dirs, files in os.walk(download_dir):
