@@ -170,3 +170,21 @@ class DataBase:
         except psycopg2.OperationalError as e:
             print(e)
             pass
+
+    async def add_file(self, url, file_id, file_type):
+        try:
+            with self.connect:
+                self.cursor.execute("INSERT INTO downloaded_files (url, file_id, file_type) VALUES (%s, %s, %s)",
+                                    (url, file_id, file_type))
+        except psycopg2.OperationalError as e:
+            print(e)
+            pass
+
+    async def get_file_id(self, url):
+        try:
+            with self.connect:
+                self.cursor.execute("SELECT file_id FROM downloaded_files WHERE url = %s", (url,))
+                return self.cursor.fetchall()
+        except psycopg2.OperationalError as e:
+            print(e)
+            pass

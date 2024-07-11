@@ -9,12 +9,11 @@ from aiogram.utils.media_group import MediaGroupBuilder
 from bs4 import BeautifulSoup
 from moviepy.editor import VideoFileClip
 
-from helper import expand_tiktok_url
-
-from main import bot
+import messages as bm
 from config import OUTPUT_DIR
 from handlers.user import update_info
-import messages as bm
+from helper import expand_tiktok_url
+from main import bot, db
 
 MAX_FILE_SIZE = 500 * 1024 * 1024
 
@@ -82,9 +81,18 @@ async def process_url_tiktok(message: types.Message):
     await message.react([react])
 
     if "video" in full_url:
+        file_type = "video"
         time = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
         video_id = full_url.split('/')[-1].split('?')[0]
         name = f"{time}_tiktok_video.mp4"
+
+        db_file_id = await db.get_file_id(full_url)
+
+        if db_file_id:
+            await bot.send_video(chat_id=message.chat.id, video=db_file_id[0][0],
+                                 caption=bm.captions(None, None, bot_url), parse_mode="HTMl")
+            return
+
         video_file_path = os.path.join(OUTPUT_DIR, name)
         downloader = DownloaderTikTok(OUTPUT_DIR, video_file_path)
 
@@ -96,13 +104,18 @@ async def process_url_tiktok(message: types.Message):
             width, height = video_clip.size
 
             if file_size < MAX_FILE_SIZE:
-                await message.reply_video(
+                sent_message = await message.reply_video(
                     video=video,
                     width=width,
                     height=height,
                     caption=bm.captions(None, None, bot_url),
                     parse_mode="HTML"
                 )
+
+                file_id = sent_message.video.file_id
+
+                await db.add_file(full_url, file_id, file_type)
+
             else:
                 react = types.ReactionTypeEmoji(emoji="👎")
                 await message.react([react])
