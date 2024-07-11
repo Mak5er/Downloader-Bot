@@ -1,7 +1,7 @@
 import asyncio
 import datetime
 import os
-from pytube import YouTube
+from pytubefix import YouTube
 
 from aiogram import types, Router, F
 from aiogram.types import FSInputFile
