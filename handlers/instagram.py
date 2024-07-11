@@ -5,7 +5,7 @@ from aiogram import Router, F, types
 from aiogram.types import FSInputFile
 from aiogram.utils.media_group import MediaGroupBuilder
 
-from main import bot, db
+from main import bot, db, send_analytics
 from config import OUTPUT_DIR, INST_PASS, INST_LOGIN
 from handlers.user import update_info
 import messages as bm
@@ -26,6 +26,9 @@ except:
 @router.message(F.text.regexp(r"(https?://(www\.)?instagram\.com/[^\s]+)"))
 async def process_url_instagram(message: types.Message):
     await bot.send_chat_action(message.chat.id, "typing")
+
+    await send_analytics(user_id=message.from_user.id, chat_type=message.chat.type, action_name="instagram")
+
     bot_url = f"t.me/{(await bot.get_me()).username}"
 
     url = message.text.strip()

@@ -1,6 +1,6 @@
 from aiogram import types, Router, F
 from aiogram.filters import Command
-from main import db
+from main import db, send_analytics
 import keyboards as kb
 import messages as bm
 
@@ -21,12 +21,16 @@ async def update_info(message: types.Message):
 
 @router.message(Command("start"))
 async def send_welcome(message: types.Message):
+    await send_analytics(user_id=message.from_user.id, chat_type=message.chat.type, action_name='start')
+
     await message.reply(bm.welcome_message())
     await update_info(message)
 
 
 @router.message(Command("settings"))
 async def settings(message: types.Message):
+    await send_analytics(user_id=message.from_user.id, chat_type=message.chat.type, action_name='settings')
+
     await message.reply(
         text=bm.settings(),
         reply_markup=kb.return_settings_keyboard(),

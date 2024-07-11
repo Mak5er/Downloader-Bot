@@ -13,7 +13,7 @@ import messages as bm
 from config import OUTPUT_DIR
 from handlers.user import update_info
 from helper import expand_tiktok_url
-from main import bot, db
+from main import bot, db, send_analytics
 
 MAX_FILE_SIZE = 500 * 1024 * 1024
 
@@ -81,6 +81,9 @@ async def process_url_tiktok(message: types.Message):
     await message.react([react])
 
     if "video" in full_url:
+
+        await send_analytics(user_id=message.from_user.id, chat_type=message.chat.type, action_name="tiktok_video")
+
         file_type = "video"
         time = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
         video_id = full_url.split('/')[-1].split('?')[0]
@@ -129,6 +132,8 @@ async def process_url_tiktok(message: types.Message):
 
 
     elif "photo" in full_url:
+        await send_analytics(user_id=message.from_user.id, chat_type=message.chat.type, action_name="tiktok_photos")
+
         photo_id = full_url.split('/')[-1].split('?')[0]
         downloader = DownloaderTikTok(OUTPUT_DIR, "")
         download_dir = os.path.join("downloads", photo_id)

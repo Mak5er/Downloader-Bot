@@ -10,7 +10,7 @@ from aiogram.utils.media_group import MediaGroupBuilder
 
 import messages as bm
 from config import OUTPUT_DIR
-from main import bot, db
+from main import bot, db, send_analytics
 
 MAX_FILE_SIZE = 500 * 1024 * 1024
 
@@ -52,6 +52,8 @@ async def download_media(media_url, file_path):
 
 async def reply_media(message, tweet_id, tweet_media, bot_url):
     """Reply to message with supported media."""
+    await send_analytics(user_id=message.from_user.id, chat_type=message.chat.type, action_name="twitter")
+
     tweet_dir = f"{OUTPUT_DIR}/{tweet_id}"
     post_caption = tweet_media["text"]
     user_captions = await db.get_user_captions(message.from_user.id)

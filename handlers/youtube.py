@@ -10,7 +10,7 @@ from pytubefix import YouTube
 import messages as bm
 from config import OUTPUT_DIR
 from handlers.user import update_info
-from main import bot, db
+from main import bot, db, send_analytics
 
 MAX_FILE_SIZE = 1 * 1024 * 1024
 
@@ -25,6 +25,9 @@ def download_youtube_video(video, name):
 @router.message(F.text.regexp(r'(https?://)?(www\.)?(youtube|youtu|youtube-nocookie)\.(com|be)/.+'))
 async def download_video(message: types.Message):
     await bot.send_chat_action(message.chat.id, "typing")
+
+    await send_analytics(user_id=message.from_user.id, chat_type=message.chat.type, action_name="youtube_video")
+
     bot_url = f"t.me/{(await bot.get_me()).username}"
     file_type = "video"
 
@@ -82,6 +85,8 @@ async def download_video(message: types.Message):
 
             os.remove(video_file_path)
 
+
+
         else:
             react = types.ReactionTypeEmoji(emoji="👎")
             await message.react([react])
@@ -103,6 +108,9 @@ def download_youtube_audio(audio, name):
 @router.message(F.text.regexp(r'(https?://)?(music\.)?(youtube|youtu|youtube-nocookie)\.(com|be)/.+'))
 async def download_music(message: types.Message):
     await bot.send_chat_action(message.chat.id, "typing")
+
+    await send_analytics(user_id=message.from_user.id, chat_type=message.chat.type, action_name="youtube_audio")
+
     bot_url = f"t.me/{(await bot.get_me()).username}"
 
     url = message.text
