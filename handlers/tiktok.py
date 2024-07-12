@@ -215,6 +215,8 @@ async def download_audio(call: types.CallbackQuery):
             os.remove(audio_file_path)
             return
 
+        await call.answer()
+
         # Send audio file
         await bot.send_audio(chat_id=call.message.chat.id, audio=FSInputFile(audio_file_path),
                              duration=duration,

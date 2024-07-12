@@ -138,6 +138,8 @@ async def download_audio(call: types.CallbackQuery):
     audio_duration = AudioFileClip(audio_file_path)
     duration = round(audio_duration.duration)
 
+    await call.answer()
+
     # Send audio file
     await bot.send_audio(chat_id=call.message.chat.id, audio=FSInputFile(audio_file_path), title=yt.title,
                          performer=yt.author, duration=duration,
@@ -188,6 +190,7 @@ async def download_music(message: types.Message):
 
         audio_duration = AudioFileClip(audio_file_path)
         duration = round(audio_duration.duration)
+
 
         # Send audio file
         await bot.send_audio(chat_id=message.chat.id, audio=FSInputFile(audio_file_path), title=yt.title,
