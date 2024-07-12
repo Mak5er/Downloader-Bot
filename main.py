@@ -42,14 +42,13 @@ async def send_analytics(user_id, chat_type, action_name):
             'params': {
                 'chat_type': chat_type,
                 "session_id": str(user_id),
-                'engagement_time_msec': '1'
+                'engagement_time_msec': '1000'
             }
         }],
     }
-    print(params)
     async with ClientSession() as client:
         await client.post(
-            f"https://www.google-analytics.com/mp/collect?measurement_id={MEASUREMENT_ID}&api_secret={API_SECRET}",
+            f"https://www.google-analytics.com/mp/collect?measurement_id={MEASUREMENT_ID}&api_secret={API_SECRET}&uid={user_id}",
             json=params)
 
 
@@ -62,8 +61,9 @@ async def main():
 
     dp.include_router(handlers.router)
     for middleware in middlewares.__all__:
-        dp.message.middleware(middleware())
-        dp.callback_query.middleware(middleware())
+        dp.message.outer_middleware(middleware())
+        dp.callback_query.outer_middleware(middleware())
+        dp.inline_query.outer_middleware(middleware())
     await bot.set_my_commands(commands=BOT_COMMANDS)
     await bot.delete_webhook(drop_pending_updates=True)
     await dp.start_polling(bot)

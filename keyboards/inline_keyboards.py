@@ -1,4 +1,4 @@
-from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, KeyboardButton
+from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
@@ -71,4 +71,12 @@ def return_back_to_admin_keyboard():
         [(InlineKeyboardButton(text=("🔙Back"), callback_data="back_to_admin"))]
     ]
     keyboard = InlineKeyboardMarkup(inline_keyboard=back_button)
+    return keyboard
+
+
+def return_audio_download_keyboard(url):
+    audio_button = [
+        [(InlineKeyboardButton(text=("🎵Download MP3"), callback_data=f"audio_{url}"))]
+    ]
+    keyboard = InlineKeyboardMarkup(inline_keyboard=audio_button)
     return keyboard
