@@ -1,8 +1,10 @@
 from aiogram import types, Router, F
 from aiogram.filters import Command
-from main import db, send_analytics
+
 import keyboards as kb
 import messages as bm
+from filters import ChatTypeF
+from main import db, send_analytics, bot
 
 router = Router()
 
@@ -17,6 +19,28 @@ async def update_info(message: types.Message):
     else:
         await db.add_users(user_id, user_name, user_username, "private", "uk", 'active')
     await db.set_active(user_id)
+
+
+@router.message(ChatTypeF('group'), F.new_chat_member)
+async def send_welcome(message: types.Message):
+    for user in message.new_chat_members:
+        if user.is_bot and user.id == bot.id:
+            chat_info = await bot.get_chat(message.chat.id)
+            chat_type = "public"
+            user_id = message.chat.id
+            user_name = chat_info.title
+            user_username = None
+            language = 'uk'
+            status = 'active'
+            referrer_id = None
+
+            await db.add_users(user_id, user_name, user_username, chat_type, language, status, referrer_id)
+
+            chat_title = chat_info.title
+            await bot.send_message(
+                chat_id=message.chat.id,
+                text=bm.join_group(chat_title),
+                parse_mode="HTML")
 
 
 @router.message(Command("start"))

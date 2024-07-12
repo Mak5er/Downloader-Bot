@@ -74,9 +74,9 @@ def return_back_to_admin_keyboard():
     return keyboard
 
 
-def return_audio_download_keyboard(url):
+def return_audio_download_keyboard(platform, url):
     audio_button = [
-        [(InlineKeyboardButton(text=("🎵Download MP3"), callback_data=f"audio_{url}"))]
+        [(InlineKeyboardButton(text=("🎵Download MP3"), callback_data=f"{platform}_audio_{url}"))]
     ]
     keyboard = InlineKeyboardMarkup(inline_keyboard=audio_button)
     return keyboard

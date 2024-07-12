@@ -4,7 +4,7 @@ import os
 
 from aiogram import types, Router, F
 from aiogram.types import FSInputFile
-from moviepy.editor import VideoFileClip
+from moviepy.editor import VideoFileClip, AudioFileClip
 from pytubefix import YouTube
 
 import keyboards as kb
@@ -57,7 +57,7 @@ async def download_video(message: types.Message):
         if db_file_id:
             await bot.send_video(chat_id=message.chat.id, video=db_file_id[0][0],
                                  caption=bm.captions(user_captions, post_caption, bot_url),
-                                 reply_markup=kb.return_audio_download_keyboard(yt.watch_url),
+                                 reply_markup=kb.return_audio_download_keyboard('yt', yt.watch_url),
                                  parse_mode="HTMl")
             return
 
@@ -80,7 +80,7 @@ async def download_video(message: types.Message):
                                                 width=width,
                                                 height=height,
                                                 caption=bm.captions(user_captions, post_caption, bot_url),
-                                                reply_markup=kb.return_audio_download_keyboard(yt.watch_url),
+                                                reply_markup=kb.return_audio_download_keyboard("yt", yt.watch_url),
                                                 parse_mode="HTMl")
 
             file_id = sent_message.video.file_id
@@ -105,13 +105,12 @@ async def download_video(message: types.Message):
     await update_info(message)
 
 
-@router.callback_query(F.data.startswith('audio_'))
+@router.callback_query(F.data.startswith('yt_audio_'))
 async def download_audio(call: types.CallbackQuery):
     await bot.send_chat_action(call.message.chat.id, "typing")
     bot_url = f"t.me/{(await bot.get_me()).username}"
 
-    url = call.data.split('_')[1]
-    print(url)
+    url = call.data.split('_')[2]
 
     time = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
     name = f"{time}_youtube_audio.mp3"
@@ -125,10 +124,6 @@ async def download_audio(call: types.CallbackQuery):
 
     file_size = audio.filesize_kb
 
-    bitrate_kbps = ''.join(filter(str.isdigit, audio.abr))
-
-    duration_seconds = round((file_size * 8) / int(bitrate_kbps))
-
     audio_file_path = os.path.join(OUTPUT_DIR, name)
 
     loop = asyncio.get_event_loop()
@@ -140,9 +135,12 @@ async def download_audio(call: types.CallbackQuery):
         await call.message.reply("The audio file is too large.")
         return
 
+    audio_duration = AudioFileClip(audio_file_path)
+    duration = round(audio_duration.duration)
+
     # Send audio file
     await bot.send_audio(chat_id=call.message.chat.id, audio=FSInputFile(audio_file_path), title=yt.title,
-                         performer=yt.author, duration=duration_seconds,
+                         performer=yt.author, duration=duration,
                          caption=bm.captions(None, None, bot_url),
                          parse_mode="HTML")
 
@@ -177,10 +175,6 @@ async def download_music(message: types.Message):
 
         file_size = audio.filesize_kb
 
-        bitrate_kbps = ''.join(filter(str.isdigit, audio.abr))
-
-        duration_seconds = round((file_size * 8) / int(bitrate_kbps))
-
         audio_file_path = os.path.join(OUTPUT_DIR, name)
 
         loop = asyncio.get_event_loop()
@@ -192,9 +186,12 @@ async def download_music(message: types.Message):
             await message.reply("The audio file is too large.")
             return
 
+        audio_duration = AudioFileClip(audio_file_path)
+        duration = round(audio_duration.duration)
+
         # Send audio file
         await bot.send_audio(chat_id=message.chat.id, audio=FSInputFile(audio_file_path), title=yt.title,
-                             performer=yt.author, duration=duration_seconds,
+                             performer=yt.author, duration=duration,
                              caption=bm.captions(None, None, bot_url),
                              parse_mode="HTML")
 

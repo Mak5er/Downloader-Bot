@@ -46,10 +46,10 @@ async def send_analytics(user_id, chat_type, action_name):
             }
         }],
     }
-    async with ClientSession() as client:
-        await client.post(
-            f"https://www.google-analytics.com/mp/collect?measurement_id={MEASUREMENT_ID}&api_secret={API_SECRET}&uid={user_id}",
-            json=params)
+    #async with ClientSession() as client:
+    #    await client.post(
+    #        f"https://www.google-analytics.com/mp/collect?measurement_id={MEASUREMENT_ID}&api_secret={API_SECRET}&uid={user_id}",
+    #        json=params)
 
 
 async def main():

@@ -7,8 +7,9 @@ from aiogram import types, Router, F
 from aiogram.types import FSInputFile
 from aiogram.utils.media_group import MediaGroupBuilder
 from bs4 import BeautifulSoup
-from moviepy.editor import VideoFileClip
+from moviepy.editor import VideoFileClip, AudioFileClip
 
+import keyboards as kb
 import messages as bm
 from config import OUTPUT_DIR
 from handlers.user import update_info
@@ -25,9 +26,22 @@ class DownloaderTikTok:
         self.output_dir = output_dir
         self.filename = filename
 
-    def tikwm(self, video_id):
+    def download_video(self, video_id):
         try:
             download_url = f"https://tikwm.com/video/media/play/{video_id}.mp4"
+            response = requests.get(download_url, allow_redirects=True)
+            if response.status_code == 200:
+                with open(self.filename, 'wb') as f:
+                    f.write(response.content)
+                return True
+            return False
+        except Exception as e:
+            print(f"Error: {e}")
+            return False
+
+    def download_audio(self, video_id):
+        try:
+            download_url = f"https://tikwm.com/video/music/{video_id}.mp3"
             response = requests.get(download_url, allow_redirects=True)
             if response.status_code == 200:
                 with open(self.filename, 'wb') as f:
@@ -93,13 +107,15 @@ async def process_url_tiktok(message: types.Message):
 
         if db_file_id:
             await bot.send_video(chat_id=message.chat.id, video=db_file_id[0][0],
-                                 caption=bm.captions(None, None, bot_url), parse_mode="HTMl")
+                                 caption=bm.captions(None, None, bot_url),
+                                 reply_markup=kb.return_audio_download_keyboard("tt", video_id),
+                                 parse_mode="HTMl")
             return
 
         video_file_path = os.path.join(OUTPUT_DIR, name)
         downloader = DownloaderTikTok(OUTPUT_DIR, video_file_path)
 
-        if downloader.tikwm(video_id):
+        if downloader.download_video(video_id):
             video = FSInputFile(video_file_path)
             file_size = os.path.getsize(video_file_path)
 
@@ -112,6 +128,7 @@ async def process_url_tiktok(message: types.Message):
                     width=width,
                     height=height,
                     caption=bm.captions(None, None, bot_url),
+                    reply_markup=kb.return_audio_download_keyboard("tt", video_id),
                     parse_mode="HTML"
                 )
 
@@ -149,7 +166,8 @@ async def process_url_tiktok(message: types.Message):
             all_files.sort(key=lambda x: int(os.path.basename(x).split('.')[0]))
 
             while all_files:
-                media_group = MediaGroupBuilder(caption=bm.captions(None, None, bot_url))
+                media_group = MediaGroupBuilder(caption=bm.captions(None, None, bot_url),
+                                                reply_markup=kb.return_audio_download_keyboard("tt", photo_id))
                 for _ in range(min(10, len(all_files))):
                     file_path = all_files.pop(0)
                     media_group.add_photo(media=FSInputFile(file_path), parse_mode="HTML")
@@ -171,3 +189,36 @@ async def process_url_tiktok(message: types.Message):
         await message.reply("The URL does not seem to be a valid TikTok video or photo link.")
 
     await update_info(message)
+
+
+@router.callback_query(F.data.startswith('tt_audio_'))
+async def download_audio(call: types.CallbackQuery):
+    await bot.send_chat_action(call.message.chat.id, "typing")
+    bot_url = f"t.me/{(await bot.get_me()).username}"
+
+    audio_id = call.data.split('_')[2]
+
+    time = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    name = f"{time}_tiktok_audio.mp3"
+
+    audio_file_path = os.path.join(OUTPUT_DIR, name)
+    downloader = DownloaderTikTok(OUTPUT_DIR, audio_file_path)
+
+    if downloader.download_video(audio_id):
+        audio = AudioFileClip(audio_file_path)
+        duration = round(audio.duration)
+        file_size = os.path.getsize(audio_file_path)
+
+        if file_size > MAX_FILE_SIZE:
+            os.remove(audio_file_path)
+            await call.message.reply("The audio file is too large.")
+            os.remove(audio_file_path)
+            return
+
+        # Send audio file
+        await bot.send_audio(chat_id=call.message.chat.id, audio=FSInputFile(audio_file_path),
+                             duration=duration,
+                             caption=bm.captions(None, None, bot_url),
+                             parse_mode="HTML")
+
+    os.remove(audio_file_path)

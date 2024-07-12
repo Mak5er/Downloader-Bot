@@ -23,3 +23,6 @@ def captions(user_captions, post_caption, bot_url):
     else:
         return ('<a href="{bot_url}">💻Powered by MaxLoad</a>').format(bot_url=bot_url)
 
+
+def join_group(chat_title):
+    return ("Hi! Thank you for adding me to <b>'{chat_title}'</b>!\nHave a nice day!").format(chat_title=chat_title)
