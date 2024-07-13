@@ -5,10 +5,10 @@ from aiogram import Router, F, types
 from aiogram.types import FSInputFile
 from aiogram.utils.media_group import MediaGroupBuilder
 
-from main import bot, db, send_analytics
+import messages as bm
 from config import OUTPUT_DIR, INST_PASS, INST_LOGIN
 from handlers.user import update_info
-import messages as bm
+from main import bot, db, send_analytics
 
 router = Router()
 
@@ -35,7 +35,6 @@ async def process_url_instagram(message: types.Message):
 
     react = types.ReactionTypeEmoji(emoji="👨‍💻")
     await message.react([react])
-
     chat_id = message.chat.id
 
     # Get the Instagram post from URL
@@ -44,34 +43,58 @@ async def process_url_instagram(message: types.Message):
         user_captions = await db.get_user_captions(message.from_user.id)
         download_dir = f"{OUTPUT_DIR}.{post.shortcode}"
 
-        L.download_post(post, target=download_dir)
+        reels_url = "https://www.instagram.com/reel/"
 
         post_caption = post.caption
 
-        media_group = MediaGroupBuilder(caption=bm.captions(user_captions, post_caption, bot_url))
+        db_file_id = await db.get_file_id(reels_url + post.shortcode)
 
-        batch_size = 10
+        if db_file_id:
+            await bot.send_video(chat_id=message.chat.id, video=db_file_id[0][0],
+                                 caption=bm.captions(user_captions, post_caption, bot_url),
+                                 parse_mode="HTMl")
+            return
 
-        batch = 0
-        # Create media group
-        for root, _, files in os.walk(download_dir):
-            for file in files:
-                file_path = os.path.join(root, file)
-                if file.endswith(('.jpg', '.jpeg', '.png')):
-                    media_group.add_photo(media=FSInputFile(file_path), parse_mode="HTML")
-                    batch += 1
-                elif file.endswith('.mp4'):
-                    media_group.add_video(media=FSInputFile(file_path), parse_mode="HTML")
-                    batch += 1
+        L.download_post(post, target=download_dir)
 
-                # Check if media group is full
-                if batch == batch_size:
-                    await bot.send_media_group(chat_id=chat_id, media=media_group.build())
-                    media_group = MediaGroupBuilder(caption=bm.captions(user_captions, post_caption, bot_url))
+        if "/reel/" in url:
+            file_type = "video"
 
-        # Send remaining media if any
-        if batch > 0:
-            await bot.send_media_group(chat_id=chat_id, media=media_group.build())
+            # Only send the video if the URL is for a reel
+            for root, _, files in os.walk(download_dir):
+                for file in files:
+                    if file.endswith('.mp4'):
+                        file_path = os.path.join(root, file)
+                        sent_message = await bot.send_video(chat_id, FSInputFile(file_path),
+                                                            caption=bm.captions(user_captions, post_caption, bot_url),
+                                                            parse_mode="HTML")
+
+                        file_id = sent_message.video.file_id
+
+                        await db.add_file(url=reels_url + post.shortcode, file_id=file_id, file_type=file_type)
+                        break
+        else:
+            # Send all media if the URL is not for a reel
+            media_group = MediaGroupBuilder(caption=bm.captions(user_captions, post_caption, bot_url))
+
+            batch_size = 10
+            batch = 0
+            for root, _, files in os.walk(download_dir):
+                for file in files:
+                    file_path = os.path.join(root, file)
+                    if file.endswith(('.jpg', '.jpeg', '.png')):
+                        media_group.add_photo(media=FSInputFile(file_path), parse_mode="HTML")
+                        batch += 1
+                    elif file.endswith('.mp4'):
+                        media_group.add_video(media=FSInputFile(file_path), parse_mode="HTML")
+                        batch += 1
+
+                    if batch == batch_size:
+                        await bot.send_media_group(chat_id=chat_id, media=media_group.build())
+                        media_group = MediaGroupBuilder(caption=bm.captions(user_captions, post_caption, bot_url))
+
+            if batch > 0:
+                await bot.send_media_group(chat_id=chat_id, media=media_group.build())
 
         # Clean up downloaded files and directory
         for root, dirs, files in os.walk(download_dir):
