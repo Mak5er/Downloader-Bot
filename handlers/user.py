@@ -32,9 +32,8 @@ async def send_welcome(message: types.Message):
             user_username = None
             language = 'uk'
             status = 'active'
-            referrer_id = None
 
-            await db.add_users(user_id, user_name, user_username, chat_type, language, status, referrer_id)
+            await db.add_users(user_id, user_name, user_username, chat_type, language, status)
 
             chat_title = chat_info.title
             await bot.send_message(
