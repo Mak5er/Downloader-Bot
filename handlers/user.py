@@ -3,7 +3,6 @@ from aiogram.filters import Command
 
 import keyboards as kb
 import messages as bm
-from filters import ChatTypeF
 from main import db, send_analytics, bot
 
 router = Router()
@@ -21,7 +20,7 @@ async def update_info(message: types.Message):
     await db.set_active(user_id)
 
 
-@router.message(ChatTypeF('group'), F.new_chat_member)
+@router.message(F.new_chat_member)
 async def send_welcome(message: types.Message):
     for user in message.new_chat_members:
         if user.is_bot and user.id == bot.id:
