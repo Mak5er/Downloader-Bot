@@ -59,7 +59,7 @@ Once the bot is running, it will start listening for incoming messages and comma
 Commands:
 
 - /start : Start the conversation with the bot.
-- /setting : Change the language preference.
+- /setting : Change the bot settings.
 
 Users can also send feedback and the bot will provide answers.
 
