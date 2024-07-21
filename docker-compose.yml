@@ -1,12 +1,8 @@
-version: '3'
+version: '3.9'
 
 services:
   downloader-bot:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    volumes:
-      - .:/app
+    image: "https://ghcr.io/mak5er/downloader-bot
     env_file: .env
     container_name: downloader-bot
     restart: always
