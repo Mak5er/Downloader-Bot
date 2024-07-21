@@ -25,11 +25,11 @@ jobs:
           REPO_NAME=$(echo ${{ github.repository }} | tr '[:upper:]' '[:lower:]')
           COMMIT_SHA=$(echo "${{ github.sha }}" | cut -c1-6)
           docker build -t ghcr.io/${REPO_NAME}:${COMMIT_SHA} .
-          docker tag ghcr.io/${REPO_NAME}:${COMMIT_SHA} ghcr.io/$REPO_NAME:latest
 
       - name: Tag Docker image as latest
         run: |
           REPO_NAME=$(echo ${{ github.repository }} | tr '[:upper:]' '[:lower:]')
+          COMMIT_SHA=$(echo "${{ github.sha }}" | cut -c1-6)
           docker tag ghcr.io/${REPO_NAME}:${COMMIT_SHA} ghcr.io/$REPO_NAME:latest
 
       - name: Push Docker image with commit SHA tag
