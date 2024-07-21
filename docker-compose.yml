@@ -2,7 +2,7 @@ version: '3.9'
 
 services:
   downloader-bot:
-    image: "https://ghcr.io/mak5er/downloader-bot
+    image: https://ghcr.io/mak5er/downloader-bot
     env_file: .env
     container_name: downloader-bot
     restart: always
