@@ -26,7 +26,7 @@ jobs:
       - name: Build Docker image with commit SHA tag for multiple platforms
         run: |
           REPO_NAME=$(echo ${{ github.repository }} | tr '[:upper:]' '[:lower:]')
-          COMMIT_SHA=$(echo "${{ github.sha }}" | cut -c1-6)
+          COMMIT_SHA=$(echo "${{ github.sha }}" | cut -c1-7)
           docker buildx build \
             --platform linux/amd64,linux/arm64 \
             -t ghcr.io/${REPO_NAME}:${COMMIT_SHA} \
@@ -35,7 +35,7 @@ jobs:
       - name: Tag Docker image as latest for multiple platforms
         run: |
           REPO_NAME=$(echo ${{ github.repository }} | tr '[:upper:]' '[:lower:]')
-          COMMIT_SHA=$(echo "${{ github.sha }}" | cut -c1-6)
+          COMMIT_SHA=$(echo "${{ github.sha }}" | cut -c1-7)
           docker buildx build \
             --platform linux/amd64,linux/arm64 \
             -t ghcr.io/${REPO_NAME}:latest \
@@ -44,6 +44,6 @@ jobs:
       - name: Output Docker image URL
         run: |
           REPO_NAME=$(echo ${{ github.repository }} | tr '[:upper:]' '[:lower:]')
-          COMMIT_SHA=$(echo "${{ github.sha }}" | cut -c1-6)
+          COMMIT_SHA=$(echo "${{ github.sha }}" | cut -c1-7)
           echo "Docker Image URL: ghcr.io/${REPO_NAME}:${COMMIT_SHA}"
           echo "Docker Image URL: ghcr.io/${REPO_NAME}:latest"
