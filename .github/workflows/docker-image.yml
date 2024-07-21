@@ -15,7 +15,7 @@ jobs:
 
       - name: Extract repository name
         id: extract_repo_name
-        run: echo "REPO_NAME=${{ github.repository }}" | awk '{ print tolower($0) }' >> $GITHUB_ENV
+        run: echo REPO_NAME=$(echo ${{ github.repository }} | tr '[:upper:]' '[:lower:]')
 
       - name: Login to GitHub Container Registry
         uses: docker/login-action@v3
@@ -26,18 +26,18 @@ jobs:
 
       - name: Build Docker image with commit SHA tag
         run: |
-          COMMIT_SHA=${{ github.sha }}
-          docker build -t ghcr.io/${{ env.REPO_NAME }}:${COMMIT_SHA} .
-          docker tag ghcr.io/${{ env.REPO_NAME }}:${COMMIT_SHA} ghcr.io/${{ env.REPO_NAME }}:latest
+          COMMIT_SHA=$(echo "${{ github.sha }}" | cut -c1-6)
+          docker build -t ghcr.io/$REPO_NAME:${COMMIT_SHA} .
+          docker tag ghcr.io/$REPO_NAME:${COMMIT_SHA} ghcr.io/$REPO_NAME:latest
 
       - name: Push Docker image with commit SHA tag
         run: |
           COMMIT_SHA=${{ github.sha }}
-          docker push ghcr.io/${{ env.REPO_NAME }}:${COMMIT_SHA}
-          docker push ghcr.io/${{ env.REPO_NAME }}:latest
+          docker push ghcr.io/$REPO_NAME:${COMMIT_SHA}
+          docker push ghcr.io/$REPO_NAME:latest
 
       - name: Output Docker image URL
         run: |
           COMMIT_SHA=${{ github.sha }}
-          echo "Docker Image URL: ghcr.io/${{ env.REPO_NAME }}:${COMMIT_SHA}"
-          echo "Docker Image URL: ghcr.io/${{ env.REPO_NAME }}:latest"
+          echo "Docker Image URL: ghcr.io/$REPO_NAME:${COMMIT_SHA}"
+          echo "Docker Image URL: ghcr.io/$REPO_NAME:latest"
