@@ -44,6 +44,24 @@ Or using Docker:
 
     docker compose up -d
 
+To use your local image, update `docker-compose.yml` to:
+
+```yaml
+version: '3.9'
+
+services:
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    volumes:
+      - .:/app
+    container_name: portfolio-site
+    ports:
+      - '4040:4040'
+    restart: always
+```
+
 ### Database Tables
 
 The PostgreSQL database used by the bot includes the following tables:
