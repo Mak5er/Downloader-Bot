@@ -50,13 +50,13 @@ To use your local image, update `docker-compose.yml` to:
 version: '3.9'
 
 services:
-  web:
+  downloader-bot:
     build:
       context: .
       dockerfile: Dockerfile
     volumes:
       - .:/app
-    container_name: portfolio-site
+    container_name: downloader-bot
     ports:
       - '4040:4040'
     restart: always
