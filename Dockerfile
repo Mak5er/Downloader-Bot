@@ -6,7 +6,7 @@ WORKDIR /app
 
 # Copy the requirements.txt file into the container
 COPY requirements.txt .
-
+COPY . .
 # Install any dependencies
 RUN pip install --upgrade setuptools
 
