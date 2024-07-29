@@ -3,7 +3,6 @@ requests~=2.32.3
 beautifulsoup4~=4.12.3
 python-dotenv~=1.0.0
 cachetools~=5.3.3
-moviepy~=1.0.2
 instaloader~=4.11
 pytubefix~=6.1.1
 psycopg2-binary
