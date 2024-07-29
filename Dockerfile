@@ -7,6 +7,8 @@ WORKDIR /app
 # Copy the requirements.txt file into the container
 COPY requirements.txt .
 
+RUN apt-get update && apt-get install -y libpq-dev build-essential
+
 # Upgrade pip and setuptools to avoid potential issues with older versions
 RUN pip install --upgrade pip setuptools
 
