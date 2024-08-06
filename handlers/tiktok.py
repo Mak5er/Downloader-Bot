@@ -1,5 +1,6 @@
 import datetime
 import os
+import re
 import time
 
 import requests
@@ -87,9 +88,14 @@ async def process_url_tiktok(message: types.Message):
     await bot.send_chat_action(message.chat.id, "typing")
     bot_url = f"t.me/{(await bot.get_me()).username}"
 
-    url = message.text
+    url_match = re.match(r"(https?://(www\.)?tiktok\.com/[^\s]+|https?://vm\.tiktok\.com/[^\s]+)", message.text)
+    if url_match:
+        url = url_match.group(0)
+    else:
+        url = message.text
 
     full_url = expand_tiktok_url(url)
+    print(full_url)
 
     react = types.ReactionTypeEmoji(emoji="👨‍💻")
     await message.react([react])

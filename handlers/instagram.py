@@ -1,9 +1,11 @@
 import os
+import re
 
 import instaloader
 from aiogram import Router, F, types
 from aiogram.types import FSInputFile
 from aiogram.utils.media_group import MediaGroupBuilder
+from moviepy.editor import VideoFileClip, AudioFileClip
 
 import messages as bm
 from config import OUTPUT_DIR, INST_PASS, INST_LOGIN
@@ -31,7 +33,11 @@ async def process_url_instagram(message: types.Message):
 
     bot_url = f"t.me/{(await bot.get_me()).username}"
 
-    url = message.text.strip()
+    url_match = re.match(r"(https?://(www\.)?instagram\.com/[^\s]+)", message.text)
+    if url_match:
+        url = url_match.group(0)
+    else:
+        url = message.text
 
     react = types.ReactionTypeEmoji(emoji="👨‍💻")
     await message.react([react])
@@ -60,13 +66,17 @@ async def process_url_instagram(message: types.Message):
         if "/reel/" in url:
             file_type = "video"
 
-            # Only send the video if the URL is for a reel
             for root, _, files in os.walk(download_dir):
                 for file in files:
                     if file.endswith('.mp4'):
                         file_path = os.path.join(root, file)
+
+                        video_clip = VideoFileClip(file_path)
+                        width, height = video_clip.size
+
                         sent_message = await bot.send_video(chat_id, FSInputFile(file_path),
                                                             caption=bm.captions(user_captions, post_caption, bot_url),
+                                                            width=width, height=height,
                                                             parse_mode="HTML")
 
                         file_id = sent_message.video.file_id
