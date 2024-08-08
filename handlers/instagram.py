@@ -5,7 +5,7 @@ import instaloader
 from aiogram import Router, F, types
 from aiogram.types import FSInputFile
 from aiogram.utils.media_group import MediaGroupBuilder
-from moviepy.editor import VideoFileClip, AudioFileClip
+from moviepy.editor import VideoFileClip
 
 import messages as bm
 from config import OUTPUT_DIR, INST_PASS, INST_LOGIN
@@ -21,7 +21,6 @@ try:
 
 except:
     L.login(INST_LOGIN, INST_PASS)
-    print("Logged in with password")
     L.save_session_to_file()
 
 

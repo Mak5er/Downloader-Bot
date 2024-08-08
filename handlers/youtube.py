@@ -6,6 +6,7 @@ from aiogram import types, Router, F
 from aiogram.types import FSInputFile
 from moviepy.editor import VideoFileClip, AudioFileClip
 from pytubefix import YouTube
+from pytubefix.cli import on_progress
 
 import keyboards as kb
 import messages as bm
@@ -39,7 +40,7 @@ async def download_video(message: types.Message):
         time = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
         name = f"{time}_youtube_video.mp4"
 
-        yt = YouTube(url)
+        yt = YouTube(url, use_oauth=True, allow_oauth_cache=True, on_progress_callback = on_progress)
         video = yt.streams.filter(res="720p", file_extension='mp4', progressive=True).first()
 
         if not video:
@@ -115,7 +116,7 @@ async def download_audio(call: types.CallbackQuery):
     time = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
     name = f"{time}_youtube_audio.mp3"
 
-    yt = YouTube(url)
+    yt = YouTube(url, use_oauth=True, allow_oauth_cache=True, on_progress_callback = on_progress)
     audio = yt.streams.filter(only_audio=True, file_extension='mp4').first()
 
     if not audio:
@@ -168,7 +169,7 @@ async def download_music(message: types.Message):
         time = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
         name = f"{time}_youtube_audio.mp3"
 
-        yt = YouTube(url)
+        yt = YouTube(url, use_oauth=True, allow_oauth_cache=True, on_progress_callback = on_progress)
         audio = yt.streams.filter(only_audio=True, file_extension='mp4').first()
 
         if not audio:
