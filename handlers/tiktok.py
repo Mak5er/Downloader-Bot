@@ -115,7 +115,7 @@ async def process_url_tiktok(message: types.Message):
 
         if db_file_id:
             if business_id is None:
-                await message.send_chat_action(message.chat.id, "upload_video")
+                await bot.send_chat_action(message.chat.id, "upload_video")
 
             await message.answer_video(video=db_file_id[0][0],
                                        caption=bm.captions(None, None, bot_url),
@@ -136,7 +136,7 @@ async def process_url_tiktok(message: types.Message):
 
             if file_size < MAX_FILE_SIZE:
                 if business_id is None:
-                    await message.send_chat_action(message.chat.id, "upload_video")
+                    await bot.send_chat_action(message.chat.id, "upload_video")
 
                 sent_message = await message.reply_video(
                     video=video,
@@ -183,7 +183,7 @@ async def process_url_tiktok(message: types.Message):
             all_files.sort(key=lambda x: int(os.path.basename(x).split('.')[0]))
 
             if business_id is None:
-                await message.send_chat_action(message.chat.id, "upload_photo")
+                await bot.send_chat_action(message.chat.id, "upload_photo")
 
             while all_files:
                 media_group = MediaGroupBuilder(caption=bm.captions(None, None, bot_url))
@@ -214,7 +214,7 @@ async def process_url_tiktok(message: types.Message):
 
 @router.callback_query(F.data.startswith('tt_audio_'))
 async def download_audio(call: types.CallbackQuery):
-    await call.message.send_chat_action(call.message.chat.id, "upload_voice")
+    await bot.send_chat_action(call.message.chat.id, "upload_voice")
     bot_url = f"t.me/{(await bot.get_me()).username}"
 
     audio_id = call.data.split('_')[2]

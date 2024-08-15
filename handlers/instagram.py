@@ -57,7 +57,7 @@ async def process_url_instagram(message: types.Message):
 
         if db_file_id:
             if business_id is None:
-                await message.send_chat_action(message.chat.id, "upload_video")
+                await bot.send_chat_action(message.chat.id, "upload_video")
 
             await message.answer_video(video=db_file_id[0][0],
                                        caption=bm.captions(user_captions, post_caption, bot_url),
@@ -78,7 +78,7 @@ async def process_url_instagram(message: types.Message):
                         width, height = video_clip.size
 
                         if business_id is None:
-                            await message.send_chat_action(message.chat.id, "upload_video")
+                            await bot.send_chat_action(message.chat.id, "upload_video")
 
                         sent_message = await message.answer_video(video=FSInputFile(file_path),
                                                                   caption=bm.captions(user_captions, post_caption,

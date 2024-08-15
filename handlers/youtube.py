@@ -60,7 +60,7 @@ async def download_video(message: types.Message):
 
         if db_file_id:
             if business_id is None:
-                await message.send_chat_action(message.chat.id, "upload_video")
+                await bot.send_chat_action(message.chat.id, "upload_video")
 
             await message.answer_video(video=db_file_id[0][0],
                                        caption=bm.captions(user_captions, post_caption, bot_url),
@@ -82,7 +82,7 @@ async def download_video(message: types.Message):
             width, height = video_clip.size
 
             if business_id is None:
-                await message.send_chat_action(message.chat.id, "upload_video")
+                await bot.send_chat_action(message.chat.id, "upload_video")
 
             sent_message = await message.answer_video(video=FSInputFile(video_file_path),
                                                       width=width,
@@ -150,7 +150,7 @@ async def download_audio(call: types.CallbackQuery):
 
     await call.answer()
 
-    await call.message.send_chat_action(call.message.chat.id, "upload_voice")
+    await bot.send_chat_action(call.message.chat.id, "upload_voice")
 
     # Send audio file
     await call.message.answer_audio(audio=FSInputFile(audio_file_path), title=yt.title,
@@ -205,7 +205,7 @@ async def download_music(message: types.Message):
         duration = round(audio_duration.duration)
 
         if business_id is None:
-            await message.send_chat_action(message.chat.id, "upload_voice")
+            await bot.send_chat_action(message.chat.id, "upload_voice")
 
         await message.answer_audio(audio=FSInputFile(audio_file_path), title=yt.title,
                                    performer=yt.author, duration=duration,

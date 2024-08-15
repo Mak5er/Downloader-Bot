@@ -119,7 +119,7 @@ async def handle_tweet_links(message):
     tweet_ids = extract_tweet_ids(message.text)
     if tweet_ids:
         if business_id is None:
-            await message.send_chat_action(message.chat.id, "typing")
+            await bot.send_chat_action(message.chat.id, "typing")
 
         for tweet_id in tweet_ids:
             media = scrape_media(tweet_id)
