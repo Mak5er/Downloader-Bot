@@ -6,5 +6,5 @@ beautifulsoup4
 python-dotenv
 cachetools
 instaloader
-git+https://github.com/Mak5er/pytubefix
+pytubefix
 psycopg2-binary
