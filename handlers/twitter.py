@@ -20,7 +20,7 @@ router = Router()
 def extract_tweet_ids(text):
     """Extract tweet IDs from message text."""
     unshortened_links = ''
-    for link in re.findall(r"t\.co\/[a-zA-Z0-9]+", text):
+    for link in re.findall(r't\.co\/[a-zA-Z0-9]+', text):
         try:
             unshortened_link = requests.get('https://' + link).url
             unshortened_links += '\n' + unshortened_link
@@ -50,7 +50,7 @@ async def download_media(media_url, file_path):
             file.write(chunk)
 
 
-async def reply_media(message, tweet_id, tweet_media, bot_url):
+async def reply_media(message, tweet_id, tweet_media, bot_url, business_id):
     """Reply to message with supported media."""
     await send_analytics(user_id=message.from_user.id, chat_type=message.chat.type, action_name="twitter")
 
@@ -99,26 +99,33 @@ async def reply_media(message, tweet_id, tweet_media, bot_url):
 
     except Exception as e:
         print(e)
-        react = types.ReactionTypeEmoji(emoji="👎")
-        await message.react([react])
+        if business_id is None:
+            react = types.ReactionTypeEmoji(emoji="👎")
+            await message.react([react])
         await message.reply(f"An error occurred during the download: {e}")
 
 
 @router.message(F.text.regexp(r"(https?://(www\.)?(twitter|x)\.com/[^\s]+|https?://t\.co/[^\s]+)"))
+@router.business_message(F.text.regexp(r"(https?://(www\.)?(twitter|x)\.com/[^\s]+|https?://t\.co/[^\s]+)"))
 async def handle_tweet_links(message):
-    await bot.send_chat_action(message.chat.id, "typing")
+    business_id = message.business_connection_id
 
-    react = types.ReactionTypeEmoji(emoji="👨‍💻")
-    await message.react([react])
+    if business_id is None:
+        react = types.ReactionTypeEmoji(emoji="👨‍💻")
+        await message.react([react])
 
     bot_url = f"t.me/{(await bot.get_me()).username}"
 
     tweet_ids = extract_tweet_ids(message.text)
     if tweet_ids:
+        if business_id is None:
+            await message.send_chat_action(message.chat.id, "typing")
+
         for tweet_id in tweet_ids:
             media = scrape_media(tweet_id)
-            await reply_media(message, tweet_id, media, bot_url)
+            await reply_media(message, tweet_id, media, bot_url, business_id)
     else:
-        react = types.ReactionTypeEmoji(emoji="👎")
-        await message.react([react])
+        if business_id is None:
+            react = types.ReactionTypeEmoji(emoji="👎")
+            await message.react([react])
         await message.answer("No tweet IDs found.")

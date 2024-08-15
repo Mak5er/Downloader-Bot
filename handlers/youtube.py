@@ -6,6 +6,7 @@ from aiogram import types, Router, F
 from aiogram.types import FSInputFile
 from moviepy.editor import VideoFileClip, AudioFileClip
 from pytubefix import YouTube
+from pytubefix.cli import on_progress
 
 import keyboards as kb
 import messages as bm
@@ -24,8 +25,9 @@ def download_youtube_video(video, name):
 
 # Download video
 @router.message(F.text.regexp(r'(https?://)?(www\.)?(youtube|youtu|youtube-nocookie)\.(com|be)/.+'))
+@router.business_message(F.text.regexp(r'(https?://)?(www\.)?(youtube|youtu|youtube-nocookie)\.(com|be)/.+'))
 async def download_video(message: types.Message):
-    await bot.send_chat_action(message.chat.id, "typing")
+    business_id = message.business_connection_id
 
     await send_analytics(user_id=message.from_user.id, chat_type=message.chat.type, action_name="youtube_video")
 
@@ -34,12 +36,14 @@ async def download_video(message: types.Message):
 
     url = message.text
     try:
-        react = types.ReactionTypeEmoji(emoji="👨‍💻")
-        await message.react([react])
+        if business_id is None:
+            react = types.ReactionTypeEmoji(emoji="👨‍💻")
+            await message.react([react])
+
         time = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
         name = f"{time}_youtube_video.mp4"
 
-        yt = YouTube(url)
+        yt = YouTube(url, use_oauth=True, allow_oauth_cache=True, on_progress_callback=on_progress)
         video = yt.streams.filter(res="720p", file_extension='mp4', progressive=True).first()
 
         if not video:
@@ -55,10 +59,14 @@ async def download_video(message: types.Message):
         db_file_id = await db.get_file_id(yt.watch_url)
 
         if db_file_id:
-            await bot.send_video(chat_id=message.chat.id, video=db_file_id[0][0],
-                                 caption=bm.captions(user_captions, post_caption, bot_url),
-                                 reply_markup=kb.return_audio_download_keyboard('yt', yt.watch_url),
-                                 parse_mode="HTMl")
+            if business_id is None:
+                await message.send_chat_action(message.chat.id, "upload_video")
+
+            await message.answer_video(video=db_file_id[0][0],
+                                       caption=bm.captions(user_captions, post_caption, bot_url),
+                                       reply_markup=kb.return_audio_download_keyboard("yt",
+                                                                                      yt.watch_url) if business_id is None else None,
+                                       parse_mode="HTMl")
             return
 
         size = video.filesize_kb
@@ -69,20 +77,19 @@ async def download_video(message: types.Message):
             loop = asyncio.get_event_loop()
             await loop.run_in_executor(None, download_youtube_video, video, name)
 
-            # Check file size using moviepy
-
             video_clip = VideoFileClip(video_file_path)
 
             width, height = video_clip.size
 
-            # Send video file
-            sent_message = await bot.send_video(chat_id=message.chat.id, video=FSInputFile(video_file_path),
-                                                width=width,
-                                                height=height,
-                                                caption=bm.captions(user_captions, post_caption, bot_url),
-                                                reply_markup=kb.return_audio_download_keyboard("yt", yt.watch_url),
-                                                parse_mode="HTMl")
+            if business_id is None:
+                await message.send_chat_action(message.chat.id, "upload_video")
 
+            sent_message = await message.answer_video(video=FSInputFile(video_file_path),
+                                                      width=width,
+                                                      height=height,
+                                                      caption=bm.captions(user_captions, post_caption, bot_url),
+                                                      reply_markup=kb.return_audio_download_keyboard("yt",
+                                                                                                     yt.watch_url) if business_id is None else None)
             file_id = sent_message.video.file_id
 
             await db.add_file(yt.watch_url, file_id, file_type)
@@ -92,14 +99,18 @@ async def download_video(message: types.Message):
 
 
         else:
-            react = types.ReactionTypeEmoji(emoji="👎")
-            await message.react([react])
+            if business_id is None:
+                react = types.ReactionTypeEmoji(emoji="👎")
+                await message.react([react])
+
             await message.reply("The video is too large.")
 
     except Exception as e:
         print(e)
-        react = types.ReactionTypeEmoji(emoji="👎")
-        await message.react([react])
+        if business_id is None:
+            react = types.ReactionTypeEmoji(emoji="👎")
+            await message.react([react])
+
         await message.reply(f"An error occurred during the download: {e}")
 
     await update_info(message)
@@ -107,7 +118,6 @@ async def download_video(message: types.Message):
 
 @router.callback_query(F.data.startswith('yt_audio_'))
 async def download_audio(call: types.CallbackQuery):
-    await bot.send_chat_action(call.message.chat.id, "typing")
     bot_url = f"t.me/{(await bot.get_me()).username}"
 
     url = call.data.split('_')[2]
@@ -115,7 +125,7 @@ async def download_audio(call: types.CallbackQuery):
     time = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
     name = f"{time}_youtube_audio.mp3"
 
-    yt = YouTube(url)
+    yt = YouTube(url, use_oauth=True, allow_oauth_cache=True, on_progress_callback=on_progress)
     audio = yt.streams.filter(only_audio=True, file_extension='mp4').first()
 
     if not audio:
@@ -140,11 +150,13 @@ async def download_audio(call: types.CallbackQuery):
 
     await call.answer()
 
+    await call.message.send_chat_action(call.message.chat.id, "upload_voice")
+
     # Send audio file
-    await bot.send_audio(chat_id=call.message.chat.id, audio=FSInputFile(audio_file_path), title=yt.title,
-                         performer=yt.author, duration=duration,
-                         caption=bm.captions(None, None, bot_url),
-                         parse_mode="HTML")
+    await call.message.answer_audio(audio=FSInputFile(audio_file_path), title=yt.title,
+                                    performer=yt.author, duration=duration,
+                                    caption=bm.captions(None, None, bot_url),
+                                    parse_mode="HTML")
 
     os.remove(audio_file_path)
 
@@ -154,21 +166,23 @@ def download_youtube_audio(audio, name):
 
 
 @router.message(F.text.regexp(r'(https?://)?(music\.)?(youtube|youtu|youtube-nocookie)\.(com|be)/.+'))
+@router.business_message(F.text.regexp(r'(https?://)?(music\.)?(youtube|youtu|youtube-nocookie)\.(com|be)/.+'))
 async def download_music(message: types.Message):
-    await bot.send_chat_action(message.chat.id, "typing")
+    business_id = message.business_connection_id
 
     await send_analytics(user_id=message.from_user.id, chat_type=message.chat.type, action_name="youtube_audio")
 
     bot_url = f"t.me/{(await bot.get_me()).username}"
-
     url = message.text
-    try:
+
+    if business_id is None:
         react = types.ReactionTypeEmoji(emoji="👨‍💻")
         await message.react([react])
+    try:
         time = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
         name = f"{time}_youtube_audio.mp3"
 
-        yt = YouTube(url)
+        yt = YouTube(url, use_oauth=True, allow_oauth_cache=True, on_progress_callback=on_progress)
         audio = yt.streams.filter(only_audio=True, file_extension='mp4').first()
 
         if not audio:
@@ -182,7 +196,6 @@ async def download_music(message: types.Message):
         loop = asyncio.get_event_loop()
         await loop.run_in_executor(None, download_youtube_video, audio, name)
 
-        # Check file size
         if file_size > MAX_FILE_SIZE:
             os.remove(audio_file_path)
             await message.reply("The audio file is too large.")
@@ -191,18 +204,20 @@ async def download_music(message: types.Message):
         audio_duration = AudioFileClip(audio_file_path)
         duration = round(audio_duration.duration)
 
+        if business_id is None:
+            await message.send_chat_action(message.chat.id, "upload_voice")
 
-        # Send audio file
-        await bot.send_audio(chat_id=message.chat.id, audio=FSInputFile(audio_file_path), title=yt.title,
-                             performer=yt.author, duration=duration,
-                             caption=bm.captions(None, None, bot_url),
-                             parse_mode="HTML")
+        await message.answer_audio(audio=FSInputFile(audio_file_path), title=yt.title,
+                                   performer=yt.author, duration=duration,
+                                   caption=bm.captions(None, None, bot_url),
+                                   parse_mode="HTML")
 
         os.remove(audio_file_path)
     except Exception as e:
         print(e)
-        react = types.ReactionTypeEmoji(emoji="👎")
-        await message.react([react])
+        if business_id is None:
+            react = types.ReactionTypeEmoji(emoji="👎")
+            await message.react([react])
         await message.reply(f"An error occurred during the download: {e}")
 
     await update_info(message)

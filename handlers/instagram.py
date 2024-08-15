@@ -25,8 +25,9 @@ except:
 
 
 @router.message(F.text.regexp(r"(https?://(www\.)?instagram\.com/[^\s]+)"))
+@router.business_message(F.text.regexp(r"(https?://(www\.)?instagram\.com/[^\s]+)"))
 async def process_url_instagram(message: types.Message):
-    await bot.send_chat_action(message.chat.id, "typing")
+    business_id = message.business_connection_id
 
     await send_analytics(user_id=message.from_user.id, chat_type=message.chat.type, action_name="instagram")
 
@@ -38,9 +39,9 @@ async def process_url_instagram(message: types.Message):
     else:
         url = message.text
 
-    react = types.ReactionTypeEmoji(emoji="👨‍💻")
-    await message.react([react])
-    chat_id = message.chat.id
+    if business_id is None:
+        react = types.ReactionTypeEmoji(emoji="👨‍💻")
+        await message.react([react])
 
     # Get the Instagram post from URL
     try:
@@ -55,9 +56,12 @@ async def process_url_instagram(message: types.Message):
         db_file_id = await db.get_file_id(reels_url + post.shortcode)
 
         if db_file_id:
-            await bot.send_video(chat_id=message.chat.id, video=db_file_id[0][0],
-                                 caption=bm.captions(user_captions, post_caption, bot_url),
-                                 parse_mode="HTMl")
+            if business_id is None:
+                await message.send_chat_action(message.chat.id, "upload_video")
+
+            await message.answer_video(video=db_file_id[0][0],
+                                       caption=bm.captions(user_captions, post_caption, bot_url),
+                                       parse_mode="HTMl")
             return
 
         L.download_post(post, target=download_dir)
@@ -73,10 +77,14 @@ async def process_url_instagram(message: types.Message):
                         video_clip = VideoFileClip(file_path)
                         width, height = video_clip.size
 
-                        sent_message = await bot.send_video(chat_id, FSInputFile(file_path),
-                                                            caption=bm.captions(user_captions, post_caption, bot_url),
-                                                            width=width, height=height,
-                                                            parse_mode="HTML")
+                        if business_id is None:
+                            await message.send_chat_action(message.chat.id, "upload_video")
+
+                        sent_message = await message.answer_video(video=FSInputFile(file_path),
+                                                                  caption=bm.captions(user_captions, post_caption,
+                                                                                      bot_url),
+                                                                  width=width, height=height,
+                                                                  parse_mode="HTML")
 
                         file_id = sent_message.video.file_id
 
@@ -99,11 +107,11 @@ async def process_url_instagram(message: types.Message):
                         batch += 1
 
                     if batch == batch_size:
-                        await bot.send_media_group(chat_id=chat_id, media=media_group.build())
+                        await message.answer_media_group(media=media_group.build())
                         media_group = MediaGroupBuilder(caption=bm.captions(user_captions, post_caption, bot_url))
 
             if batch > 0:
-                await bot.send_media_group(chat_id=chat_id, media=media_group.build())
+                await message.answer_media_group(media=media_group.build())
 
         # Clean up downloaded files and directory
         for root, dirs, files in os.walk(download_dir):
@@ -113,8 +121,9 @@ async def process_url_instagram(message: types.Message):
 
     except Exception as e:
         print(e)
-        react = types.ReactionTypeEmoji(emoji="👎")
-        await message.react([react])
+        if business_id is None:
+            react = types.ReactionTypeEmoji(emoji="👎")
+            await message.react([react])
         await message.reply(f"An error occurred during the download: {e}")
 
     await update_info(message)

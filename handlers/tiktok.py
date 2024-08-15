@@ -84,8 +84,10 @@ class DownloaderTikTok:
 
 
 @router.message(F.text.regexp(r"(https?://(www\.)?tiktok\.com/[^\s]+|https?://vm\.tiktok\.com/[^\s]+)"))
+@router.business_message(F.text.regexp(r"(https?://(www\.)?tiktok\.com/[^\s]+|https?://vm\.tiktok\.com/[^\s]+)"))
 async def process_url_tiktok(message: types.Message):
-    await bot.send_chat_action(message.chat.id, "typing")
+    business_id = message.business_connection_id
+
     bot_url = f"t.me/{(await bot.get_me()).username}"
 
     url_match = re.match(r"(https?://(www\.)?tiktok\.com/[^\s]+|https?://vm\.tiktok\.com/[^\s]+)", message.text)
@@ -95,10 +97,10 @@ async def process_url_tiktok(message: types.Message):
         url = message.text
 
     full_url = expand_tiktok_url(url)
-    print(full_url)
 
-    react = types.ReactionTypeEmoji(emoji="👨‍💻")
-    await message.react([react])
+    if business_id is None:
+        react = types.ReactionTypeEmoji(emoji="👨‍💻")
+        await message.react([react])
 
     if "video" in full_url:
 
@@ -112,10 +114,14 @@ async def process_url_tiktok(message: types.Message):
         db_file_id = await db.get_file_id(full_url)
 
         if db_file_id:
-            await bot.send_video(chat_id=message.chat.id, video=db_file_id[0][0],
-                                 caption=bm.captions(None, None, bot_url),
-                                 reply_markup=kb.return_audio_download_keyboard("tt", video_id),
-                                 parse_mode="HTMl")
+            if business_id is None:
+                await message.send_chat_action(message.chat.id, "upload_video")
+
+            await message.answer_video(video=db_file_id[0][0],
+                                       caption=bm.captions(None, None, bot_url),
+                                       reply_markup=kb.return_audio_download_keyboard("tt",
+                                                                                      video_id) if business_id is None else None,
+                                       parse_mode="HTMl")
             return
 
         video_file_path = os.path.join(OUTPUT_DIR, name)
@@ -129,12 +135,15 @@ async def process_url_tiktok(message: types.Message):
             width, height = video_clip.size
 
             if file_size < MAX_FILE_SIZE:
+                if business_id is None:
+                    await message.send_chat_action(message.chat.id, "upload_video")
+
                 sent_message = await message.reply_video(
                     video=video,
                     width=width,
                     height=height,
                     caption=bm.captions(None, None, bot_url),
-                    reply_markup=kb.return_audio_download_keyboard("tt", video_id),
+                    reply_markup=kb.return_audio_download_keyboard("tt", video_id) if business_id is None else None,
                     parse_mode="HTML"
                 )
 
@@ -143,14 +152,16 @@ async def process_url_tiktok(message: types.Message):
                 await db.add_file(full_url, file_id, file_type)
 
             else:
-                react = types.ReactionTypeEmoji(emoji="👎")
-                await message.react([react])
+                if business_id is None:
+                    react = types.ReactionTypeEmoji(emoji="👎")
+                    await message.react([react])
                 await message.reply("The video is too large.")
 
             os.remove(video_file_path)
         else:
-            react = types.ReactionTypeEmoji(emoji="👎")
-            await message.react([react])
+            if business_id is None:
+                react = types.ReactionTypeEmoji(emoji="👎")
+                await message.react([react])
             await message.reply("Failed to download the video. Please try again.")
 
 
@@ -171,27 +182,31 @@ async def process_url_tiktok(message: types.Message):
 
             all_files.sort(key=lambda x: int(os.path.basename(x).split('.')[0]))
 
+            if business_id is None:
+                await message.send_chat_action(message.chat.id, "upload_photo")
+
             while all_files:
-                media_group = MediaGroupBuilder(caption=bm.captions(None, None, bot_url),
-                                                reply_markup=kb.return_audio_download_keyboard("tt", photo_id))
+                media_group = MediaGroupBuilder(caption=bm.captions(None, None, bot_url))
                 for _ in range(min(10, len(all_files))):
                     file_path = all_files.pop(0)
                     media_group.add_photo(media=FSInputFile(file_path), parse_mode="HTML")
 
-                await bot.send_media_group(chat_id=message.chat.id, media=media_group.build())
+                await message.answer_media_group(media=media_group.build())
 
             for root, dirs, files in os.walk(download_dir):
                 for file in files:
                     os.remove(os.path.join(root, file))
                 os.rmdir(download_dir)
         else:
-            react = types.ReactionTypeEmoji(emoji="👎")
-            await message.react([react])
+            if business_id is None:
+                react = types.ReactionTypeEmoji(emoji="👎")
+                await message.react([react])
             await message.reply("Failed to download photos. Please try again.")
 
     else:
-        react = types.ReactionTypeEmoji(emoji="👎")
-        await message.react([react])
+        if business_id is None:
+            react = types.ReactionTypeEmoji(emoji="👎")
+            await message.react([react])
         await message.reply("The URL does not seem to be a valid TikTok video or photo link.")
 
     await update_info(message)
@@ -199,7 +214,7 @@ async def process_url_tiktok(message: types.Message):
 
 @router.callback_query(F.data.startswith('tt_audio_'))
 async def download_audio(call: types.CallbackQuery):
-    await bot.send_chat_action(call.message.chat.id, "typing")
+    await call.message.send_chat_action(call.message.chat.id, "upload_voice")
     bot_url = f"t.me/{(await bot.get_me()).username}"
 
     audio_id = call.data.split('_')[2]
@@ -223,10 +238,9 @@ async def download_audio(call: types.CallbackQuery):
 
         await call.answer()
 
-        # Send audio file
-        await bot.send_audio(chat_id=call.message.chat.id, audio=FSInputFile(audio_file_path),
-                             duration=duration,
-                             caption=bm.captions(None, None, bot_url),
-                             parse_mode="HTML")
+        await call.message.answer_audio(audio=FSInputFile(audio_file_path),
+                                        duration=duration,
+                                        caption=bm.captions(None, None, bot_url),
+                                        parse_mode="HTML")
 
     os.remove(audio_file_path)
