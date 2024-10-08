@@ -83,8 +83,8 @@ class DownloaderTikTok:
             return False
 
 
-@router.message(F.text.regexp(r"(https?://(www\.)?tiktok\.com/[^\s]+|https?://vm\.tiktok\.com/[^\s]+)"))
-@router.business_message(F.text.regexp(r"(https?://(www\.)?tiktok\.com/[^\s]+|https?://vm\.tiktok\.com/[^\s]+)"))
+@router.message(F.text.regexp(r"(https?://(www\.|vm\.|vt\.|vn\.)?tiktok\.com/[^\s]+)"))
+@router.business_message(F.text.regexp(r"(https?://(www\.|vm\.|vt\.|vn\.)?tiktok\.com/[^\s]+)"))
 async def process_url_tiktok(message: types.Message):
     business_id = message.business_connection_id
 
