@@ -125,6 +125,5 @@ async def process_url_instagram(message: types.Message):
             react = types.ReactionTypeEmoji(emoji="👎")
             await message.react([react])
         await message.reply(f"Something went wrong :(\nPlease try again later")
-        await bot.send_message(chat_id=ADMINS_UID, text="Instagram is not working:(")
 
     await update_info(message)
