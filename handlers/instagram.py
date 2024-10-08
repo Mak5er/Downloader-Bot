@@ -14,19 +14,21 @@ from main import bot, db, send_analytics
 
 router = Router()
 
-L = instaloader.Instaloader()
-
-try:
-    L.load_session_from_file(INST_LOGIN)
-
-except:
-    L.login(INST_LOGIN, INST_PASS)
-    L.save_session_to_file()
-
 
 @router.message(F.text.regexp(r"(https?://(www\.)?instagram\.com/[^\s]+)"))
 @router.business_message(F.text.regexp(r"(https?://(www\.)?instagram\.com/[^\s]+)"))
 async def process_url_instagram(message: types.Message):
+    L = instaloader.Instaloader()
+
+    try:
+        L.load_session_from_file(INST_LOGIN)
+
+    except:
+
+        L.login(INST_LOGIN, INST_PASS)
+        L.save_session_to_file()
+
+
     business_id = message.business_connection_id
 
     await send_analytics(user_id=message.from_user.id, chat_type=message.chat.type, action_name="instagram")
