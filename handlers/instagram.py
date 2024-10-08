@@ -8,7 +8,7 @@ from aiogram.utils.media_group import MediaGroupBuilder
 from moviepy.editor import VideoFileClip
 
 import messages as bm
-from config import OUTPUT_DIR, INST_PASS, INST_LOGIN
+from config import OUTPUT_DIR, INST_PASS, INST_LOGIN, ADMINS_UID
 from handlers.user import update_info
 from main import bot, db, send_analytics
 
@@ -124,6 +124,7 @@ async def process_url_instagram(message: types.Message):
         if business_id is None:
             react = types.ReactionTypeEmoji(emoji="👎")
             await message.react([react])
-        await message.reply(f"An error occurred during the download: {e}")
+        await message.reply(f"Something went wrong :(\n Please try again later")
+        await bot.send_message(chat_id=ADMINS_UID, text="Instagram is not working:(")
 
     await update_info(message)
