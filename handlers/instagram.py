@@ -1,3 +1,4 @@
+import asyncio
 import os
 import re
 
@@ -8,26 +9,28 @@ from aiogram.utils.media_group import MediaGroupBuilder
 from moviepy.editor import VideoFileClip
 
 import messages as bm
-from config import OUTPUT_DIR, INST_PASS, INST_LOGIN, ADMINS_UID
+from config import OUTPUT_DIR, INST_PASS, INST_LOGIN
 from handlers.user import update_info
 from main import bot, db, send_analytics
 
 router = Router()
 
 
-@router.message(F.text.regexp(r"(https?://(www\.)?instagram\.com/[^\s]+)"))
-@router.business_message(F.text.regexp(r"(https?://(www\.)?instagram\.com/[^\s]+)"))
+@router.message(F.text.regexp(r"(https?://(www\.)?instagram\.com/\S+)"))
+@router.business_message(F.text.regexp(r"(https?://(www\.)?instagram\.com/\S+)"))
 async def process_url_instagram(message: types.Message):
     L = instaloader.Instaloader()
 
     try:
+        L = instaloader.Instaloader()
         L.load_session_from_file(INST_LOGIN)
 
     except:
-
-        L.login(INST_LOGIN, INST_PASS)
-        L.save_session_to_file()
-
+        try:
+            L.login(INST_LOGIN, INST_PASS)
+            L.save_session_to_file()
+        except:
+            L = instaloader.Instaloader()
 
     business_id = message.business_connection_id
 
@@ -35,7 +38,7 @@ async def process_url_instagram(message: types.Message):
 
     bot_url = f"t.me/{(await bot.get_me()).username}"
 
-    url_match = re.match(r"(https?://(www\.)?instagram\.com/[^\s]+)", message.text)
+    url_match = re.match(r"(https?://(www\.)?instagram\.com/\S+)", message.text)
     if url_match:
         url = url_match.group(0)
     else:
@@ -115,6 +118,8 @@ async def process_url_instagram(message: types.Message):
             if batch > 0:
                 await message.answer_media_group(media=media_group.build())
 
+        await asyncio.sleep(5)
+
         # Clean up downloaded files and directory
         for root, dirs, files in os.walk(download_dir):
             for file in files:
@@ -126,6 +131,6 @@ async def process_url_instagram(message: types.Message):
         if business_id is None:
             react = types.ReactionTypeEmoji(emoji="👎")
             await message.react([react])
-        await message.reply(f"Something went wrong :(\nPlease try again later")
+        await message.reply("Something went wrong :(\nPlease try again later.")
 
     await update_info(message)

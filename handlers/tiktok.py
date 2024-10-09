@@ -1,3 +1,4 @@
+import asyncio
 import datetime
 import os
 import re
@@ -83,14 +84,14 @@ class DownloaderTikTok:
             return False
 
 
-@router.message(F.text.regexp(r"(https?://(www\.|vm\.|vt\.|vn\.)?tiktok\.com/[^\s]+)"))
-@router.business_message(F.text.regexp(r"(https?://(www\.|vm\.|vt\.|vn\.)?tiktok\.com/[^\s]+)"))
+@router.message(F.text.regexp(r"(https?://(www\.|vm\.|vt\.|vn\.)?tiktok\.com/\S+)"))
+@router.business_message(F.text.regexp(r"(https?://(www\.|vm\.|vt\.|vn\.)?tiktok\.com/\S+)"))
 async def process_url_tiktok(message: types.Message):
     business_id = message.business_connection_id
 
     bot_url = f"t.me/{(await bot.get_me()).username}"
 
-    url_match = re.match(r"(https?://(www\.)?tiktok\.com/[^\s]+|https?://vm\.tiktok\.com/[^\s]+)", message.text)
+    url_match = re.match(r"(https?://(www\.|vm\.|vt\.|vn\.)?tiktok\.com/\S+)", message.text)
     if url_match:
         url = url_match.group(0)
     else:
@@ -157,12 +158,13 @@ async def process_url_tiktok(message: types.Message):
                     await message.react([react])
                 await message.reply("The video is too large.")
 
+            await asyncio.sleep(5)
             os.remove(video_file_path)
         else:
             if business_id is None:
                 react = types.ReactionTypeEmoji(emoji="👎")
                 await message.react([react])
-            await message.reply("Failed to download the video. Please try again.")
+            await message.reply("Something went wrong :(\nPlease try again later.")
 
 
     elif "photo" in full_url:
@@ -193,6 +195,8 @@ async def process_url_tiktok(message: types.Message):
 
                 await message.answer_media_group(media=media_group.build())
 
+            await asyncio.sleep(5)
+
             for root, dirs, files in os.walk(download_dir):
                 for file in files:
                     os.remove(os.path.join(root, file))
@@ -201,13 +205,13 @@ async def process_url_tiktok(message: types.Message):
             if business_id is None:
                 react = types.ReactionTypeEmoji(emoji="👎")
                 await message.react([react])
-            await message.reply("Failed to download photos. Please try again.")
+            await message.reply("Something went wrong :(\nPlease try again later.")
 
     else:
         if business_id is None:
             react = types.ReactionTypeEmoji(emoji="👎")
             await message.react([react])
-        await message.reply("The URL does not seem to be a valid TikTok video or photo link.")
+        await message.reply("Something went wrong :(\nPlease try again later.")
 
     await update_info(message)
 
@@ -243,4 +247,5 @@ async def download_audio(call: types.CallbackQuery):
                                         caption=bm.captions(None, None, bot_url),
                                         parse_mode="HTML")
 
+    await asyncio.sleep(5)
     os.remove(audio_file_path)

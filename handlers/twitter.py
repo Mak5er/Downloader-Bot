@@ -1,3 +1,4 @@
+import asyncio
 import html
 import os
 import re
@@ -91,6 +92,8 @@ async def reply_media(message, tweet_id, tweet_media, bot_url, business_id):
                 media_group.add_video(media=FSInputFile(file_path))
             await message.answer_media_group(media_group.build())
 
+        await asyncio.sleep(5)
+
         # Видалення папки після завантаження
         for root, dirs, files in os.walk(tweet_dir):
             for file in files:
@@ -102,11 +105,11 @@ async def reply_media(message, tweet_id, tweet_media, bot_url, business_id):
         if business_id is None:
             react = types.ReactionTypeEmoji(emoji="👎")
             await message.react([react])
-        await message.reply(f"An error occurred during the download: {e}")
+        await message.reply("Something went wrong :(\nPlease try again later.")
 
 
-@router.message(F.text.regexp(r"(https?://(www\.)?(twitter|x)\.com/[^\s]+|https?://t\.co/[^\s]+)"))
-@router.business_message(F.text.regexp(r"(https?://(www\.)?(twitter|x)\.com/[^\s]+|https?://t\.co/[^\s]+)"))
+@router.message(F.text.regexp(r"(https?://(www\.)?(twitter|x)\.com/\S+|https?://t\.co/\S+)"))
+@router.business_message(F.text.regexp(r"(https?://(www\.)?(twitter|x)\.com/\S+|https?://t\.co/\S+)"))
 async def handle_tweet_links(message):
     business_id = message.business_connection_id
 
