@@ -17,6 +17,7 @@ OUTPUT_DIR = "downloads"
 BOT_COMMANDS = [
     {'command': 'start', 'description': '🚀Початок роботи / Get started🔥'},
     {'command': 'settings', 'description': '⚙️Налаштування / Settings🛠'},
+    {'command': 'stats', 'description': '📊Статистика / Statistics📈'},
 ]
 
 ADMINS_UID = [admin_id]
