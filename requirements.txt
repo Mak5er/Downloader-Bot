@@ -1,6 +1,6 @@
 moviepy
-aiogram~=3.8.0
-aiohttp~=3.9.5
+aiogram
+aiohttp
 requests
 beautifulsoup4
 python-dotenv
@@ -8,3 +8,5 @@ cachetools
 instaloader
 pytubefix
 psycopg2-binary
+
+matplotlib

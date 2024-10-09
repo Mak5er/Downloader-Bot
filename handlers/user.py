@@ -5,7 +5,7 @@ from aiogram.filters import Command
 
 import os
 import matplotlib.pyplot as plt
-from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, FSInputFile
+from aiogram.types import FSInputFile
 
 import keyboards as kb
 import messages as bm
