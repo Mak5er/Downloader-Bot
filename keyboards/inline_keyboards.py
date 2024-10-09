@@ -80,3 +80,16 @@ def return_audio_download_keyboard(platform, url):
     ]
     keyboard = InlineKeyboardMarkup(inline_keyboard=audio_button)
     return keyboard
+
+
+def stats_keyboard():
+    buttons = [
+        [
+            InlineKeyboardButton(text="Week", callback_data="date_Week"),
+            InlineKeyboardButton(text="Month", callback_data="date_Month"),
+            InlineKeyboardButton(text="All Time", callback_data="date_All-Time"),
+        ]
+    ]
+
+    keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
+    return keyboard

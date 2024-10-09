@@ -1,5 +1,11 @@
+import datetime
+
 from aiogram import types, Router, F
 from aiogram.filters import Command
+
+import os
+import matplotlib.pyplot as plt
+from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, FSInputFile
 
 import keyboards as kb
 import messages as bm
@@ -82,3 +88,74 @@ async def change_captions(call: types.CallbackQuery):
     await db.update_captions(captions=captions, user_id=call.from_user.id)
     await call.message.edit_reply_markup(reply_markup=kb.return_captions_keyboard(captions))
     await call.answer()
+
+
+def create_and_save_chart(data):
+    # Генеруємо унікальну назву файлу на основі дати й часу
+    filename = datetime.datetime.now().strftime("%Y_%m_%d_%H_%M_%S") + "_chart.png"
+
+    dates = list(data.keys())
+    counts = list(data.values())
+
+    # Використовуємо темну тему
+    plt.style.use('dark_background')
+
+    # Створюємо графік з темним фоном
+    fig, ax = plt.subplots(figsize=(10, 5), facecolor='#2E2E2E')  # Темний фон полотна (canvas)
+
+    # Додаємо лінії, точки та прозору заливку
+    ax.plot(dates, counts, marker='o', color='#4CAF50', markersize=8, linewidth=2, label='Downloads')
+    ax.fill_between(dates, counts, color='#4CAF50', alpha=0.3)
+
+    # Налаштування заголовку та осей
+    ax.set_title('Statistics of Downloaded Videos', fontsize=16, color='#FFFFFF')
+    ax.set_xlabel('Date', fontsize=12, color='#B0B0B0')
+    ax.set_ylabel('Number of Downloads', fontsize=12, color='#B0B0B0')
+
+    # Налаштування кольорів для сітки, осей та тексту
+    ax.grid(True, color='#444444', linestyle='--', linewidth=0.5)
+    ax.spines['bottom'].set_color('#FFFFFF')
+    ax.spines['left'].set_color('#FFFFFF')
+    ax.tick_params(axis='x', colors='#B0B0B0')
+    ax.tick_params(axis='y', colors='#B0B0B0')
+
+    # Зберігаємо зображення з темним фоном
+    fig.savefig(filename, bbox_inches='tight', facecolor=fig.get_facecolor())  # facecolor для фону графіка
+    plt.close(fig)
+
+    return filename
+
+
+@router.message(Command("stats"))
+async def stats_command(message: types.Message):
+    data_today = await db.get_downloaded_files_count('Week')
+    filename = create_and_save_chart(data_today)
+
+    # Відправляємо зображення
+    chart_input_file = FSInputFile(filename)
+    sent_message = await message.answer_photo(chart_input_file, caption='Statistics for Week',
+                                              reply_markup=kb.stats_keyboard())
+
+    # Видаляємо файл після відправлення
+    if os.path.exists(filename):
+        os.remove(filename)
+
+
+@router.callback_query(F.data.startswith('date_'))
+async def switch_period(call: types.CallbackQuery):
+    # Видаляємо попереднє повідомлення зі статистикою
+    await call.message.delete()
+
+    # Отримуємо новий період
+    period = call.data.split("_")[1]
+    data = await db.get_downloaded_files_count(period)
+    filename = create_and_save_chart(data)
+
+    # Відправляємо нове зображення
+    chart_input_file = FSInputFile(filename)
+    await call.message.answer_photo(chart_input_file, caption=f'Statistics for {period}',
+                                    reply_markup=kb.stats_keyboard())
+
+    # Видаляємо файл після відправлення
+    if os.path.exists(filename):
+        os.remove(filename)

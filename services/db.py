@@ -1,3 +1,5 @@
+from datetime import datetime, timedelta
+
 import psycopg2
 
 import config
@@ -188,3 +190,41 @@ class DataBase:
         except psycopg2.OperationalError as e:
             print(e)
             pass
+
+    async def get_downloaded_files_count(self, period: str):
+        try:
+            with self.connect:
+                if period == 'Week':
+                    start_date = datetime.now() - timedelta(weeks=1)
+                    query = """
+                    SELECT DATE(date_added) AS date, COUNT(*) 
+                    FROM downloaded_files 
+                    WHERE date_added >= %s 
+                    GROUP BY DATE(date_added)
+                    ORDER BY DATE(date_added)
+                    """
+                    self.cursor.execute(query, (start_date,))
+                elif period == 'Month':
+                    start_date = datetime.now() - timedelta(days=30)
+                    query = """
+                    SELECT DATE(date_added) AS date, COUNT(*) 
+                    FROM downloaded_files 
+                    WHERE date_added >= %s 
+                    GROUP BY DATE(date_added)
+                    ORDER BY DATE(date_added)
+                    """
+                    self.cursor.execute(query, (start_date,))
+                elif period == 'All-Time':
+                    query = """
+                    SELECT DATE(date_added) AS date, COUNT(*) 
+                    FROM downloaded_files 
+                    GROUP BY DATE(date_added)
+                    ORDER BY DATE(date_added)
+                    """
+                    self.cursor.execute(query)
+
+                result = self.cursor.fetchall()
+                # Перетворюємо результат у потрібний формат
+                return {row[0].strftime('%Y-%m-%d'): row[1] for row in result}
+        except Exception as e:
+            print("Error:", e)
