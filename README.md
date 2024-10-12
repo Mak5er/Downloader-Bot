@@ -6,7 +6,7 @@ This code is a Python Telegram Bot for downloading content from social media.
 
 ### Functionality
 
-- Downloading media from Tik-Tok, Twitter, YouTube and Instagram.
+- Downloading media from Tik-Tok, Twitter, YouTube and ~~Instagram~~(Currently not working well).
 - Admin functionality for viewing user information and sending messages to all users.
 - Managing user bans and unbans.
 
@@ -23,6 +23,8 @@ Navigate to the cloned repository:
 Install the required Python packages using pip:
 
     pip install -r requirements.txt
+
+Before running the script, you also need to set up your custom Telegram API node by using [this repository](https://github.com/aiogram/telegram-bot-api). 
 
 Set up the necessary configuration by creating a  `.env`  file and defining the required variables.
 
@@ -67,8 +69,7 @@ services:
 The PostgreSQL database used by the bot includes the following tables:
 
 - `users` : Stores user information, including user ID, username, chat type, language, status, and referrer ID.
-- `downloaded_files` : Stores file_id of downloaded videos.
-  and tags.
+- `downloaded_files` : Stores file_id of downloaded videos, urls, save date and tags.
 
 ### Usage
 
