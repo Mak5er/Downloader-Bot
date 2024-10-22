@@ -23,12 +23,12 @@ async def wait_for_code(admin_id):
     code_future = asyncio.Future()
 
     # Надсилаємо повідомлення адміну з проханням ввести код
-    await bot.send_message(chat_id=admin_id, text="Enter Instagram 2FA code:")
+    await bot.send_message(chat_id=admin_id, text="Enter Instagram 2FA code by command /ig_code <Instagram 2FA code>")
 
-    @router.message()
+    @router.message(F.text.startswith("/ig_code "))
     async def handle_message(message: types.Message):
         if message.from_user.id == admin_id:
-            code_future.set_result(message.text)
+            code_future.set_result(message.text.split(" ", 1)[1])
 
     # Чекаємо на код
     return await code_future
