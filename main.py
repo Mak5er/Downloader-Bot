@@ -66,6 +66,7 @@ async def main():
         dp.inline_query.outer_middleware(middleware())
     await bot.set_my_commands(commands=BOT_COMMANDS)
     await bot.delete_webhook(drop_pending_updates=True)
+
     await dp.start_polling(bot)
 
 

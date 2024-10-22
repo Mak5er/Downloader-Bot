@@ -9,28 +9,55 @@ from aiogram.utils.media_group import MediaGroupBuilder
 from moviepy.editor import VideoFileClip
 
 import messages as bm
-from config import OUTPUT_DIR, INST_PASS, INST_LOGIN
+from config import OUTPUT_DIR, INST_PASS, INST_LOGIN, admin_id
 from handlers.user import update_info
 from main import bot, db, send_analytics
 
 router = Router()
 
+L = instaloader.Instaloader()
+
+
+# Асинхронне очікування коду двофакторної автентифікації
+async def wait_for_code(admin_id):
+    code_future = asyncio.Future()
+
+    # Надсилаємо повідомлення адміну з проханням ввести код
+    await bot.send_message(chat_id=admin_id, text="Введіть код двофакторної автентифікації Instagram:")
+
+    @router.message()
+    async def handle_message(message: types.Message):
+        if message.from_user.id == admin_id:
+            code_future.set_result(message.text)
+
+    # Чекаємо на код
+    return await code_future
+
+
+# Асинхронна обробка авторизації Instaloader з двофакторною автентифікацією
+async def instaloader_login(L, login, password, admin_id):
+    try:
+        # Спробувати завантажити сесію
+        await asyncio.to_thread(L.load_session_from_file, login)
+        print("Login with Session")
+    except Exception as e:
+        print(e)
+        try:
+            await asyncio.to_thread(L.close)
+            await asyncio.to_thread(L.login, login, password)
+            await asyncio.to_thread(L.save_session_to_file)
+            print("Login Successful")
+        except instaloader.exceptions.TwoFactorAuthRequiredException:
+            # Отримуємо код 2FA від адміністратора
+            code = str(await wait_for_code(admin_id))
+            # Виконуємо двофакторний логін з кодом
+            await asyncio.to_thread(L.two_factor_login, code)
+
 
 @router.message(F.text.regexp(r"(https?://(www\.)?instagram\.com/\S+)"))
 @router.business_message(F.text.regexp(r"(https?://(www\.)?instagram\.com/\S+)"))
 async def process_url_instagram(message: types.Message):
-    L = instaloader.Instaloader()
-
-    try:
-        L = instaloader.Instaloader()
-        L.load_session_from_file(INST_LOGIN)
-
-    except:
-        try:
-            L.login(INST_LOGIN, INST_PASS)
-            L.save_session_to_file()
-        except:
-            L = instaloader.Instaloader()
+    await instaloader_login(L, INST_LOGIN, INST_PASS, admin_id)
 
     business_id = message.business_connection_id
 
