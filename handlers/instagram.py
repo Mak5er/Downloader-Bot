@@ -52,6 +52,7 @@ async def instaloader_login(L, login, password, admin_id):
             code = str(await wait_for_code(admin_id))
             # Виконуємо двофакторний логін з кодом
             await asyncio.to_thread(L.two_factor_login, code)
+            await asyncio.to_thread(L.save_session_to_file)
 
 
 @router.message(F.text.regexp(r"(https?://(www\.)?instagram\.com/\S+)"))
