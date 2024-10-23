@@ -5,7 +5,7 @@ requests
 beautifulsoup4
 python-dotenv
 cachetools
-git+https://github.com/malicious/instaloader@2384
+instaloader @ git+https://github.com/malicious/instaloader@2384
 pytubefix
 psycopg2-binary
 matplotlib
