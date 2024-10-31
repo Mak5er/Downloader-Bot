@@ -42,7 +42,7 @@ async def send_analytics(user_id, chat_type, action_name):
             'params': {
                 'chat_type': chat_type,
                 "session_id": str(user_id),
-                'engagement_time_msec': '1000'
+                'engagement_time_msec': 1000
             }
         }],
     }
