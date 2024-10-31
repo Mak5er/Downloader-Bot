@@ -153,7 +153,7 @@ async def stats_command(message: types.Message):
     # Відправляємо зображення
     chart_input_file = FSInputFile(filename)
     await message.answer_photo(chart_input_file, caption='Statistics for Week',
-                                              reply_markup=kb.stats_keyboard())
+                               reply_markup=kb.stats_keyboard())
 
     # Видаляємо файл після відправлення
     if os.path.exists(filename):
