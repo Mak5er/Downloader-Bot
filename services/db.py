@@ -251,14 +251,16 @@ class DataBase:
                     ORDER BY DATE(date_added)
                     """
                     self.cursor.execute(query, (start_date,))
-                elif period == 'All-Time':
+                elif period == 'Year':
+                    start_date = datetime.now() - timedelta(days=365)
                     query = """
                     SELECT DATE(date_added) AS date, COUNT(*) 
                     FROM downloaded_files 
+                    WHERE date_added >= %s 
                     GROUP BY DATE(date_added)
                     ORDER BY DATE(date_added)
                     """
-                    self.cursor.execute(query)
+                    self.cursor.execute(query, (start_date,))
 
                 result = self.cursor.fetchall()
                 # Перетворюємо результат у потрібний формат

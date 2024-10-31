@@ -87,7 +87,7 @@ def stats_keyboard():
         [
             InlineKeyboardButton(text="Week", callback_data="date_Week"),
             InlineKeyboardButton(text="Month", callback_data="date_Month"),
-            InlineKeyboardButton(text="All Time", callback_data="date_All-Time"),
+            InlineKeyboardButton(text="Year", callback_data="date_Year"),
         ]
     ]
 

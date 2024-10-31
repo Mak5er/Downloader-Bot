@@ -1,4 +1,5 @@
 import datetime
+from collections import defaultdict
 
 from aiogram import types, Router, F
 from aiogram.filters import Command
@@ -6,6 +7,7 @@ from aiogram.filters import Command
 import os
 import matplotlib.pyplot as plt
 from aiogram.types import FSInputFile
+from matplotlib.ticker import MaxNLocator
 
 import keyboards as kb
 import messages as bm
@@ -90,37 +92,53 @@ async def change_captions(call: types.CallbackQuery):
     await call.answer()
 
 
-def create_and_save_chart(data):
-    # Генеруємо унікальну назву файлу на основі дати й часу
+def create_and_save_chart(data, period):
+    # Генеруємо унікальну назву файлу
     filename = datetime.datetime.now().strftime("%Y_%m_%d_%H_%M_%S") + "_chart.png"
 
     dates = list(data.keys())
     counts = list(data.values())
 
-    # Використовуємо темну тему
+    # Обробка даних залежно від періоду
+    if period == 'Month':
+        # Вибір кожного 3-го дня для місячних даних
+        dates = dates[::3]
+        counts = counts[::3]
+    elif period == 'Year':
+        # Агрегація по місяцях для річних даних
+        monthly_data = defaultdict(int)
+        for date_str, count in data.items():
+            date = datetime.datetime.strptime(date_str, "%Y-%m-%d")
+            month_key = date.strftime("%Y-%m")
+            monthly_data[month_key] += count
+        dates = list(monthly_data.keys())
+        counts = list(monthly_data.values())
+
+    # Використання темної теми
     plt.style.use('dark_background')
+    fig, ax = plt.subplots(figsize=(10, 5), facecolor='#2E2E2E')
 
-    # Створюємо графік з темним фоном
-    fig, ax = plt.subplots(figsize=(10, 5), facecolor='#2E2E2E')  # Темний фон полотна (canvas)
-
-    # Додаємо лінії, точки та прозору заливку
+    # Побудова графіку з лінією, точками та прозорою заливкою
     ax.plot(dates, counts, marker='o', color='#4CAF50', markersize=8, linewidth=2, label='Downloads')
     ax.fill_between(dates, counts, color='#4CAF50', alpha=0.3)
 
-    # Налаштування заголовку та осей
+    # Заголовок і підписи осей
     ax.set_title('Statistics of Downloaded Videos', fontsize=16, color='#FFFFFF')
     ax.set_xlabel('Date', fontsize=12, color='#B0B0B0')
     ax.set_ylabel('Number of Downloads', fontsize=12, color='#B0B0B0')
 
-    # Налаштування кольорів для сітки, осей та тексту
+    # Обмеження кількості міток на осі X
+    ax.xaxis.set_major_locator(MaxNLocator(8))
+
+    # Налаштування кольорів сітки, осей та тексту
     ax.grid(True, color='#444444', linestyle='--', linewidth=0.5)
     ax.spines['bottom'].set_color('#FFFFFF')
     ax.spines['left'].set_color('#FFFFFF')
     ax.tick_params(axis='x', colors='#B0B0B0')
     ax.tick_params(axis='y', colors='#B0B0B0')
 
-    # Зберігаємо зображення з темним фоном
-    fig.savefig(filename, bbox_inches='tight', facecolor=fig.get_facecolor())  # facecolor для фону графіка
+    # Збереження зображення з темним фоном
+    fig.savefig(filename, bbox_inches='tight', facecolor=fig.get_facecolor())
     plt.close(fig)
 
     return filename
@@ -129,11 +147,12 @@ def create_and_save_chart(data):
 @router.message(Command("stats"))
 async def stats_command(message: types.Message):
     data_today = await db.get_downloaded_files_count('Week')
-    filename = create_and_save_chart(data_today)
+    period = "Week"
+    filename = create_and_save_chart(data_today, period)
 
     # Відправляємо зображення
     chart_input_file = FSInputFile(filename)
-    sent_message = await message.answer_photo(chart_input_file, caption='Statistics for Week',
+    await message.answer_photo(chart_input_file, caption='Statistics for Week',
                                               reply_markup=kb.stats_keyboard())
 
     # Видаляємо файл після відправлення
@@ -149,7 +168,7 @@ async def switch_period(call: types.CallbackQuery):
     # Отримуємо новий період
     period = call.data.split("_")[1]
     data = await db.get_downloaded_files_count(period)
-    filename = create_and_save_chart(data)
+    filename = create_and_save_chart(data, period)
 
     # Відправляємо нове зображення
     chart_input_file = FSInputFile(filename)
