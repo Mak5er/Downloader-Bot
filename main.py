@@ -1,12 +1,12 @@
 import logging
 import os
 
+import httpx
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from aiogram.client.session.aiohttp import AiohttpSession
 from aiogram.client.telegram import TelegramAPIServer
 from aiogram.enums.parse_mode import ParseMode
-from aiohttp import ClientSession
 
 from config import BOT_TOKEN, BOT_COMMANDS, OUTPUT_DIR, custom_api_url, MEASUREMENT_ID, API_SECRET
 from services.db import DataBase
@@ -31,9 +31,6 @@ os.makedirs("downloads", exist_ok=True)
 
 
 async def send_analytics(user_id, chat_type, action_name):
-    """
-    Send record to Google Analytics
-    """
     params = {
         'client_id': str(user_id),
         'user_id': str(user_id),
@@ -42,13 +39,12 @@ async def send_analytics(user_id, chat_type, action_name):
             'params': {
                 'chat_type': chat_type,
                 "session_id": str(user_id),
-                'engagement_time_msec': 1000
             }
         }],
     }
-    async with ClientSession() as client:
+    async with httpx.AsyncClient() as client:
         await client.post(
-            f"https://www.google-analytics.com/mp/collect?measurement_id={MEASUREMENT_ID}&api_secret={API_SECRET}",
+            f'https://www.google-analytics.com/mp/collect?measurement_id={MEASUREMENT_ID}&api_secret={API_SECRET}',
             json=params)
 
 
