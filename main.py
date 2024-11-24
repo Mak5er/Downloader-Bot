@@ -7,6 +7,7 @@ from aiogram.client.default import DefaultBotProperties
 from aiogram.client.session.aiohttp import AiohttpSession
 from aiogram.client.telegram import TelegramAPIServer
 from aiogram.enums.parse_mode import ParseMode
+from aiocron import crontab
 
 from config import BOT_TOKEN, BOT_COMMANDS, OUTPUT_DIR, custom_api_url, MEASUREMENT_ID, API_SECRET
 from services.db import DataBase
@@ -52,6 +53,7 @@ async def send_analytics(user_id, chat_type, action_name):
 async def main():
     import handlers
     import middlewares
+    from handlers.admin import clear_downloads_and_notify
 
     if not os.path.exists(OUTPUT_DIR):
         os.makedirs(OUTPUT_DIR)
@@ -63,6 +65,8 @@ async def main():
         dp.inline_query.outer_middleware(middleware())
     await bot.set_my_commands(commands=BOT_COMMANDS)
     await bot.delete_webhook(drop_pending_updates=True)
+
+    crontab('0 0 * * *', func=clear_downloads_and_notify, start=True)
 
     await dp.start_polling(bot)
 

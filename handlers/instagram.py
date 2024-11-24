@@ -6,7 +6,7 @@ import instaloader
 from aiogram import Router, F, types
 from aiogram.types import FSInputFile
 from aiogram.utils.media_group import MediaGroupBuilder
-from moviepy.editor import VideoFileClip
+from moviepy import VideoFileClip
 
 import messages as bm
 from config import OUTPUT_DIR, INST_PASS, INST_LOGIN, admin_id

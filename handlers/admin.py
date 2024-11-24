@@ -1,4 +1,5 @@
 import asyncio
+import os
 
 from aiogram import types, F, Router
 from aiogram.filters import Command
@@ -9,6 +10,7 @@ from main import bot, db
 from filters import IsBotAdmin
 import keyboards as kb
 import messages as bm
+from config import ADMINS_UID, OUTPUT_DIR
 
 router = Router()
 
@@ -284,3 +286,24 @@ async def write_message(message: types.Message, state: FSMContext):
         print(e)
         await message.reply(bm.something_went_wrong(),
                             reply_markup=kb.return_back_to_admin_keyboard())
+
+
+async def clear_downloads_and_notify():
+    try:
+        if os.path.exists(OUTPUT_DIR):
+            for file in os.listdir(OUTPUT_DIR):
+                file_path = os.path.join(OUTPUT_DIR, file)
+                if os.path.isfile(file_path):
+                    os.remove(file_path)
+            message = f"The folder '{OUTPUT_DIR}' has been successfully cleared."
+        else:
+            message = f"The folder '{OUTPUT_DIR}' does not exist."
+
+    except Exception as e:
+        message = f"An error occurred while clearing the folder: {e}"
+
+    for admin_id in ADMINS_UID:
+        try:
+            await bot.send_message(chat_id=admin_id, text=message)
+        except Exception as e:
+            print(f"Failed to send a message to admin {admin_id}: {e}")

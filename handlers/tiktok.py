@@ -9,7 +9,7 @@ from aiogram import types, Router, F
 from aiogram.types import FSInputFile
 from aiogram.utils.media_group import MediaGroupBuilder
 from bs4 import BeautifulSoup
-from moviepy.editor import VideoFileClip, AudioFileClip
+from moviepy import VideoFileClip, AudioFileClip
 
 import keyboards as kb
 import messages as bm
