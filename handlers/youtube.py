@@ -65,7 +65,7 @@ async def download_video(message: types.Message):
             await message.react([react])
 
         time = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-        name = f"{time}_youtube_video"
+        name = f"{time}_youtube_video.mp4"
 
         yt = YouTube(url, use_oauth=True, allow_oauth_cache=True, on_progress_callback=on_progress,
                      oauth_verifier=custom_oauth_verifier)
@@ -97,7 +97,7 @@ async def download_video(message: types.Message):
         size = video.filesize_kb
 
         if size < MAX_FILE_SIZE:
-            video_file_path = os.path.join(OUTPUT_DIR, name + ".mp4")
+            video_file_path = os.path.join(OUTPUT_DIR, name)
             loop = asyncio.get_event_loop()
             await loop.run_in_executor(None, download_youtube_video, video, name)
 
@@ -145,7 +145,7 @@ async def download_audio(call: types.CallbackQuery):
     url = call.data.split('_')[2]
 
     time = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-    name = f"{time}_youtube_audio"
+    name = f"{time}_youtube_audio.mp3"
 
     yt = YouTube(url, use_oauth=True, allow_oauth_cache=True, on_progress_callback=on_progress,
                  oauth_verifier=custom_oauth_verifier)
@@ -157,7 +157,7 @@ async def download_audio(call: types.CallbackQuery):
 
     file_size = audio.filesize_kb
 
-    audio_file_path = os.path.join(OUTPUT_DIR, name + '.m4a')
+    audio_file_path = os.path.join(OUTPUT_DIR, name)
 
     loop = asyncio.get_event_loop()
     await loop.run_in_executor(None, download_youtube_video, audio, name)
@@ -177,7 +177,7 @@ async def download_audio(call: types.CallbackQuery):
 
     # Send audio file
     await call.message.answer_audio(audio=FSInputFile(audio_file_path), title=yt.title,
-                                    performer=yt.author, duration=duration,
+                                    duration=duration,
                                     caption=bm.captions(None, None, bot_url),
                                     parse_mode="HTML")
 
@@ -204,7 +204,7 @@ async def download_music(message: types.Message):
         await message.react([react])
     try:
         time = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-        name = f"{time}_youtube_audio"
+        name = f"{time}_youtube_audio.mp3"
 
         yt = YouTube(url, use_oauth=True, allow_oauth_cache=True, on_progress_callback=on_progress,
                      oauth_verifier=custom_oauth_verifier)
@@ -216,7 +216,7 @@ async def download_music(message: types.Message):
 
         file_size = audio.filesize_kb
 
-        audio_file_path = os.path.join(OUTPUT_DIR, name + '.m4a')
+        audio_file_path = os.path.join(OUTPUT_DIR, name)
 
         loop = asyncio.get_event_loop()
         await loop.run_in_executor(None, download_youtube_video, audio, name)
@@ -233,7 +233,7 @@ async def download_music(message: types.Message):
             await bot.send_chat_action(message.chat.id, "upload_voice")
 
         await message.answer_audio(audio=FSInputFile(audio_file_path), title=yt.title,
-                                   performer=yt.author, duration=duration,
+                                   duration=duration,
                                    caption=bm.captions(None, None, bot_url),
                                    parse_mode="HTML")
 
