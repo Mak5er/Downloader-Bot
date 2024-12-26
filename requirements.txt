@@ -6,7 +6,7 @@ beautifulsoup4
 python-dotenv
 cachetools
 instaloader
-pytubefix==8.5.1
+pytubefix
 psycopg2-binary
 matplotlib
 httpx
