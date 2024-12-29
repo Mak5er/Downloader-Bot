@@ -82,19 +82,20 @@ async def process_url_instagram(message: types.Message):
         user_captions = await db.get_user_captions(message.from_user.id)
         download_dir = f"{OUTPUT_DIR}.{post.shortcode}"
 
-        reels_url = "https://www.instagram.com/reel/"
-
         post_caption = post.caption
 
-        db_file_id = await db.get_file_id(reels_url + post.shortcode)
+        reels_url = f"https://www.instagram.com/reel/"
+
+        print(reels_url)
+
+        db_file_id = await db.get_file_id(reels_url+post.shortcode)
 
         if db_file_id:
-            if business_id is None:
-                await bot.send_chat_action(message.chat.id, "upload_video")
+            await bot.send_chat_action(message.chat.id, "upload_video")
 
             await message.answer_video(video=db_file_id[0][0],
                                        caption=bm.captions(user_captions, post_caption, bot_url),
-                                       parse_mode="HTMl")
+                                       parse_mode="HTML")
             return
 
         L.download_post(post, target=download_dir)
