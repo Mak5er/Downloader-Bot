@@ -315,7 +315,6 @@ async def handle_download_error(message, business_id):
     await message.reply("Something went wrong :(\nPlease try again later.")
 
 
-
 @router.inline_query(F.query.regexp(r"(https?://(www\.|vm\.|vt\.|vn\.)?tiktok\.com/\S+)"))
 async def inline_tiktok_query(query: types.InlineQuery):
     user_captions = await db.get_user_captions(query.from_user.id)
@@ -333,34 +332,20 @@ async def inline_tiktok_query(query: types.InlineQuery):
     results = []
 
     if "video" in full_url:
-        name = f"{video_id}_tiktok_video.mp4"
-        video_file_path = os.path.join(OUTPUT_DIR, name)
-        downloader = DownloaderTikTok(OUTPUT_DIR, video_file_path)
         video_info = DownloaderTikTok.video_info(full_url)
-        if downloader.download_video(video_id):
-            db_file_id = await db.get_file_id(full_url)
-            if db_file_id:
-                video_file_id = db_file_id[0][0]
-            else:
-                video = FSInputFile(video_file_path)
-                sent_message = await bot.send_video(chat_id=CHANNEL_ID, video=video,
-                                                    caption=f"🎥 TikTok Video from {query.from_user.full_name}")
-                video_file_id = sent_message.video.file_id
-                await db.add_file(full_url, video_file_id, "video")
-
-            results.append(
-                InlineQueryResultVideo(
-                    id=f"video_{video_id}",
-                    video_url=video_file_id,
-                    thumbnail_url="https://freepnglogo.com/images/all_img/tik-tok-logo-transparent-031f.png",
-                    title="🎥 TikTok Video",
-                    mime_type="video/mp4",
-                    caption=bm.captions(user_captions, video_info.description, bot_url),
-                    reply_markup=kb.return_video_info_keyboard(video_info.views, video_info.likes,
-                                                               video_info.comments, video_info.shares,
-                                                               video_info.music_play_url, full_url)
-                )
+        results.append(
+            InlineQueryResultVideo(
+                id=f"video_{video_id}",
+                video_url=f"https://tikwm.com/video/media/play/{video_id}.mp4",
+                thumbnail_url="https://freepnglogo.com/images/all_img/tik-tok-logo-transparent-031f.png",
+                title="🎥 TikTok Video",
+                mime_type="video/mp4",
+                caption=bm.captions(user_captions, video_info.description, bot_url),
+                reply_markup=kb.return_video_info_keyboard(video_info.views, video_info.likes,
+                                                           video_info.comments, video_info.shares,
+                                                           video_info.music_play_url, full_url)
             )
+        )
 
     elif "photo" in full_url:
         results.append(
