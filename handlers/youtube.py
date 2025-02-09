@@ -203,8 +203,8 @@ async def download_music(message: types.Message):
         react = types.ReactionTypeEmoji(emoji="👨‍💻")
         await message.react([react])
     try:
-        time = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-        name = f"{time}_youtube_audio.mp3"
+        download_time = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        name = f"{download_time}_youtube_audio.mp3"
 
         yt = YouTube(url, use_oauth=True, allow_oauth_cache=True, on_progress_callback=on_progress,
                      oauth_verifier=custom_oauth_verifier)
@@ -239,6 +239,10 @@ async def download_music(message: types.Message):
 
         await asyncio.sleep(5)
         os.remove(audio_file_path)
+
+        if "@" in url:
+            return
+
     except Exception as e:
         print(e)
         if business_id is None:

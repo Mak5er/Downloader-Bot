@@ -12,6 +12,7 @@ admin_id = int(os.getenv("admin_id"))
 custom_api_url = str(os.getenv("custom_api_url"))
 MEASUREMENT_ID = str(os.getenv("MEASUREMENT_ID"))
 API_SECRET = str(os.getenv("API_SECRET"))
+CHANNEL_ID = str(os.getenv("CHANNEL_ID"))
 OUTPUT_DIR = "downloads"
 
 BOT_COMMANDS = [
