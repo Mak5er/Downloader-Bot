@@ -315,13 +315,6 @@ async def handle_download_error(message, business_id):
     await message.reply("Something went wrong :(\nPlease try again later.")
 
 
-async def cleanup_files(directory):
-    await asyncio.sleep(5)
-    for root, _, files in os.walk(directory):
-        for file in files:
-            os.remove(os.path.join(root, file))
-    os.rmdir(directory)
-
 
 @router.inline_query(F.query.regexp(r"(https?://(www\.|vm\.|vt\.|vn\.)?tiktok\.com/\S+)"))
 async def inline_tiktok_query(query: types.InlineQuery):
