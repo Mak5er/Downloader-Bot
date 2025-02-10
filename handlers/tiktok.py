@@ -7,14 +7,14 @@ from typing import Optional
 
 import requests
 from aiogram import types, Router, F
-from aiogram.types import FSInputFile, InlineQueryResultVideo, InputTextMessageContent, InlineQueryResultArticle
+from aiogram.types import FSInputFile, InlineQueryResultVideo, InlineQueryResultArticle
 from aiogram.utils.media_group import MediaGroupBuilder
 from fake_useragent import UserAgent
 from moviepy import VideoFileClip
 
 import keyboards as kb
 import messages as bm
-from config import OUTPUT_DIR
+from config import OUTPUT_DIR, CHANNEL_ID
 from handlers.user import update_info
 from helper import expand_tiktok_url
 from main import bot, db, send_analytics
@@ -293,7 +293,8 @@ async def process_tiktok_profile(message, full_url, bot_url, user_captions):
             caption=bm.captions(user_captions, user.description, bot_url),
             reply_markup=kb.return_user_info_keyboard(display_name, user.followers, user.videos, user.likes, full_url)
         )
-    except:
+    except Exception as e:
+        print(e)
         tiktok_logo_url = 'https://freepnglogo.com/images/all_img/tik-tok-logo-transparent-031f.png'
         await message.reply_photo(
             photo=tiktok_logo_url,
@@ -333,40 +334,61 @@ async def inline_tiktok_query(query: types.InlineQuery):
     results = []
 
     if "video" in full_url:
+        name = f"{video_id}_tiktok_video.mp4"
+        video_file_path = os.path.join(OUTPUT_DIR, name)
+        downloader = DownloaderTikTok(OUTPUT_DIR, video_file_path)
         video_info = DownloaderTikTok.video_info(full_url)
 
-        results.append(
-            InlineQueryResultVideo(
-                id=f"video_{video_id}",
-                video_url=f"https://tikwm.com/video/media/play/{video_id}.mp4",
-                thumbnail_url="https://freepnglogo.com/images/all_img/tik-tok-logo-transparent-031f.png",
-                description=video_info.description,
-                title="🎥 TikTok Video",
-                mime_type="video/mp4",
-                caption=bm.captions(user_captions, video_info.description, bot_url),
-                reply_markup=kb.return_video_info_keyboard(video_info.views, video_info.likes,
-                                                           video_info.comments, video_info.shares,
-                                                           video_info.music_play_url, full_url)
+        if video_info:
+            db_file_id = await db.get_file_id(full_url)
+            if db_file_id:
+                video_file_id = db_file_id[0][0]
+            else:
+                downloader.download_video(video_id)
+                video = FSInputFile(video_file_path)
+                sent_message = await bot.send_video(chat_id=CHANNEL_ID, video=video,
+                                                    caption=f"🎥 TikTok Video from {query.from_user.full_name}")
+                video_file_id = sent_message.video.file_id
+                await db.add_file(full_url, video_file_id, "video")
+            results.append(
+                InlineQueryResultVideo(
+                    id=f"video_{video_id}",
+                    video_url=video_file_id,
+                    thumbnail_url="https://freepnglogo.com/images/all_img/tik-tok-logo-transparent-031f.png",
+                    description=video_info.description,
+                    title="🎥 TikTok Video",
+                    mime_type="video/mp4",
+                    caption=bm.captions(user_captions, video_info.description, bot_url),
+                    reply_markup=kb.return_video_info_keyboard(video_info.views, video_info.likes,
+                                                               video_info.comments, video_info.shares,
+                                                               video_info.music_play_url, full_url)
+                )
             )
-        )
+
+            await query.answer(results, cache_time=10)
+
+            await asyncio.sleep(5)
+            os.remove(video_file_path)
+
+            return
+
 
     elif "photo" in full_url:
         results.append(
             InlineQueryResultArticle(
-                id="unsupported_tiktok_photos",
+                id="unsupported_instagram_photos",
                 title="📷 TikTok Photos",
-                description='⚠️ TikTok photos are not supported in inline mode.',
-                input_message_content=InputTextMessageContent(
+                description="⚠️ TikTok photos are not supported in inline mode.",
+                input_message_content=types.InputTextMessageContent(
                     message_text="⚠️ TikTok photos are not supported in inline mode."
                 )
-
             )
         )
-
-    if results:
         await query.answer(results, cache_time=10)
-    else:
-        await query.answer([], cache_time=1, is_personal=True)
+
+        return
+
+    await query.answer([], cache_time=1, is_personal=True)
 
 
 @router.callback_query(F.data.startswith("followers_"))

@@ -5,12 +5,12 @@ from dataclasses import dataclass
 from typing import List
 
 from aiogram import Router, F, types
-from aiogram.types import FSInputFile
+from aiogram.types import FSInputFile, InlineQueryResultVideo
 from aiogram.utils.media_group import MediaGroupBuilder
 from moviepy import VideoFileClip
 
 import messages as bm
-from config import OUTPUT_DIR, RAPID_API_KEY1, RAPID_API_KEY2
+from config import OUTPUT_DIR, RAPID_API_KEY1, RAPID_API_KEY2, CHANNEL_ID
 from handlers.user import update_info
 import keyboards as kb
 from main import bot, db, send_analytics
@@ -332,27 +332,69 @@ async def inline_instagram_query(query: types.InlineQuery):
         return await query.answer([], cache_time=1, is_personal=True)
 
     url = query.query
-    video_info = await DownloaderInstagram.fetch_instagram_post_data(url)
 
-    if not video_info or not video_info.video_urls:
-        return await query.answer([], cache_time=1, is_personal=True)
+    results = []
 
-    results = [
-        types.InlineQueryResultVideo(
-            id=f"insta_{video_info.id}",
-            video_url=video_info.video_urls[0],
-            thumbnail_url="https://freepnglogo.com/images/all_img/1715965947instagram-logo-png%20(1).png",
-            description=video_info.description,
-            title="📸 Instagram Reel",
-            mime_type="video/mp4",
-            caption=bm.captions(user_captions, video_info.description, bot_url),
-            reply_markup=kb.return_video_info_keyboard(video_info.views, video_info.likes,
-                                                       video_info.comments, video_info.shares,
-                                                       None, url)
+    if "/reel/" in url:
+        video_info = await DownloaderInstagram.fetch_instagram_post_data(url)
+
+        name = f"{video_info.id}_instagram_video.mp4"
+        video_file_path = os.path.join(OUTPUT_DIR, name)
+
+        downloader = DownloaderInstagram(OUTPUT_DIR, video_file_path)
+
+        if video_info:
+            db_file_id = await db.get_file_id(url)
+            if db_file_id:
+                video_file_id = db_file_id[0][0]
+
+            else:
+                downloader.download_video(video_info.video_urls[0])
+                video = FSInputFile(video_file_path)
+                sent_message = await bot.send_video(chat_id=CHANNEL_ID, video=video,
+                                                    caption=f"🎥 Instagram Reel Video from {query.from_user.full_name}")
+                video_file_id = sent_message.video.file_id
+                await db.add_file(url, video_file_id, "video")
+
+            results.append(
+                InlineQueryResultVideo(
+                    id=f"video_{video_info.id}",
+                    video_url=video_file_id,
+                    thumbnail_url="https://freepnglogo.com/images/all_img/1715965947instagram-logo-png%20(1).png",
+                    description=video_info.description,
+                    title="🎥 Instagram Reel",
+                    mime_type="video/mp4",
+                    caption=bm.captions(user_captions, video_info.description, bot_url),
+                    reply_markup=kb.return_video_info_keyboard(video_info.views, video_info.likes,
+                                                               video_info.comments, video_info.shares,
+                                                               None, url)
+                )
+            )
+
+        await query.answer(results, cache_time=10)
+
+        await asyncio.sleep(5)
+        os.remove(video_file_path)
+
+        return
+
+
+    elif "/p/" in url:
+        results.append(
+            types.InlineQueryResultArticle(
+                id="unsupported_instagram_photos",
+                title="📷 Instagram Photos",
+                description="⚠️ Instagram photos are not supported in inline mode.",
+                input_message_content=types.InputTextMessageContent(
+                    message_text="⚠️ Instagram photos are not supported in inline mode."
+                )
+            )
         )
-    ]
+        await query.answer(results, cache_time=10)
 
-    await query.answer(results, cache_time=10)
+        return
+
+    await query.answer([], cache_time=1, is_personal=True)
 
 
 async def handle_large_file(message, business_id):
