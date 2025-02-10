@@ -77,9 +77,9 @@ async def send_to_all_message(message: types.Message, state: FSMContext):
         users = await db.all_users()
         for user in users:
             try:
-                await bot.forward_message(chat_id=user[0],
-                                          from_chat_id=sender_id,
-                                          message_id=message.message_id)
+                await bot.copy_message(chat_id=user[0],
+                                       from_chat_id=sender_id,
+                                       message_id=message.message_id)
 
                 user_status = await db.status(user[0])
 

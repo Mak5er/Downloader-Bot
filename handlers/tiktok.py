@@ -1,5 +1,4 @@
 import asyncio
-import datetime
 import os
 import re
 import time
@@ -10,13 +9,12 @@ import requests
 from aiogram import types, Router, F
 from aiogram.types import FSInputFile, InlineQueryResultVideo, InputTextMessageContent, InlineQueryResultArticle
 from aiogram.utils.media_group import MediaGroupBuilder
-from bs4 import BeautifulSoup
 from fake_useragent import UserAgent
-from moviepy import VideoFileClip, AudioFileClip
+from moviepy import VideoFileClip
 
 import keyboards as kb
 import messages as bm
-from config import OUTPUT_DIR, CHANNEL_ID
+from config import OUTPUT_DIR
 from handlers.user import update_info
 from helper import expand_tiktok_url
 from main import bot, db, send_analytics
@@ -86,7 +84,6 @@ class DownloaderTikTok:
 
     @staticmethod
     def user_info(username: str) -> Optional[TikTokUser]:
-        """Отримує інформацію про користувача за його нікнеймом."""
         max_retries = 10
         retry_delay = 1.5
 
@@ -282,6 +279,8 @@ async def process_tiktok_photos(message, full_url, bot_url, user_captions, busin
 
 
 async def process_tiktok_profile(message, full_url, bot_url, user_captions):
+    await send_analytics(user_id=message.from_user.id, chat_type=message.chat.type, action_name="tiktok_profile")
+
     downloader = DownloaderTikTok(OUTPUT_DIR, "")
     username = full_url.split('@')[1].split('?')[0]
     user = downloader.user_info(username)
@@ -317,6 +316,8 @@ async def handle_download_error(message, business_id):
 
 @router.inline_query(F.query.regexp(r"(https?://(www\.|vm\.|vt\.|vn\.)?tiktok\.com/\S+)"))
 async def inline_tiktok_query(query: types.InlineQuery):
+    await send_analytics(user_id=query.from_user.id, chat_type=query.chat.type, action_name="inline_tiktok_video")
+
     user_captions = await db.get_user_captions(query.from_user.id)
     bot_url = f"t.me/{(await bot.get_me()).username}"
 
@@ -333,11 +334,13 @@ async def inline_tiktok_query(query: types.InlineQuery):
 
     if "video" in full_url:
         video_info = DownloaderTikTok.video_info(full_url)
+
         results.append(
             InlineQueryResultVideo(
                 id=f"video_{video_id}",
                 video_url=f"https://tikwm.com/video/media/play/{video_id}.mp4",
                 thumbnail_url="https://freepnglogo.com/images/all_img/tik-tok-logo-transparent-031f.png",
+                description=video_info.description,
                 title="🎥 TikTok Video",
                 mime_type="video/mp4",
                 caption=bm.captions(user_captions, video_info.description, bot_url),
@@ -364,41 +367,6 @@ async def inline_tiktok_query(query: types.InlineQuery):
         await query.answer(results, cache_time=10)
     else:
         await query.answer([], cache_time=1, is_personal=True)
-
-
-@router.callback_query(F.data.startswith('tt_audio_'))
-async def download_audio(call: types.CallbackQuery):
-    await bot.send_chat_action(call.message.chat.id, "upload_voice")
-    bot_url = f"t.me/{(await bot.get_me()).username}"
-
-    audio_id = call.data.split('_')[2]
-
-    time = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-    name = f"{time}_tiktok_audio.mp3"
-
-    audio_file_path = os.path.join(OUTPUT_DIR, name)
-    downloader = DownloaderTikTok(OUTPUT_DIR, audio_file_path)
-
-    if downloader.download_video(audio_id):
-        audio = AudioFileClip(audio_file_path)
-        duration = round(audio.duration)
-        file_size = os.path.getsize(audio_file_path)
-
-        if file_size > MAX_FILE_SIZE:
-            os.remove(audio_file_path)
-            await call.message.reply("The audio file is too large.")
-            os.remove(audio_file_path)
-            return
-
-        await call.answer()
-
-        await call.message.answer_audio(audio=FSInputFile(audio_file_path),
-                                        duration=duration,
-                                        caption=bm.captions(None, None, bot_url),
-                                        parse_mode="HTML")
-
-    await asyncio.sleep(5)
-    os.remove(audio_file_path)
 
 
 @router.callback_query(F.data.startswith("followers_"))

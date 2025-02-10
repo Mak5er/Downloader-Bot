@@ -19,7 +19,6 @@ router = Router()
 
 
 def extract_tweet_ids(text):
-    """Extract tweet IDs from message text."""
     unshortened_links = ''
     for link in re.findall(r't\.co\/[a-zA-Z0-9]+', text):
         try:
@@ -52,7 +51,6 @@ async def download_media(media_url, file_path):
 
 
 async def reply_media(message, tweet_id, tweet_media, bot_url, business_id):
-    """Reply to message with supported media."""
     await send_analytics(user_id=message.from_user.id, chat_type=message.chat.type, action_name="twitter")
 
     tweet_dir = f"{OUTPUT_DIR}/{tweet_id}"
@@ -94,7 +92,6 @@ async def reply_media(message, tweet_id, tweet_media, bot_url, business_id):
 
         await asyncio.sleep(5)
 
-        # Видалення папки після завантаження
         for root, dirs, files in os.walk(tweet_dir):
             for file in files:
                 os.remove(os.path.join(root, file))

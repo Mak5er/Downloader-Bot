@@ -79,7 +79,7 @@ class DownloaderInstagram:
 
             video_data = None
 
-            for api_key in RAPID_API_KEYS:  # Пробуємо кожен API-ключ
+            for api_key in RAPID_API_KEYS:
                 headers = {
                     "x-rapidapi-key": api_key,
                     "x-rapidapi-host": RAPID_API_HOST
@@ -87,12 +87,12 @@ class DownloaderInstagram:
 
                 try:
                     response = requests.get(api_url, headers=headers, params=querystring, timeout=10)
-                    if response.status_code == 200:  # Якщо запит успішний, виходимо з циклу
+                    if response.status_code == 200:
                         video_data = response.json()
                         if isinstance(video_data, dict) and "data" in video_data:
                             break
                 except requests.exceptions.RequestException as e:
-                    print(f"Error with {api_key} key: {e}")  # Виводимо помилку та пробуємо інший ключ
+                    print(f"Error with {api_key} key: {e}")
 
             data = video_data.get("data")
             if not isinstance(data, dict):
@@ -162,11 +162,11 @@ class DownloaderInstagram:
 
                 try:
                     response = requests.get(api_url, headers=headers, params=querystring, timeout=10)
-                    if response.status_code == 200:  # Якщо запит успішний, виходимо з циклу
+                    if response.status_code == 200:
                         user_data = response.json()
                         break
                 except requests.exceptions.RequestException as e:
-                    print(f"Error with {api_key} key: {e}")  # Виводимо помилку та пробуємо інший ключ
+                    print(f"Error with {api_key} key: {e}")
 
             if not user_data:
                 return None
@@ -305,6 +305,11 @@ async def process_instagram_photos(message, video_info, bot_url, user_captions, 
 
 
 async def process_instagram_profile(message, user_info, bot_url, user_captions, business_id, url):
+    await send_analytics(user_id=message.from_user.id, chat_type=message.chat.type, action_name="instagram_profile")
+
+    if business_id is None:
+        await bot.send_chat_action(message.chat.id, "upload_photo")
+
     username = url.split('/')[3] if len(url.split('/')) > 3 else ""
     display_name = user_info.nickname.strip() if user_info.nickname else username
 
@@ -317,6 +322,8 @@ async def process_instagram_profile(message, user_info, bot_url, user_captions, 
 
 @router.inline_query(F.query.regexp(r"(https?://(www\.)?instagram\.com/\S+)"))
 async def inline_instagram_query(query: types.InlineQuery):
+    await send_analytics(user_id=query.from_user.id, chat_type=query.chat.type, action_name="inline_instagram_video")
+
     user_captions = await db.get_user_captions(query.from_user.id)
     bot_url = f"t.me/{(await bot.get_me()).username}"
 
@@ -334,7 +341,8 @@ async def inline_instagram_query(query: types.InlineQuery):
         types.InlineQueryResultVideo(
             id=f"insta_{video_info.id}",
             video_url=video_info.video_urls[0],
-            thumbnail_url=video_info.cover,
+            thumbnail_url="https://freepnglogo.com/images/all_img/1715965947instagram-logo-png%20(1).png",
+            description=video_info.description,
             title="📸 Instagram Reel",
             mime_type="video/mp4",
             caption=bm.captions(user_captions, video_info.description, bot_url),

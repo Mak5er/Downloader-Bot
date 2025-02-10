@@ -47,7 +47,6 @@ def download_youtube_video(video, name):
     video.download(output_path=OUTPUT_DIR, filename=name)
 
 
-# Download video
 @router.message(F.text.regexp(r"(https?://(www\.)?(youtube|youtu|youtube-nocookie)\.(com|be)/\S+)"))
 @router.business_message(F.text.regexp(r"(https?://(www\.)?(youtube|youtu|youtube-nocookie)\.(com|be)/\S+)"))
 async def download_video(message: types.Message):
@@ -64,12 +63,12 @@ async def download_video(message: types.Message):
             react = types.ReactionTypeEmoji(emoji="👨‍💻")
             await message.react([react])
 
-        time = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-        name = f"{time}_youtube_video.mp4"
-
         yt = YouTube(url, use_oauth=True, allow_oauth_cache=True, on_progress_callback=on_progress,
                      oauth_verifier=custom_oauth_verifier)
+
         video = yt.streams.filter(res="1080p", file_extension='mp4', progressive=True).first()
+
+        name = f"{yt.video_id}_youtube_video.mp4"
 
         if not video:
             video = yt.streams.filter(progressive=True, file_extension='mp4').order_by('resolution').desc().first()
@@ -117,8 +116,8 @@ async def download_video(message: types.Message):
             file_id = sent_message.video.file_id
 
             await db.add_file(yt.watch_url, file_id, file_type)
-
             await asyncio.sleep(5)
+            os.remove(video_file_path)
 
         else:
             if business_id is None:
@@ -144,12 +143,11 @@ async def download_audio(call: types.CallbackQuery):
 
     url = call.data.split('_')[2]
 
-    time = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-    name = f"{time}_youtube_audio.mp3"
-
     yt = YouTube(url, use_oauth=True, allow_oauth_cache=True, on_progress_callback=on_progress,
                  oauth_verifier=custom_oauth_verifier)
     audio = yt.streams.filter(only_audio=True, file_extension='mp4').first()
+
+    name = f"{yt.video_id}_youtube_audio.mp3"
 
     if not audio:
         await call.message.reply("The URL does not seem to be a valid YouTube music link.")
@@ -162,7 +160,6 @@ async def download_audio(call: types.CallbackQuery):
     loop = asyncio.get_event_loop()
     await loop.run_in_executor(None, download_youtube_video, audio, name)
 
-    # Check file size
     if file_size > MAX_FILE_SIZE:
         os.remove(audio_file_path)
         await call.message.reply("The audio file is too large.")
@@ -175,13 +172,13 @@ async def download_audio(call: types.CallbackQuery):
 
     await bot.send_chat_action(call.message.chat.id, "upload_voice")
 
-    # Send audio file
     await call.message.answer_audio(audio=FSInputFile(audio_file_path), title=yt.title,
                                     duration=duration,
                                     caption=bm.captions(None, None, bot_url),
                                     parse_mode="HTML")
 
     await asyncio.sleep(5)
+
     os.remove(audio_file_path)
 
 
@@ -239,9 +236,6 @@ async def download_music(message: types.Message):
 
         await asyncio.sleep(5)
         os.remove(audio_file_path)
-
-        if "@" in url:
-            return
 
     except Exception as e:
         print(e)
