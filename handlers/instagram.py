@@ -322,7 +322,7 @@ async def process_instagram_profile(message, user_info, bot_url, user_captions, 
 
 @router.inline_query(F.query.regexp(r"(https?://(www\.)?instagram\.com/\S+)"))
 async def inline_instagram_query(query: types.InlineQuery):
-    await send_analytics(user_id=query.from_user.id, chat_type=query.chat.type, action_name="inline_instagram_video")
+    await send_analytics(user_id=query.from_user.id, chat_type=query.chat_type, action_name="inline_instagram_video")
 
     user_captions = await db.get_user_captions(query.from_user.id)
     bot_url = f"t.me/{(await bot.get_me()).username}"
