@@ -31,12 +31,14 @@ Set up the necessary configuration by creating a  `.env`  file and defining the 
 Example  `.env`  file:
 
     BOT_TOKEN = TELEGRAM_BOT_TOKEN
-    INST_LOGIN = INSTAGRAM_LOGIN
-    INST_PASS = INSTAGRAM_PASSWORD
     db_auth = DATABASE_CONNECT_URL
     admin_id = BOT_ADMIN_ID
     custom_api_url = YOUR_CUSTOM_TELEGRAM_API_URL
+    INSTAGRAM_RAPID_API_HOST = INSTAGRAM_RAPID_API_HOST
+    INSTAGRAM_RAPID_API_KEY = INSTAGRAM_RAPID_API_KEY
+    CHANNEL_ID = Channel_For_Inline_Query_Vitedos 
 
+Api keys can be obtained from [RapidAPI](https://rapidapi.com/social-api1-instagram/api/Instagram%20Scraper%20API).
 
 Run the script using Python:
 
@@ -49,8 +51,6 @@ Or using Docker:
 To use your local image, update `docker-compose.yml` to:
 
 ```yaml
-version: '3.9'
-
 services:
   downloader-bot:
     build:
@@ -59,8 +59,6 @@ services:
     volumes:
       - .:/app
     container_name: downloader-bot
-    ports:
-      - '4040:4040'
     restart: always
 ```
 

@@ -10,7 +10,7 @@ from aiogram.utils.media_group import MediaGroupBuilder
 from moviepy import VideoFileClip
 
 import messages as bm
-from config import OUTPUT_DIR, RAPID_API_KEY1, RAPID_API_KEY2, CHANNEL_ID
+from config import OUTPUT_DIR, INSTAGRAM_RAPID_API_KEY1, INSTAGRAM_RAPID_API_KEY2, CHANNEL_ID, INSTAGRAM_RAPID_API_HOST
 from handlers.user import update_info
 import keyboards as kb
 from main import bot, db, send_analytics
@@ -20,8 +20,7 @@ MAX_FILE_SIZE = 500 * 1024 * 1024
 
 router = Router()
 
-RAPID_API_KEYS = [RAPID_API_KEY1, RAPID_API_KEY2]
-RAPID_API_HOST = "instagram-scraper-api2.p.rapidapi.com"
+RAPID_API_KEYS = [INSTAGRAM_RAPID_API_KEY1, INSTAGRAM_RAPID_API_KEY2]
 
 
 @dataclass
@@ -82,7 +81,7 @@ class DownloaderInstagram:
             for api_key in RAPID_API_KEYS:
                 headers = {
                     "x-rapidapi-key": api_key,
-                    "x-rapidapi-host": RAPID_API_HOST
+                    "x-rapidapi-host": INSTAGRAM_RAPID_API_HOST
                 }
 
                 try:
@@ -157,7 +156,7 @@ class DownloaderInstagram:
             for api_key in RAPID_API_KEYS:  # Пробуємо кожен API-ключ
                 headers = {
                     "x-rapidapi-key": api_key,
-                    "x-rapidapi-host": RAPID_API_HOST
+                    "x-rapidapi-host": INSTAGRAM_RAPID_API_HOST
                 }
 
                 try:
