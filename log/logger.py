@@ -1,7 +1,7 @@
 import datetime
 import logging
-
 import pytz
+import colorlog
 
 my_timezone = pytz.timezone('Europe/Kyiv')
 
@@ -17,9 +17,25 @@ class CustomFormatter(logging.Formatter):
 
 log_format = '%(asctime)s - %(levelname)s - %(message)s'
 
-logging.basicConfig(filename='log/bot_log.log',
-                    level=logging.INFO,
-                    format=log_format)
+logger = logging.getLogger()
+logger.setLevel(logging.INFO)
 
+console_handler = logging.StreamHandler()
+color_formatter = colorlog.ColoredFormatter(
+    '%(log_color)s%(asctime)s - %(levelname)s - %(message)s%(reset)s',
+    datefmt='%Y-%m-%d %H:%M:%S'
+)
+console_handler.setFormatter(color_formatter)
+
+file_handler = logging.FileHandler('log/bot_log.log')
 custom_formatter = CustomFormatter(log_format)
-logging.root.handlers[0].setFormatter(custom_formatter)
+file_handler.setFormatter(custom_formatter)
+
+logger.addHandler(console_handler)
+logger.addHandler(file_handler)
+
+logger.debug("This is a debug message")
+logger.info("This is an info message")
+logger.warning("This is a warning message")
+logger.error("This is an error message")
+logger.critical("This is a critical message")
