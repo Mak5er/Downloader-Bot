@@ -58,8 +58,10 @@ def your_message_sent():
 def something_went_wrong():
     return ("Something went wrong, see log for more information!")
 
+
 def enter_ban_reason():
     return ('Enter ban reason:')
+
 
 def successful_ban(banned_user_id):
     return ("User {banned_user_id} successfully banned!").format(banned_user_id=banned_user_id)
@@ -76,5 +78,10 @@ def ban_message(reason):
 def unban_message():
     return ("🎉You have been unbanned!")
 
+
 def please_type_message():
     return ('Please type message:')
+
+
+def log_deleted():
+    return ("Log deleted, starting to write a new one.")

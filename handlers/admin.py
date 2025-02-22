@@ -1,3 +1,4 @@
+import betterlogging as logging
 import asyncio
 import os
 
@@ -5,6 +6,7 @@ from aiogram import types, F, Router
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import StatesGroup, State
+from aiogram.types import BufferedInputFile
 
 from main import bot, db
 from filters import IsBotAdmin
@@ -42,6 +44,29 @@ async def admin(message: types.Message):
 
     else:
         await message.answer(bm.not_groups())
+
+@router.callback_query(F.data == 'delete_log')
+async def del_log(call: types.CallbackQuery):
+    await bot.send_chat_action(call.message.chat.id, "typing")
+    logging.shutdown()
+    open('log/bot_log.log', 'w').close()
+    await call.message.reply(bm.log_deleted())
+    await call.answer()
+
+
+@router.callback_query(F.data == 'download_log')
+async def download_log_handler(call: types.CallbackQuery):
+    await bot.send_chat_action(call.message.chat.id, "typing")
+
+    log_file = 'log/bot_log.log'
+    user_id = call.from_user.id
+
+    await call.answer()
+
+    with open(log_file, 'rb') as file:
+        await call.message.answer_document(BufferedInputFile(file.read(), filename="bot_log.log"))
+        logging.info(f"User action: Downloaded log (User ID: {user_id})")
+        return
 
 
 @router.callback_query(F.data == 'back_to_admin')

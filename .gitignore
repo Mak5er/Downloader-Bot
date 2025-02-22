@@ -161,3 +161,6 @@ cython_debug/
 #.idea/
 
 hasil.html
+
+*.mp3
+*.mp4

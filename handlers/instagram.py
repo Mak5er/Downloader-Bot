@@ -70,7 +70,7 @@ class DownloaderInstagram:
     @staticmethod
     async def fetch_instagram_post_data(url):
         try:
-            api_url = "https://instagram-scraper-api2.p.rapidapi.com/v1/post_info"
+            api_url = f"https://{INSTAGRAM_RAPID_API_HOST}/v1/post_info"
             querystring = {
                 "code_or_id_or_url": url,
                 "include_insights": "true"
@@ -146,7 +146,7 @@ class DownloaderInstagram:
     @staticmethod
     async def fetch_instagram_user_data(url):
         try:
-            api_url = "https://instagram-scraper-api2.p.rapidapi.com/v1/info"
+            api_url = f"https://{INSTAGRAM_RAPID_API_HOST}/v1/info"
             querystring = {
                 "username_or_id_or_url": url
             }
@@ -399,10 +399,10 @@ async def inline_instagram_query(query: types.InlineQuery):
 async def handle_large_file(message, business_id):
     if business_id is None:
         await message.react([types.ReactionTypeEmoji(emoji="👎")])
-    await message.reply("The video is too large.")
+    await message.reply(bm.video_too_large())
 
 
 async def handle_download_error(message, business_id):
     if business_id is None:
         await message.react([types.ReactionTypeEmoji(emoji="👎")])
-    await message.reply("Something went wrong :(\nPlease try again later.")
+    await message.reply(bm.something_went_wrong())

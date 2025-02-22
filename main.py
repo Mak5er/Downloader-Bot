@@ -1,7 +1,7 @@
-import logging
 import os
 
 import httpx
+import betterlogging as logging
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from aiogram.client.session.aiohttp import AiohttpSession
@@ -9,21 +9,27 @@ from aiogram.client.telegram import TelegramAPIServer
 from aiogram.enums.parse_mode import ParseMode
 from aiocron import crontab
 
+from log.logger import custom_formatter
 from config import BOT_TOKEN, BOT_COMMANDS, OUTPUT_DIR, custom_api_url, MEASUREMENT_ID, API_SECRET
 from services.db import DataBase
 
-logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
 
-custom_timeout = 600  # 10 minutes
+handler = logging.FileHandler("log/bot_log.log")
+handler.setFormatter(custom_formatter)
 
+logger.addHandler(handler)
+
+logging.getLogger("werkzeug").disabled = True
+
+custom_timeout = 600
 session = AiohttpSession(
     api=TelegramAPIServer.from_base(custom_api_url),
     timeout=custom_timeout
 )
-
 default = DefaultBotProperties(parse_mode=ParseMode.HTML)
 bot = Bot(token=BOT_TOKEN, default=default, session=session)
-
 dp = Dispatcher()
 
 db = DataBase()

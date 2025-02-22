@@ -35,10 +35,12 @@ def return_settings_keyboard():
 
 def admin_keyboard():
     buttons = [
+        [InlineKeyboardButton(text=('💬Mailing'), callback_data='send_to_all')],
+        [InlineKeyboardButton(text=("👤Control User"), callback_data='control_user')],
         [
-            InlineKeyboardButton(text=('💬Mailing'), callback_data='send_to_all'),
+            InlineKeyboardButton(text=("📄View log"), callback_data='download_log'),
+            InlineKeyboardButton(text=("❌📄Delete log"), callback_data='delete_log')
         ],
-        [InlineKeyboardButton(text=("👤Control User"), callback_data='control_user')]
     ]
 
     keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)

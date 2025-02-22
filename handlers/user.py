@@ -57,6 +57,11 @@ async def send_welcome(message: types.Message):
     await update_info(message)
 
 
+@router.message(Command("remove_keyboard"))
+async def remove_reply_keyboard(message: types.Message):
+    await message.reply(text=bm.keyboard_removed(), reply_markup=types.ReplyKeyboardRemove())
+
+
 @router.message(Command("settings"))
 async def settings(message: types.Message):
     await send_analytics(user_id=message.from_user.id, chat_type=message.chat.type, action_name='settings')
@@ -93,51 +98,62 @@ async def change_captions(call: types.CallbackQuery):
 
 
 def create_and_save_chart(data, period):
-    # Генеруємо унікальну назву файлу
     filename = datetime.datetime.now().strftime("%Y_%m_%d_%H_%M_%S") + "_chart.png"
 
-    dates = list(data.keys())
-    counts = list(data.values())
-
-    # Обробка даних залежно від періоду
-    if period == 'Month':
-        # Вибір кожного 3-го дня для місячних даних
-        dates = dates[::3]
-        counts = counts[::3]
+    if period == 'Week':
+        # Використовуємо лише перші 7 днів
+        dates = list(data.keys())[:7]
+        counts = list(data.values())[:7]
+    elif period == 'Month':
+        dates = list(data.keys())[::3]  # Для місяця беремо кожну 3-ю точку
+        counts = list(data.values())[::3]
     elif period == 'Year':
-        # Агрегація по місяцях для річних даних
+        # Агрегуємо дані за місяцями
         monthly_data = defaultdict(int)
         for date_str, count in data.items():
             date = datetime.datetime.strptime(date_str, "%Y-%m-%d")
-            month_key = date.strftime("%Y-%m")
+            month_key = date.strftime("%Y-%m")  # Формат: "2025-02"
             monthly_data[month_key] += count
-        dates = list(monthly_data.keys())
-        counts = list(monthly_data.values())
+        # Беремо останні 12 місяців
+        all_months = sorted(set(monthly_data.keys()))
+        if len(all_months) > 12:
+            all_months = all_months[-12:]
+        # Перетворюємо ключі місяців у datetime-об’єкти (наприклад, 1 число місяця)
+        dates = [datetime.datetime.strptime(month, "%Y-%m") for month in all_months]
+        counts = [monthly_data[month] for month in all_months]
+    else:
+        # За замовчуванням (наприклад, для Week) використовуємо дані без змін
+        dates = list(data.keys())
+        counts = list(data.values())
 
-    # Використання темної теми
     plt.style.use('dark_background')
     fig, ax = plt.subplots(figsize=(10, 5), facecolor='#2E2E2E')
 
-    # Побудова графіку з лінією, точками та прозорою заливкою
     ax.plot(dates, counts, marker='o', color='#4CAF50', markersize=8, linewidth=2, label='Downloads')
     ax.fill_between(dates, counts, color='#4CAF50', alpha=0.3)
 
-    # Заголовок і підписи осей
     ax.set_title('Statistics of Downloaded Videos', fontsize=16, color='#FFFFFF')
     ax.set_xlabel('Date', fontsize=12, color='#B0B0B0')
     ax.set_ylabel('Number of Downloads', fontsize=12, color='#B0B0B0')
 
-    # Обмеження кількості міток на осі X
-    ax.xaxis.set_major_locator(MaxNLocator(8))
+    if period == 'Week':
+        ax.xaxis.set_major_locator(MaxNLocator(7))  # Для тижня 7 міток
+    elif period == 'Month':
+        ax.xaxis.set_major_locator(MaxNLocator(8))  # Для місяця 8 міток
+    elif period == 'Year':
+        ax.xaxis.set_major_locator(MaxNLocator(12))  # Для року 12 міток
 
-    # Налаштування кольорів сітки, осей та тексту
+    if period == 'Year':
+        import matplotlib.dates as mdates
+        ax.xaxis.set_major_locator(mdates.MonthLocator())
+        ax.xaxis.set_major_formatter(mdates.DateFormatter('%Y-%m'))
+
     ax.grid(True, color='#444444', linestyle='--', linewidth=0.5)
     ax.spines['bottom'].set_color('#FFFFFF')
     ax.spines['left'].set_color('#FFFFFF')
     ax.tick_params(axis='x', colors='#B0B0B0')
     ax.tick_params(axis='y', colors='#B0B0B0')
 
-    # Збереження зображення з темним фоном
     fig.savefig(filename, bbox_inches='tight', facecolor=fig.get_facecolor())
     plt.close(fig)
 
@@ -150,31 +166,25 @@ async def stats_command(message: types.Message):
     period = "Week"
     filename = create_and_save_chart(data_today, period)
 
-    # Відправляємо зображення
     chart_input_file = FSInputFile(filename)
     await message.answer_photo(chart_input_file, caption='Statistics for Week',
                                reply_markup=kb.stats_keyboard())
 
-    # Видаляємо файл після відправлення
     if os.path.exists(filename):
         os.remove(filename)
 
 
 @router.callback_query(F.data.startswith('date_'))
 async def switch_period(call: types.CallbackQuery):
-    # Видаляємо попереднє повідомлення зі статистикою
     await call.message.delete()
 
-    # Отримуємо новий період
     period = call.data.split("_")[1]
     data = await db.get_downloaded_files_count(period)
     filename = create_and_save_chart(data, period)
 
-    # Відправляємо нове зображення
     chart_input_file = FSInputFile(filename)
     await call.message.answer_photo(chart_input_file, caption=f'Statistics for {period}',
                                     reply_markup=kb.stats_keyboard())
 
-    # Видаляємо файл після відправлення
     if os.path.exists(filename):
         os.remove(filename)

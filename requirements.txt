@@ -11,5 +11,6 @@ psycopg2-binary
 matplotlib
 httpx
 aiocron
-
 fake-useragent
+pytz
+betterlogging

@@ -26,3 +26,22 @@ def captions(user_captions, post_caption, bot_url):
 
 def join_group(chat_title):
     return ("Hi! Thank you for adding me to <b>'{chat_title}'</b>!\nHave a nice day!").format(chat_title=chat_title)
+
+
+def something_went_wrong():
+    return ("Something went wrong :(\nPlease try again later.")
+
+
+def video_too_large():
+    return ("The video is too large.")
+
+
+def audio_too_large():
+    return ("The audio is too large.")
+
+
+def nothing_found():
+    return
+
+def keyboard_removed():
+    return ("Keyboard removed.")
