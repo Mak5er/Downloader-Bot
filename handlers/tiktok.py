@@ -2,7 +2,7 @@ import asyncio
 import os
 import re
 import time
-import betterlogging as logging
+from log.logger import logger as logging
 from dataclasses import dataclass
 from typing import Optional
 

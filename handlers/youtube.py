@@ -3,7 +3,7 @@ import os
 import time
 
 import requests
-import betterlogging as logging
+from log.logger import logger as logging
 from aiogram import types, Router, F
 from aiogram.types import FSInputFile
 from moviepy import VideoFileClip, AudioFileClip
@@ -88,6 +88,7 @@ async def download_video(message: types.Message):
         video_file_path = os.path.join(OUTPUT_DIR, name)
         await asyncio.get_event_loop().run_in_executor(None, download_media, video, name)
         video_clip = VideoFileClip(video_file_path)
+
         sent_message = await message.answer_video(
             video=FSInputFile(video_file_path),
             width=video_clip.w,
@@ -98,6 +99,7 @@ async def download_video(message: types.Message):
             parse_mode="HTML"
         )
         await db.add_file(yt.watch_url, sent_message.video.file_id, "video")
+
         await asyncio.sleep(5)
         os.remove(video_file_path)
     except Exception as e:

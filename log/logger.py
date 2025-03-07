@@ -5,7 +5,6 @@ import colorlog
 
 my_timezone = pytz.timezone('Europe/Kyiv')
 
-
 class CustomFormatter(logging.Formatter):
     def __init__(self, fmt):
         super().__init__(fmt)
@@ -14,12 +13,13 @@ class CustomFormatter(logging.Formatter):
         local_time = datetime.datetime.now(my_timezone)
         return local_time.strftime('%Y-%m-%d %H:%M:%S')
 
-
+# Основний формат логування
 log_format = '%(asctime)s - %(levelname)s - %(message)s'
 
 logger = logging.getLogger()
-logger.setLevel(logging.INFO)
+logger.setLevel(logging.DEBUG)
 
+# Кольоровий обробник для консолі
 console_handler = logging.StreamHandler()
 color_formatter = colorlog.ColoredFormatter(
     '%(log_color)s%(asctime)s - %(levelname)s - %(message)s%(reset)s',
@@ -27,12 +27,30 @@ color_formatter = colorlog.ColoredFormatter(
 )
 console_handler.setFormatter(color_formatter)
 
-file_handler = logging.FileHandler('log/bot_log.log')
-custom_formatter = CustomFormatter(log_format)
-file_handler.setFormatter(custom_formatter)
+# Обробник для помилок (Error logs)
+error_handler = logging.FileHandler('log/error_log.log')
+error_formatter = CustomFormatter('%(asctime)s - %(levelname)s - %(message)s')
+error_handler.setFormatter(error_formatter)
+error_handler.setLevel(logging.ERROR)
+
+info_handler = logging.FileHandler('log/bot_log.log')
+info_formatter = CustomFormatter('%(asctime)s - %(levelname)s - %(message)s')
+info_handler.setFormatter(info_formatter)
+info_handler.setLevel(logging.DEBUG)
+
+class MaxLevelFilter(logging.Filter):
+    def __init__(self, max_level):
+        super().__init__()
+        self.max_level = max_level
+
+    def filter(self, record):
+        return record.levelno < self.max_level
+
+info_handler.addFilter(MaxLevelFilter(logging.ERROR))
 
 logger.addHandler(console_handler)
-logger.addHandler(file_handler)
+logger.addHandler(error_handler)
+logger.addHandler(info_handler)
 
 logger.debug("This is a debug message")
 logger.info("This is an info message")

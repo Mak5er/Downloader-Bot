@@ -1,4 +1,4 @@
-import betterlogging as logging
+from log.logger import logger as logging
 import asyncio
 import os
 
@@ -45,6 +45,7 @@ async def admin(message: types.Message):
     else:
         await message.answer(bm.not_groups())
 
+
 @router.callback_query(F.data == 'delete_log')
 async def del_log(call: types.CallbackQuery):
     await bot.send_chat_action(call.message.chat.id, "typing")
@@ -58,15 +59,19 @@ async def del_log(call: types.CallbackQuery):
 async def download_log_handler(call: types.CallbackQuery):
     await bot.send_chat_action(call.message.chat.id, "typing")
 
-    log_file = 'log/bot_log.log'
+    log_files = [
+        ('log/bot_log.log', 'bot_log.log'),
+        ('log/error_log.log', 'error_log.log')
+    ]
     user_id = call.from_user.id
 
     await call.answer()
 
-    with open(log_file, 'rb') as file:
-        await call.message.answer_document(BufferedInputFile(file.read(), filename="bot_log.log"))
-        logging.info(f"User action: Downloaded log (User ID: {user_id})")
-        return
+    for file_path, filename in log_files:
+        with open(file_path, 'rb') as file:
+            await call.message.answer_document(BufferedInputFile(file.read(), filename=filename))
+
+    logging.info(f"User action: Downloaded logs (User ID: {user_id})")
 
 
 @router.callback_query(F.data == 'back_to_admin')
