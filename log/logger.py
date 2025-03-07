@@ -36,7 +36,7 @@ error_handler.setLevel(logging.ERROR)
 info_handler = logging.FileHandler('log/bot_log.log')
 info_formatter = CustomFormatter('%(asctime)s - %(levelname)s - %(message)s')
 info_handler.setFormatter(info_formatter)
-info_handler.setLevel(logging.DEBUG)
+info_handler.setLevel(logging.INFO)
 
 class MaxLevelFilter(logging.Filter):
     def __init__(self, max_level):
@@ -52,7 +52,6 @@ logger.addHandler(console_handler)
 logger.addHandler(error_handler)
 logger.addHandler(info_handler)
 
-logger.debug("This is a debug message")
 logger.info("This is an info message")
 logger.warning("This is a warning message")
 logger.error("This is an error message")

@@ -2,6 +2,8 @@ from datetime import datetime, timedelta
 
 import psycopg2
 from psycopg2.extras import RealDictCursor
+from log.logger import logger as logging
+
 
 import config
 
@@ -20,6 +22,18 @@ class DataBase:
         self.connect = psycopg2.connect(config.db_auth, cursor_factory=RealDictCursor)
         self.connect.autocommit = True
         self.cursor = self.connect.cursor()
+
+    def execute(self, query, params=None, fetchone=False, fetchall=False):
+        try:
+            self.cursor.execute(query, params or ())
+            if fetchone:
+                return self.cursor.fetchone()
+            if fetchall:
+                return self.cursor.fetchall()
+        except (psycopg2.InterfaceError, psycopg2.OperationalError):
+            logging.error("Connection with DB lost. Reconnecting...")
+            self.reconnect()
+            return self.execute(query, params, fetchone, fetchall)
 
     def create_tables(self):
         create_downloaded_files_table = """
