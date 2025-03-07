@@ -1,6 +1,7 @@
 from datetime import datetime, timedelta
 
 import psycopg2
+from psycopg2.extras import RealDictCursor
 
 import config
 
@@ -10,7 +11,15 @@ class DataBase:
     def __init__(self):
         self.connect = psycopg2.connect(config.db_auth)
         self.cursor = self.connect.cursor()
+        self.reconnect()
         self.create_tables()
+
+    def reconnect(self):
+        if self.connect:
+            self.connect.close()
+        self.connect = psycopg2.connect(config.db_auth, cursor_factory=RealDictCursor)
+        self.connect.autocommit = True
+        self.cursor = self.connect.cursor()
 
     def create_tables(self):
         create_downloaded_files_table = """
