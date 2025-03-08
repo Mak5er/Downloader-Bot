@@ -231,7 +231,7 @@ async def process_tiktok_video(message, full_url, bot_url, user_captions, busine
     if db_file_id:
         await send_chat_action_if_needed(message.chat.id, "upload_video", business_id)
         await message.answer_video(
-            video=db_file_id[0][0],
+            video=db_file_id,
             caption=bm.captions(user_captions, video_info.description, bot_url),
             reply_markup=kb.return_video_info_keyboard(
                 video_info.views, video_info.likes, video_info.comments,
@@ -369,7 +369,7 @@ async def inline_tiktok_query(query: types.InlineQuery):
             if video_info:
                 db_file_id = await db.get_file_id(full_url)
                 if db_file_id:
-                    video_file_id = db_file_id[0][0]
+                    video_file_id = db_file_id
                 else:
                     if downloader.download_video(video_id):
                         video = FSInputFile(video_file_path)

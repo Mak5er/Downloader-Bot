@@ -107,14 +107,14 @@ async def send_to_all_message(message: types.Message, state: FSMContext):
         users = await db.all_users()
         for user in users:
             try:
-                await bot.copy_message(chat_id=user[0],
+                await bot.copy_message(chat_id=user,
                                        from_chat_id=sender_id,
                                        message_id=message.message_id)
 
-                user_status = await db.status(user[0])
+                user_status = await db.status(user)
 
                 if user_status == "inactive":
-                    await db.set_active(user[0])
+                    await db.set_active(user)
 
                 await asyncio.sleep(
                     0.05
@@ -123,10 +123,10 @@ async def send_to_all_message(message: types.Message, state: FSMContext):
             except Exception as e:
 
                 if str(e) == "Forbidden: bots can't send messages to bots":
-                    await db.delete_user(user[0])
+                    await db.delete_user(user)
 
                 if "blocked" or "Chat not found" in str(e):
-                    await db.set_inactive(user[0])
+                    await db.set_inactive(user)
                 continue
 
         await bot.send_message(chat_id=message.chat.id,

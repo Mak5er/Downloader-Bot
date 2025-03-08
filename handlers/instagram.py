@@ -241,7 +241,7 @@ async def process_instagram_video(message, video_info, bot_url, user_captions, b
             if business_id is None:
                 await bot.send_chat_action(message.chat.id, "upload_video")
             await message.answer_video(
-                video=db_file_id[0][0],
+                video=db_file_id,
                 caption=bm.captions(user_captions, video_info.description, bot_url),
                 reply_markup=kb.return_video_info_keyboard(video_info.views, video_info.likes,
                                                            video_info.comments, video_info.shares,
@@ -367,7 +367,7 @@ async def inline_instagram_query(query: types.InlineQuery):
             if video_info:
                 db_file_id = await db.get_file_id(url)
                 if db_file_id:
-                    video_file_id = db_file_id[0][0]
+                    video_file_id = db_file_id
                 else:
                     downloader.download_video(video_info.video_urls[0])
                     video = FSInputFile(video_file_path)
