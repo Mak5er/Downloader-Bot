@@ -7,7 +7,7 @@ python-dotenv
 cachetools
 instaloader
 pytubefix
-psycopg2-binary
+asyncpg
 matplotlib
 httpx
 aiocron
@@ -15,3 +15,4 @@ fake-useragent
 pytz
 betterlogging
 colorlog
+SQLAlchemy
