@@ -24,7 +24,7 @@ async def update_info(message: types.Message):
     if result:
         await db.user_update_name(user_id, user_name, user_username)
     else:
-        await db.add_users(user_id, user_name, user_username, "private", "uk", 'active')
+        await db.add_user(user_id, user_name, user_username, "private", "uk", 'active')
     await db.set_active(user_id)
 
 
@@ -40,7 +40,7 @@ async def send_welcome(message: types.Message):
             language = 'uk'
             status = 'active'
 
-            await db.add_users(user_id, user_name, user_username, chat_type, language, status)
+            await db.add_user(user_id, user_name, user_username, chat_type, language, status)
 
             chat_title = chat_info.title
             await bot.send_message(
