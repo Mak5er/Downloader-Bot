@@ -3,7 +3,6 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    image: ghcr.io/mak5er/downloader-bot
     volumes:
       - .:/app
     env_file: .env
