@@ -1,3 +1,4 @@
+import logging
 from datetime import datetime, timedelta
 from sqlalchemy import Column, BigInteger, Text, TIMESTAMP, func, select, delete, update
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
@@ -147,7 +148,7 @@ class DataBase:
                     session.add(file)
                 await session.commit()
             except Exception as e:
-                print(f"Error in add_file: {e}")
+                logging.error(f"Error in add_file: {e}")
                 await session.rollback()
 
     async def get_file_id(self, url):
@@ -157,7 +158,7 @@ class DataBase:
                 file_id = result.scalar()
                 return file_id
             except Exception as e:
-                print(f"Error in get_file_id: {e}")
+                logging.error(f"Error in get_file_id: {e}")
                 return None
 
     async def get_downloaded_files_count(self, period: str):

@@ -31,7 +31,7 @@ def process_tiktok_url(text: str) -> str:
             response = requests.head(short_url, allow_redirects=True, headers={'User-Agent': ua.random})
             return response.url
         except requests.RequestException as e:
-            print(f"Error expanding URL: {e}")
+            logging.error(f"Error expanding URL: {e}")
             return short_url
 
     def extract_tiktok_url(input_text: str) -> str:
