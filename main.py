@@ -53,10 +53,13 @@ async def main():
         os.makedirs(OUTPUT_DIR)
 
     dp.include_router(handlers.router)
+
+    # Додаємо інші мідлвейри
     for middleware in middlewares.__all__:
         dp.message.outer_middleware(middleware())
         dp.callback_query.outer_middleware(middleware())
         dp.inline_query.outer_middleware(middleware())
+
     await bot.set_my_commands(commands=BOT_COMMANDS)
     await bot.delete_webhook(drop_pending_updates=True)
 
