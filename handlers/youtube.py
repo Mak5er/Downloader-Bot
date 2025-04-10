@@ -59,6 +59,27 @@ def get_audio_stream(yt):
     return yt.streams.filter(only_audio=True, file_extension='mp4').first()
 
 
+def get_video_metadata(video_url: str) -> dict:
+    try:
+        url = "https://ytdetail.info/v1/api"
+        payload = {
+            "url": video_url
+        }
+        response = requests.post(url, json=payload)
+        if response.status_code == 200:
+            data = response.json()
+            if data.get('success') and 'data' in data:
+                video_data = data['data']
+                return {
+                    'viewCount': video_data.get('viewCount', '0'),
+                    'likeCount': video_data.get('likeCount', '0'),
+                }
+        return {}
+    except Exception as e:
+        logging.error(f"Error getting video metadata: {e}")
+        return {}
+
+
 async def handle_download_error(message, business_id):
     if business_id is None:
         await message.react([types.ReactionTypeEmoji(emoji="👎")])
@@ -78,6 +99,11 @@ async def download_video(message: types.Message):
         yt = get_youtube_video(url)
         video = get_video_stream(yt)
 
+        # Отримуємо метадані відео
+        metadata = get_video_metadata(yt.watch_url)
+        views = int(metadata.get('viewCount', 0))
+        likes = int(metadata.get('likeCount', 0))
+
         if not video:
             await message.reply(bm.nothing_found())
             return
@@ -96,12 +122,12 @@ async def download_video(message: types.Message):
                 caption=bm.captions(await db.get_user_captions(message.from_user.id), yt.title,
                                     f"t.me/{(await bot.get_me()).username}"),
                 reply_markup=kb.return_video_info_keyboard(
-                    views=None,
-                    likes=None,
+                    views=views,
+                    likes=likes,
                     comments=None,
                     shares=None,
                     music_play_url=None,
-                    video_url=yt.watch_url
+                    video_url=yt.watch_url,
                 ) if not business_id else None,
                 parse_mode="HTML"
             )
@@ -121,12 +147,12 @@ async def download_video(message: types.Message):
                 caption=bm.captions(await db.get_user_captions(message.from_user.id), yt.title,
                                     f"t.me/{(await bot.get_me()).username}"),
                 reply_markup=kb.return_video_info_keyboard(
-                    views=None,
-                    likes=None,
+                    views=views,
+                    likes=likes,
                     comments=None,
                     shares=None,
                     music_play_url=None,
-                    video_url=yt.watch_url
+                    video_url=yt.watch_url,
                 ) if not business_id else None,
                 parse_mode="HTML"
             )
@@ -184,19 +210,11 @@ async def inline_youtube_query(query: types.InlineQuery):
         url = query.query
         yt = get_youtube_video(url)
 
-        if not "shorts" in url.lower():
-            results = [
-                InlineQueryResultArticle(
-                    id="not_shorts",
-                    title="❌ Not a Shorts Video",
-                    description="Regular YouTube videos are not supported in inline mode due to size limitations.",
-                    input_message_content=types.InputTextMessageContent(
-                        message_text="❌ Regular YouTube videos are not supported in inline mode due to size limitations. Please use the bot directly for regular videos."
-                    )
-                )
-            ]
-            await query.answer(results, cache_time=10)
-            return
+        # Отримуємо метадані відео
+        metadata = get_video_metadata(yt.watch_url)
+        views = int(metadata.get('viewCount', 0))
+        likes = int(metadata.get('likeCount', 0))
+
 
         await send_analytics(user_id=query.from_user.id, chat_type=query.chat_type, action_name="inline_youtube_shorts")
         user_captions = await db.get_user_captions(query.from_user.id)
@@ -215,12 +233,26 @@ async def inline_youtube_query(query: types.InlineQuery):
                     mime_type="video/mp4",
                     caption=bm.captions(user_captions, yt.title, bot_url),
                     reply_markup=kb.return_video_info_keyboard(
-                        views=None,
-                        likes=None,
+                        views=views,
+                        likes=likes,
                         comments=None,
                         shares=None,
                         music_play_url=None,
-                        video_url=yt.watch_url
+                        video_url=yt.watch_url,
+                    )
+                )
+            ]
+            await query.answer(results, cache_time=10)
+            return
+
+        if not "shorts" in url.lower():
+            results = [
+                InlineQueryResultArticle(
+                    id="not_shorts",
+                    title="❌ Not a Shorts Video",
+                    description="Regular YouTube videos are not supported in inline mode due to size limitations.",
+                    input_message_content=types.InputTextMessageContent(
+                        message_text="❌ Regular YouTube videos are not supported in inline mode due to size limitations. Please use the bot directly for regular videos."
                     )
                 )
             ]
@@ -245,6 +277,8 @@ async def inline_youtube_query(query: types.InlineQuery):
         video_file_id = sent_message.video.file_id
         await db.add_file(yt.watch_url, video_file_id, "video")
 
+        print(yt.likes, yt.views)
+
         results = [
             InlineQueryResultVideo(
                 id=f"shorts_{yt.video_id}",
@@ -255,12 +289,12 @@ async def inline_youtube_query(query: types.InlineQuery):
                 mime_type="video/mp4",
                 caption=bm.captions(user_captions, yt.title, bot_url),
                 reply_markup=kb.return_video_info_keyboard(
-                    views=None,
-                    likes=None,
+                    views=views,
+                    likes=likes,
                     comments=None,
                     shares=None,
                     music_play_url=None,
-                    video_url=yt.watch_url
+                    video_url=yt.watch_url,
                 )
             )
         ]
