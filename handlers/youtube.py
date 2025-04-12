@@ -86,8 +86,8 @@ async def handle_download_error(message, business_id):
     await message.reply(bm.something_went_wrong())
 
 
-@router.message(F.text.regexp(r"(https?://(www\.)?(youtube|youtu|youtube-nocookie)\.(com|be)/\S+)"))
-@router.business_message(F.text.regexp(r"(https?://(www\.)?(youtube|youtu|youtube-nocookie)\.(com|be)/\S+)"))
+@router.message(F.text.regexp(r"(https?://(www\.)?(youtube|youtu|youtube-nocookie)\.(com|be)/(?!@)[\S]+)"))
+@router.business_message(F.text.regexp(r"(https?://(www\.)?(youtube|youtu|youtube-nocookie)\.(com|be)/(?!@)[\S]+)"))
 async def download_video(message: types.Message):
     url = message.text
     business_id = message.business_connection_id
@@ -138,12 +138,19 @@ async def download_video(message: types.Message):
             video_file_path = os.path.join(OUTPUT_DIR, name)
 
             await asyncio.get_event_loop().run_in_executor(None, download_media, video, name)
-            video_clip = VideoFileClip(video_file_path)
+
+            try:
+                video_clip = VideoFileClip(video_file_path)
+                width, height = video_clip.size
+                video_clip.close()
+            except Exception as e:
+                logging.error(f"Error in process_instagram_video: {e}")
+                width, height = None, None
 
             sent_message = await message.answer_video(
                 video=FSInputFile(video_file_path),
-                width=video_clip.w,
-                height=video_clip.h,
+                width=width,
+                height=height,
                 caption=bm.captions(await db.get_user_captions(message.from_user.id), yt.title,
                                     f"t.me/{(await bot.get_me()).username}"),
                 reply_markup=kb.return_video_info_keyboard(
@@ -204,7 +211,7 @@ async def download_music(message: types.Message):
     await update_info(message)
 
 
-@router.inline_query(F.query.regexp(r"(https?://(www\.)?(youtube|youtu|youtube-nocookie)\.(com|be)/\S+)"))
+@router.inline_query(F.query.regexp(r"(https?://(www\.)?(youtube|youtu|youtube-nocookie)\.(com|be)/(?!@)[\S]+)"))
 async def inline_youtube_query(query: types.InlineQuery):
     try:
         url = query.query

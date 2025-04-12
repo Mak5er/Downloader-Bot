@@ -253,8 +253,13 @@ async def process_instagram_video(message, video_info, bot_url, user_captions, b
         if downloader.download_video(video_urls[0]):
             video = FSInputFile(video_file_path)
             file_size = os.path.getsize(video_file_path)
-            video_clip = VideoFileClip(video_file_path)
-            width, height = video_clip.size
+            try:
+                video_clip = VideoFileClip(video_file_path)
+                width, height = video_clip.size
+                video_clip.close()
+            except Exception as e:
+                logging.error(f"Error in process_instagram_video: {e}")
+                width, height = None, None
 
             if file_size < MAX_FILE_SIZE:
                 if business_id is None:
