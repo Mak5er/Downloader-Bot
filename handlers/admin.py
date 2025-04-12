@@ -313,7 +313,7 @@ async def write_message(message: types.Message, state: FSMContext):
 
 
     except Exception as e:
-        print(e)
+        logging.error(e)
         await message.reply(bm.something_went_wrong(),
                             reply_markup=kb.return_back_to_admin_keyboard())
 
@@ -336,4 +336,4 @@ async def clear_downloads_and_notify():
         try:
             await bot.send_message(chat_id=admin_id, text=message)
         except Exception as e:
-            print(f"Failed to send a message to admin {admin_id}: {e}")
+            logging.error(f"Failed to send a message to admin {admin_id}: {e}")

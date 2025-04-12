@@ -1,6 +1,8 @@
+import re
 from aiogram import BaseMiddleware
 from aiogram.types import (
-    TelegramObject, User, Message, CallbackQuery, InlineQuery, InlineKeyboardMarkup, InlineKeyboardButton
+    TelegramObject, User, Message, CallbackQuery, InlineQuery,
+    InlineKeyboardMarkup, InlineKeyboardButton
 )
 from aiogram.methods import GetChatMember
 from aiogram.exceptions import TelegramAPIError
@@ -9,16 +11,25 @@ from typing import Callable, Awaitable, Dict, Any
 from config import CHANNEL_USERNAME
 
 
+# Допустимі URL-патерни
+ALLOWED_LINKS = [
+    r"(https?://(www\.)?instagram\.com/\S+)",
+    r"(https?://(www\.|vm\.|vt\.|vn\.)?tiktok\.com/\S+)",
+    r"(https?://(www\.)?(twitter|x)\.com/\S+|https?://t\.co/\S+)",
+    r"(https?://)?(music\.)?(youtube|youtu|youtube-nocookie)\.(com|be)/.+"
+]
+
+
 class SubscriptionMiddleware(BaseMiddleware):
     async def __call__(
-            self,
-            handler: Callable[[TelegramObject, Dict[str, Any]], Awaitable[Any]],
-            event: TelegramObject,
-            data: Dict[str, Any]
+        self,
+        handler: Callable[[TelegramObject, Dict[str, Any]], Awaitable[Any]],
+        event: TelegramObject,
+        data: Dict[str, Any]
     ) -> Any:
         user: User | None = None
+        message: Message | None = event if isinstance(event, Message) else None
 
-        # Extract user from any type of interaction
         if isinstance(event, Message):
             user = event.from_user
         elif isinstance(event, CallbackQuery):
@@ -26,11 +37,9 @@ class SubscriptionMiddleware(BaseMiddleware):
         elif isinstance(event, InlineQuery):
             user = event.from_user
 
-        # If user not found, allow to pass through
         if not user:
             return await handler(event, data)
 
-        # Special case: recheck subscription on "Check subscription" button
         if isinstance(event, CallbackQuery) and event.data == 'check_subscription':
             if await self._is_subscribed(user.id, data):
                 await event.message.edit_text("✅ You are subscribed! You may now use the bot.")
@@ -39,12 +48,23 @@ class SubscriptionMiddleware(BaseMiddleware):
                 await event.answer("❌ You're still not subscribed.")
                 return
 
-        # General check for all interactions
-        if not await self._is_subscribed(user.id, data):
+        is_subscribed = await self._is_subscribed(user.id, data)
+
+        # Якщо це група, користувач не підписаний і не відправляє дозволене посилання — ігноруємо
+        if isinstance(message, Message) and message.chat.type in ("group", "supergroup") and not is_subscribed:
+            if not self._contains_allowed_link(message.text or ""):
+                return  # нічого не робимо
+            # Якщо містить посилання — дозволяємо
+
+        # Якщо не підписаний в особистому чаті або інші випадки — показуємо повідомлення
+        if not is_subscribed:
             await self._send_subscription_prompt(event, data)
             return
 
         return await handler(event, data)
+
+    def _contains_allowed_link(self, text: str) -> bool:
+        return any(re.search(pattern, text) for pattern in ALLOWED_LINKS)
 
     async def _is_subscribed(self, user_id: int, data: Dict[str, Any]) -> bool:
         try:
@@ -58,7 +78,6 @@ class SubscriptionMiddleware(BaseMiddleware):
             "🚫 To use this bot, you must subscribe to our channel first.\n"
             f"👉 {CHANNEL_USERNAME}"
         )
-
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="📢 Go to Channel", url=f"https://t.me/{CHANNEL_USERNAME.lstrip('@')}")],
             [InlineKeyboardButton(text="✅ Check Subscription", callback_data='check_subscription')]

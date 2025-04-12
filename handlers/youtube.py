@@ -3,7 +3,6 @@ import os
 import time
 
 import requests
-from log.logger import logger as logging
 from aiogram import types, Router, F
 from aiogram.types import FSInputFile, InlineQueryResultVideo, InlineQueryResultArticle
 from moviepy import VideoFileClip, AudioFileClip
@@ -14,6 +13,7 @@ import keyboards as kb
 import messages as bm
 from config import OUTPUT_DIR, BOT_TOKEN, admin_id, CHANNEL_ID
 from handlers.user import update_info
+from log.logger import logger as logging
 from main import bot, db, send_analytics
 
 MAX_FILE_SIZE = 1 * 1024 * 1024
@@ -222,7 +222,6 @@ async def inline_youtube_query(query: types.InlineQuery):
         views = int(metadata.get('viewCount', 0))
         likes = int(metadata.get('likeCount', 0))
 
-
         await send_analytics(user_id=query.from_user.id, chat_type=query.chat_type, action_name="inline_youtube_shorts")
         user_captions = await db.get_user_captions(query.from_user.id)
         bot_url = f"t.me/{(await bot.get_me()).username}"
@@ -283,8 +282,6 @@ async def inline_youtube_query(query: types.InlineQuery):
         )
         video_file_id = sent_message.video.file_id
         await db.add_file(yt.watch_url, video_file_id, "video")
-
-        print(yt.likes, yt.views)
 
         results = [
             InlineQueryResultVideo(
