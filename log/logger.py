@@ -1,16 +1,14 @@
 import datetime
 import logging
-import pytz
 import colorlog
 
-my_timezone = pytz.timezone('Europe/Kyiv')
 
 class CustomFormatter(logging.Formatter):
     def __init__(self, fmt):
         super().__init__(fmt)
 
     def formatTime(self, record, datefmt=None):
-        local_time = datetime.datetime.now(my_timezone)
+        local_time = datetime.datetime.now()
         return local_time.strftime('%Y-%m-%d %H:%M:%S')
 
 # Основний формат логування

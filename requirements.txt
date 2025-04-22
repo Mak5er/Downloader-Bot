@@ -5,7 +5,6 @@ requests
 beautifulsoup4
 python-dotenv
 cachetools
-instaloader
 pytubefix
 asyncpg
 matplotlib
@@ -13,6 +12,5 @@ httpx
 aiocron
 fake-useragent
 pytz
-betterlogging
 colorlog
 SQLAlchemy
