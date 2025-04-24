@@ -73,6 +73,7 @@ class TikTokVideo:
     comments: int
     shares: int
     music_play_url: str
+    author: str
 
 
 @dataclass
@@ -85,13 +86,63 @@ class TikTokUser:
     description: str
 
 
+_lock = asyncio.Lock()
+_last_call_time = 0.0
+
+async def fetch_tiktok_data(video_url: str) -> dict:
+    global _last_call_time
+
+    async with _lock:
+        now = time.monotonic()
+        elapsed = now - _last_call_time
+        if elapsed < 1.0:
+            await asyncio.sleep(1.0 - elapsed)
+
+        ua = UserAgent()
+        params = {"url": video_url, "count": 12, "cursor": 0, "web": 1, "hd": 1}
+        async with aiohttp.ClientSession() as session:
+            async with session.get(
+                "https://tikwm.com/api/",
+                params=params,
+                timeout=10,
+                headers={"User-Agent": ua.random}
+            ) as resp:
+                resp.raise_for_status()
+                data = await resp.json()
+
+        _last_call_time = time.monotonic()
+        return data
+
+
+async def video_info(data: dict) -> Optional[TikTokVideo]:
+    if data.get("error"):
+        logging.error(f"API error: {data['error']}")
+        return None
+
+    elif data.get("code") != 0:
+        logging.error(f"API error: {data['message']}")
+        return None
+
+    info = data.get("data", {})
+    return TikTokVideo(
+        id=info.get("id"),
+        description=info.get("title", ""),
+        cover=info.get("cover", ""),
+        views=info.get("play_count", 0),
+        likes=info.get("digg_count", 0),
+        comments=info.get("comment_count", 0),
+        shares=info.get("share_count", 0),
+        music_play_url=info.get("music_info", {}).get("play", ""),
+        author=info.get("author", {}).get("unique_id", "")
+    )
+
+
 class DownloaderTikTok:
     def __init__(self, output_dir: str, filename: str):
         self.output_dir = output_dir
         self.filename = filename
 
     async def download_video(self, video_id: str) -> bool:
-        # Offload blocking HTTP and file I/O to thread pool
         return await asyncio.to_thread(self._download_video_sync, video_id)
 
     def _download_video_sync(self, video_id: str) -> bool:
@@ -106,32 +157,7 @@ class DownloaderTikTok:
             logging.error(f"Error downloading video {video_id}: {e}")
             return False
 
-    async def fetch_tiktok_data(self, video_url: str) -> dict:
-        params = {"url": video_url, "count": 12, "cursor": 0, "web": 1, "hd": 1}
-        async with aiohttp.ClientSession() as session:
-            async with session.get("https://tikwm.com/api/", params=params, timeout=10) as resp:
-                resp.raise_for_status()
-                return await resp.json()
-
-    async def video_info(self, full_url: str) -> Optional[TikTokVideo]:
-        data = await self.fetch_tiktok_data(full_url)
-        if data.get("error"):
-            logging.error(f"API error: {data['error']}")
-            return None
-        info = data.get("data", {})
-        return TikTokVideo(
-            id=info.get("id"),
-            description=info.get("title", ""),
-            cover=info.get("cover", ""),
-            views=info.get("play_count", 0),
-            likes=info.get("digg_count", 0),
-            comments=info.get("comment_count", 0),
-            shares=info.get("share_count", 0),
-            music_play_url=info.get("music_info", {}).get("play", "")
-        )
-
     async def get_video_size(self, path: str) -> tuple[int, int]:
-        # Offload VideoFileClip operations to thread
         return await asyncio.to_thread(self._get_size_sync, path)
 
     def _get_size_sync(self, path: str) -> tuple[int, int]:
@@ -195,17 +221,18 @@ async def process_tiktok(message: types.Message):
         user_captions = await db.get_user_captions(message.from_user.id)
         business_id = message.business_connection_id
 
-        full_url = process_tiktok_url(message.text)
+        data = await fetch_tiktok_data(message.text)
+        images = data.get("data", {}).get("images", [])
 
         if business_id is None:
             await message.react([types.ReactionTypeEmoji(emoji="👨‍💻")])
 
-        if "video" in full_url:
-            await process_tiktok_video(message, full_url, bot_url, user_captions, business_id)
-        elif "photo" in full_url:
-            await process_tiktok_photos(message, full_url, bot_url, user_captions, business_id)
-        elif "@" in full_url:
-            await process_tiktok_profile(message, full_url, bot_url, user_captions)
+        if not images:
+            await process_tiktok_video(message, data, bot_url, user_captions, business_id)
+        elif images:
+            await process_tiktok_photos(message, data, bot_url, user_captions, business_id, images)
+        elif "@" in message.text:
+            await process_tiktok_profile(message, message.text, bot_url, user_captions)
         else:
             if business_id is None:
                 await message.react([types.ReactionTypeEmoji(emoji="👎")])
@@ -217,35 +244,36 @@ async def process_tiktok(message: types.Message):
         await update_info(message)
 
 
-async def process_tiktok_video(message: types.Message, full_url: str, bot_url: str, user_captions: list,
+async def process_tiktok_video(message: types.Message, data: dict, bot_url: str, user_captions: list,
                                business_id: Optional[int]):
     await send_analytics(user_id=message.from_user.id, chat_type=message.chat.type, action_name="tiktok_video")
-    video_id = full_url.split('/')[-1].split('?')[0]
+    info = await video_info(data)
+
     timestamp = datetime.datetime.now().strftime("%Y%m%d%H%M%S")
-    name = f"{video_id}_{timestamp}_tiktok_video.mp4"
+    name = f"{info.id}_{timestamp}_tiktok_video.mp4"
+    db_video_url = f'https://tiktok.com/@{info.author}/video/{info.id}'
     path = os.path.join(OUTPUT_DIR, name)
     downloader = DownloaderTikTok(OUTPUT_DIR, path)
 
-    video_info = await downloader.video_info(full_url)
-    if not video_info:
+    if not info:
         await handle_download_error(message, business_id)
         return
 
-    db_file_id = await db.get_file_id(full_url)
+    db_file_id = await db.get_file_id(db_video_url)
     if db_file_id:
         await send_chat_action_if_needed(message.chat.id, "upload_video", business_id)
         await message.answer_video(
             video=db_file_id,
-            caption=bm.captions(user_captions, video_info.description, bot_url),
+            caption=bm.captions(user_captions, info.description, bot_url),
             reply_markup=kb.return_video_info_keyboard(
-                video_info.views, video_info.likes, video_info.comments,
-                video_info.shares, video_info.music_play_url, full_url
+                info.views, info.likes, info.comments,
+                info.shares, info.music_play_url, db_video_url
             ),
             parse_mode="HTML"
         )
         return
 
-    if await downloader.download_video(video_id):
+    if await downloader.download_video(info.id):
         try:
             file_size = await asyncio.to_thread(os.path.getsize, path)
             if file_size >= MAX_FILE_SIZE:
@@ -256,15 +284,15 @@ async def process_tiktok_video(message: types.Message, full_url: str, bot_url: s
             await send_chat_action_if_needed(message.chat.id, "upload_video", business_id)
             sent = await message.reply_video(
                 video=FSInputFile(path), width=width, height=height,
-                caption=bm.captions(user_captions, video_info.description, bot_url),
+                caption=bm.captions(user_captions, info.description, bot_url),
                 reply_markup=kb.return_video_info_keyboard(
-                    video_info.views, video_info.likes, video_info.comments,
-                    video_info.shares, video_info.music_play_url, full_url
+                    info.views, info.likes, info.comments,
+                    info.shares, info.music_play_url, db_video_url
                 ),
                 parse_mode="HTML"
             )
             try:
-                await db.add_file(full_url, sent.video.file_id, "video")
+                await db.add_file(db_video_url, sent.video.file_id, "video")
             except Exception as e:
                 logging.error(f"Error adding file to DB: {e}")
 
@@ -272,38 +300,36 @@ async def process_tiktok_video(message: types.Message, full_url: str, bot_url: s
             logging.error(f"Error processing video: {e}")
             await handle_download_error(message, business_id)
         finally:
-            # Clean up file asynchronously
             await asyncio.to_thread(os.remove, path)
     else:
         await handle_download_error(message, business_id)
 
 
-async def process_tiktok_photos(message: types.Message, full_url: str, bot_url: str, user_captions: list,
-                                business_id: Optional[int]):
+async def process_tiktok_photos(message: types.Message, data: dict, bot_url: str, user_captions: list,
+                                business_id: Optional[int], images: list):
     await send_analytics(user_id=message.from_user.id, chat_type=message.chat.type, action_name="tiktok_photos")
-    downloader = DownloaderTikTok(OUTPUT_DIR, "")
-    data = await downloader.fetch_tiktok_data(full_url)
-    info = await downloader.video_info(full_url)
-    if data.get("error") or not info:
-        await handle_download_error(message, business_id)
-        return
-    images = data.get("data", {}).get("images", [])
+    info = await video_info(data)
+    video_url = f'https://tiktok.com/@{info.author}/video/{info.id}'
     if not images:
         await handle_download_error(message, business_id)
         return
     await send_chat_action_if_needed(message.chat.id, "upload_photo", business_id)
+
     if len(images) > 1:
-        media_group = MediaGroupBuilder()
-        for url in images[:-1]:
-            media_group.add_photo(media=url, parse_mode="HTML")
-        await message.answer_media_group(media=media_group.build())
+        photos_for_album = images[:-1]
+        for i in range(0, len(photos_for_album), 10):
+            group = MediaGroupBuilder()
+            for url in photos_for_album[i:i + 10]:
+                group.add_photo(media=url, parse_mode="HTML")
+            await message.answer_media_group(media=group.build())
+
     last = images[-1]
     await message.answer_photo(
         photo=last,
         caption=bm.captions(user_captions, info.description, bot_url),
         reply_markup=kb.return_video_info_keyboard(
             info.views, info.likes, info.comments,
-            info.shares, info.music_play_url, full_url
+            info.shares, info.music_play_url, video_url
         )
     )
 
@@ -354,25 +380,34 @@ async def inline_tiktok_query(query: types.InlineQuery):
         match = re.search(r"(https?://(?:www\.|vm\.|vt\.|vn\.)?tiktok\.com/\S+)", query.query)
         if not match:
             return await query.answer([], cache_time=1, is_personal=True)
-        full = process_tiktok_url(query.query)
-        vid_id = full.split('/')[-1].split('?')[0]
+
+        data = await fetch_tiktok_data(query.query)
+        info = await video_info(data)
+        images = data.get("data", {}).get("images", [])
+
+        timestamp = datetime.datetime.now().strftime("%Y%m%d%H%M%S")
+        name = f"{info.id}_{timestamp}_tiktok_video.mp4"
+        path = os.path.join(OUTPUT_DIR, name)
+        downloader = DownloaderTikTok(OUTPUT_DIR, path)
+
         results = []
-        if "video" in full:
-            timestamp = datetime.datetime.now().strftime("%Y%m%d%H%M%S")
-            name = f"{vid_id}_{timestamp}_tiktok_video.mp4"
-            path = os.path.join(OUTPUT_DIR, name)
-            downloader = DownloaderTikTok(OUTPUT_DIR, path)
-            info = await downloader.video_info(full)
+        if not images:
+
             if not info:
                 return await query.answer([], cache_time=1, is_personal=True)
-            db_id = await db.get_file_id(full)
-            if not db_id and await downloader.download_video(vid_id):
-                sent = await bot.send_video(chat_id=CHANNEL_ID, video=FSInputFile(path), caption=f"🎥 TikTok Video from {query.from_user.full_name}")
+
+            db_video_url = f'https://tiktok.com/@{info.author}/video/{info.id}'
+
+            db_id = await db.get_file_id(db_video_url)
+
+            if not db_id and await downloader.download_video(info.id):
+                sent = await bot.send_video(chat_id=CHANNEL_ID, video=FSInputFile(path),
+                                            caption=f"🎥 TikTok Video from {query.from_user.full_name}")
                 db_id = sent.video.file_id
-                await db.add_file(full, db_id, "video")
+                await db.add_file(db_video_url, db_id, "video")
             if db_id:
                 results.append(InlineQueryResultVideo(
-                    id=f"video_{vid_id}",
+                    id=f"video_{info.id}",
                     video_url=db_id,
                     thumbnail_url=info.cover,
                     description=info.description,
@@ -380,18 +415,19 @@ async def inline_tiktok_query(query: types.InlineQuery):
                     mime_type="video/mp4",
                     caption=bm.captions(user_captions, info.description, bot_url),
                     reply_markup=kb.return_video_info_keyboard(
-                        info.views, info.likes, info.comments, info.shares, info.music_play_url, full
+                        info.views, info.likes, info.comments, info.shares, info.music_play_url, db_video_url
                     )
                 ))
                 await query.answer(results, cache_time=10, is_personal=True)
                 await asyncio.to_thread(os.remove, path)
                 return
-        elif "photo" in full:
+        elif images:
             results.append(InlineQueryResultArticle(
                 id="unsupported_tiktok_photos",
                 title="📷 TikTok Photos",
                 description="⚠️ TikTok photos not supported inline.",
-                input_message_content=types.InputTextMessageContent(message_text="⚠️ TikTok photos not supported inline.")
+                input_message_content=types.InputTextMessageContent(
+                    message_text="⚠️ TikTok photos not supported inline.")
             ))
             await query.answer(results, cache_time=10, is_personal=True)
             return
