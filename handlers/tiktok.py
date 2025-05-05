@@ -221,7 +221,14 @@ async def process_tiktok(message: types.Message):
         user_captions = await db.get_user_captions(message.from_user.id)
         business_id = message.business_connection_id
 
-        data = await fetch_tiktok_data(message.text)
+        url_match = re.match(r"(https?://(www\.|vm\.|vt\.|vn\.)?tiktok\.com/\S+)", message.text)
+
+        if url_match:
+            url = url_match.group(0)
+        else:
+            url = message.text
+
+        data = await fetch_tiktok_data(url)
         images = data.get("data", {}).get("images", [])
 
         if business_id is None:
