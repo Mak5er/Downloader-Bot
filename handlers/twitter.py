@@ -11,9 +11,9 @@ from aiogram.utils.media_group import MediaGroupBuilder
 
 import messages as bm
 from config import OUTPUT_DIR
+import keyboards as kb
 from main import bot, db, send_analytics
 from log.logger import logger as logging
-
 
 MAX_FILE_SIZE = 500 * 1024 * 1024
 
@@ -61,11 +61,16 @@ async def download_media(media_url, file_path):
         logging.error(f"Failed to download media from {media_url}: {e}")
         raise
 
+
 async def reply_media(message, tweet_id, tweet_media, bot_url, business_id):
     await send_analytics(user_id=message.from_user.id, chat_type=message.chat.type, action_name="twitter")
 
     tweet_dir = f"{OUTPUT_DIR}/{tweet_id}"
+    post_url = tweet_media['tweetURL']
     post_caption = tweet_media["text"]
+    likes = tweet_media['likes']
+    comments = tweet_media['replies']
+    retweets = tweet_media['retweets']
     user_captions = await db.get_user_captions(message.from_user.id)
 
     if not os.path.exists(tweet_dir):
@@ -78,6 +83,7 @@ async def reply_media(message, tweet_id, tweet_media, bot_url, business_id):
         for media in tweet_media['media_extended']:
             media_url = media['url']
             media_type = media['type']
+
             file_name = os.path.join(tweet_dir, os.path.basename(urlsplit(media_url).path))
 
             await download_media(media_url, file_name)
@@ -87,19 +93,41 @@ async def reply_media(message, tweet_id, tweet_media, bot_url, business_id):
             elif media_type == 'video' or media_type == 'gif':
                 all_files_video.append(file_name)
 
-        while all_files_photo:
-            media_group = MediaGroupBuilder(caption=bm.captions(user_captions, post_caption, bot_url))
-            for _ in range(min(10, len(all_files_photo))):
-                file_path = all_files_photo.pop(0)
+        if len(all_files_photo) > 1:
+            media_group = MediaGroupBuilder()
+            for file_path in all_files_photo[:-1]:
                 media_group.add_photo(media=FSInputFile(file_path))
             await message.answer_media_group(media_group.build())
+            last_photo = all_files_photo[-1]
+            await message.answer_photo(
+                photo=FSInputFile(last_photo),
+                caption=bm.captions(user_captions, post_caption, bot_url),
+                reply_markup=kb.return_video_info_keyboard(None, likes, comments, retweets, None, post_url)
+            )
+        elif all_files_photo:
+            await message.answer_photo(
+                photo=FSInputFile(all_files_photo[0]),
+                caption=bm.captions(user_captions, post_caption, bot_url),
+                reply_markup=kb.return_video_info_keyboard(None, likes, comments, retweets, None, post_url)
+            )
 
-        while all_files_video:
-            media_group = MediaGroupBuilder(caption=bm.captions(user_captions, post_caption, bot_url))
-            for _ in range(min(10, len(all_files_video))):
-                file_path = all_files_video.pop(0)
+        if len(all_files_video) > 1:
+            media_group = MediaGroupBuilder()
+            for file_path in all_files_video[:-1]:
                 media_group.add_video(media=FSInputFile(file_path))
             await message.answer_media_group(media_group.build())
+            last_video = all_files_video[-1]
+            await message.answer_video(
+                video=FSInputFile(last_video),
+                caption=bm.captions(user_captions, post_caption, bot_url),
+                reply_markup=kb.return_video_info_keyboard(None, likes, comments, retweets, None, post_url)
+            )
+        elif all_files_video:
+            await message.answer_video(
+                video=FSInputFile(all_files_video[0]),
+                caption=bm.captions(user_captions, post_caption, bot_url),
+                reply_markup=kb.return_video_info_keyboard(None, likes, comments, retweets, None, post_url)
+            )
 
         await asyncio.sleep(5)
 
@@ -116,8 +144,8 @@ async def reply_media(message, tweet_id, tweet_media, bot_url, business_id):
         await message.reply(bm.something_went_wrong())
 
 
-@router.message(F.text.regexp(r"(https?://(www\.)?(twitter|x)\.com/\S+|https?://t\.co/\S+)") )
-@router.business_message(F.text.regexp(r"(https?://(www\.)?(twitter|x)\.com/\S+|https?://t\.co/\S+)") )
+@router.message(F.text.regexp(r"(https?://(www\.)?(twitter|x)\.com/\S+|https?://t\.co/\S+)"))
+@router.business_message(F.text.regexp(r"(https?://(www\.)?(twitter|x)\.com/\S+|https?://t\.co/\S+)"))
 async def handle_tweet_links(message):
     business_id = message.business_connection_id
 
