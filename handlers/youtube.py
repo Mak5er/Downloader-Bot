@@ -108,20 +108,6 @@ def get_audio_stream(yt: dict) -> dict | None:
     return best
 
 
-async def get_video_metadata(video_url: str) -> dict:
-    try:
-        yt = await asyncio.to_thread(get_youtube_video, video_url)
-        if not yt:
-            return {}
-        return {
-            'viewCount': str(yt.get('view_count', '0')),
-            'likeCount': str(yt.get('like_count', '0')),
-        }
-    except Exception as e:
-        logging.error(f"Error getting video metadata: {e}")
-        return {}
-
-
 async def get_clip_dimensions(file_path: str) -> tuple[None, None] | Any:
     try:
         # Offload VideoFileClip operations to thread pool
@@ -158,41 +144,31 @@ async def safe_remove(file_path: str):
         logging.error(f"Error removing file {file_path}: {e}")
 
 
-async def send_chat_action_if_needed(chat_id: int, action: str, business_id: Optional[int]):
-    if business_id is None:
-        await bot.send_chat_action(chat_id, action)
-
-
-async def handle_download_error(message, business_id):
-    if business_id is None:
-        await message.react([types.ReactionTypeEmoji(emoji="👎")])
+async def handle_download_error(message):
+    await message.react([types.ReactionTypeEmoji(emoji="👎")])
     await message.reply(bm.something_went_wrong())
 
 
 @router.message(F.text.regexp(r"(https?://(www\.)?(youtube|youtu|youtube-nocookie)\.(com|be)/(?!@)[\S]+)"))
-@router.business_message(F.text.regexp(r"(https?://(www\.)?(youtube|youtu|youtube-nocookie)\.(com|be)/(?!@)[\S]+)"))
 async def download_video(message: types.Message):
     url = message.text
-    business_id = message.business_connection_id
     await send_analytics(user_id=message.from_user.id, chat_type=message.chat.type, action_name="youtube_video")
     try:
-        if business_id is None:
-            await message.react([types.ReactionTypeEmoji(emoji="👨‍💻")])
+        await message.react([types.ReactionTypeEmoji(emoji="👨‍💻")])
 
         # Get YouTube video object - this is a heavy operation so run in thread pool
         yt = await asyncio.to_thread(get_youtube_video, url)
         video = await asyncio.to_thread(get_video_stream, yt)
 
-        # Get video metadata
-        metadata = await get_video_metadata(yt['webpage_url'])
-        views = int(metadata.get('viewCount', 0))
-        likes = int(metadata.get('likeCount', 0))
-
         if not video:
             await message.reply(bm.nothing_found())
             return
 
-        size = video.get('filesize', 0) // 1024
+        # Get video metadata
+        views = int(yt.get('view_count', 0))
+        likes = int(yt.get('like_count', 0))
+
+        size = video.get('filesize_approx', 0) // 1024  # Convert to KB
 
         if size >= MAX_FILE_SIZE:
             await message.reply(bm.video_too_large())
@@ -201,7 +177,7 @@ async def download_video(message: types.Message):
         db_file_id = await db.get_file_id(yt['webpage_url'])
 
         if db_file_id:
-            await send_chat_action_if_needed(message.chat.id, "upload_video", business_id)
+            await bot.send_chat_action(message.chat.id, "upload_video")
             await message.answer_video(
                 video=db_file_id,
                 caption=bm.captions(await db.get_user_captions(message.from_user.id), yt['title']
@@ -214,7 +190,7 @@ async def download_video(message: types.Message):
                     shares=None,
                     music_play_url=None,
                     video_url=yt['webpage_url'],
-                ) if not business_id else None,
+                ),
                 parse_mode="HTML"
             )
         else:
@@ -226,7 +202,7 @@ async def download_video(message: types.Message):
                 # Get video dimensions asynchronously
                 width, height = await get_clip_dimensions(video_file_path)
 
-                await send_chat_action_if_needed(message.chat.id, "upload_video", business_id)
+                await bot.send_chat_action(message.chat.id, "upload_video")
                 sent_message = await message.answer_video(
                     video=FSInputFile(video_file_path),
                     width=width,
@@ -241,7 +217,7 @@ async def download_video(message: types.Message):
                         shares=None,
                         music_play_url=None,
                         video_url=yt['webpage_url'],
-                    ) if not business_id else None,
+                    ),
                     parse_mode="HTML"
                 )
                 await db.add_file(yt['webpage_url'], sent_message.video.file_id, "video")
@@ -250,21 +226,18 @@ async def download_video(message: types.Message):
                 await asyncio.sleep(5)
                 await safe_remove(video_file_path)
             else:
-                await handle_download_error(message, business_id)
+                await handle_download_error(message)
     except Exception as e:
         logging.error(f"Video download error: {e}")
-        await handle_download_error(message, business_id)
+        await handle_download_error(message)
     await update_info(message)
 
 
 @router.message(F.text.regexp(r'(https?://)?(music\.)?(youtube|youtu|youtube-nocookie)\.(com|be)/.+'))
-@router.business_message(F.text.regexp(r'(https?://)?(music\.)?(youtube|youtu|youtube-nocookie)\.(com|be)/.+'))
 async def download_music(message: types.Message):
     url = message.text
-    business_id = message.business_connection_id
     try:
-        if business_id is None:
-            await message.react([types.ReactionTypeEmoji(emoji="👨‍💻")])
+        await message.react([types.ReactionTypeEmoji(emoji="👨‍💻")])
 
         # Get YouTube audio object - run in thread pool
         yt = await asyncio.to_thread(get_youtube_video, url)
@@ -282,7 +255,7 @@ async def download_music(message: types.Message):
             # Get audio duration asynchronously
             audio_duration = await get_audio_duration(audio_file_path)
 
-            await send_chat_action_if_needed(message.chat.id, "upload_voice", business_id)
+            await bot.send_chat_action(message.chat.id, "upload_voice")
 
             await message.answer_audio(
                 audio=FSInputFile(audio_file_path),
@@ -297,10 +270,10 @@ async def download_music(message: types.Message):
             await asyncio.sleep(5)
             await safe_remove(audio_file_path)
         else:
-            await handle_download_error(message, business_id)
+            await handle_download_error(message)
     except Exception as e:
         logging.error(f"Audio download error: {e}")
-        await handle_download_error(message, business_id)
+        await handle_download_error(message)
     await update_info(message)
 
 
@@ -312,9 +285,8 @@ async def inline_youtube_query(query: types.InlineQuery):
         yt = await asyncio.to_thread(get_youtube_video, url)
 
         # Get video metadata
-        metadata = await get_video_metadata(yt['webpage_url'])
-        views = int(metadata.get('viewCount', 0))
-        likes = int(metadata.get('likeCount', 0))
+        views = int(yt.get('view_count', 0))
+        likes = int(yt.get('like_count', 0))
 
         await send_analytics(user_id=query.from_user.id, chat_type=query.chat_type, action_name="inline_youtube_shorts")
         user_captions = await db.get_user_captions(query.from_user.id)
