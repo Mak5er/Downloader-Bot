@@ -8,6 +8,17 @@ RUN ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && echo $TZ > /etc/timezone
 # Set the working directory in the container
 WORKDIR /app
 
+# Install ffmpeg and other required system packages
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+        ffmpeg \
+        gcc \
+        libffi-dev \
+        libssl-dev \
+        build-essential \
+        && apt-get clean && \
+    rm -rf /var/lib/apt/lists/*
+
 # Copy the requirements.txt file into the container
 COPY requirements.txt .
 
