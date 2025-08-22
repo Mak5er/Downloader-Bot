@@ -250,6 +250,8 @@ async def process_tiktok(message: types.Message):
     except Exception as e:
         logging.error(f"Error processing URL: {e}")
         await message.reply(bm.something_went_wrong())
+        reactions = await bot.get_available_reactions()
+        await message.answer(reactions)
     finally:
         await update_info(message)
 
