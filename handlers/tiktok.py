@@ -244,6 +244,7 @@ async def process_tiktok(message: types.Message):
             await process_tiktok_profile(message, message.text, bot_url, user_captions)
         else:
             if business_id is None:
+                await message.react([types.ReactionTypeEmoji(emoji="👎")])
                
             await message.reply(bm.something_went_wrong())
     except Exception as e:
