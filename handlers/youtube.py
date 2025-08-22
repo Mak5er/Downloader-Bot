@@ -154,7 +154,7 @@ async def download_video(message: types.Message):
     url = message.text
     await send_analytics(user_id=message.from_user.id, chat_type=message.chat.type, action_name="youtube_video")
     try:
-        await message.react([types.ReactionTypeEmoji(emoji="👨‍💻")])
+        await message.react([types.ReactionTypeEmoji(emoji="👾")])
 
         # Get YouTube video object - this is a heavy operation so run in thread pool
         yt = await asyncio.to_thread(get_youtube_video, url)
@@ -237,7 +237,7 @@ async def download_video(message: types.Message):
 async def download_music(message: types.Message):
     url = message.text
     try:
-        await message.react([types.ReactionTypeEmoji(emoji="👨‍💻")])
+        await message.react([types.ReactionTypeEmoji(emoji="👾")])
 
         # Get YouTube audio object - run in thread pool
         yt = await asyncio.to_thread(get_youtube_video, url)
