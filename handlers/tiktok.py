@@ -232,7 +232,7 @@ async def process_tiktok(message: types.Message):
         images = data.get("data", {}).get("images", [])
 
         if business_id is None:
-            await message.react([types.ReactionTypeEmoji(emoji="👨‍💻")])
+            await message.react([types.ReactionTypeEmoji(emoji="👾")])
 
         if not images:
             await process_tiktok_video(message, data, bot_url, user_captions, business_id)
