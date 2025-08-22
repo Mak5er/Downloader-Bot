@@ -232,8 +232,6 @@ async def process_tiktok(message: types.Message):
         images = data.get("data", {}).get("images", [])
 
         if business_id is None:
-            reactions = await bot.get_available_reactions()
-            await message.answer(reactions)
             await message.react([types.ReactionTypeEmoji(emoji="👾")])
 
         if not images:
