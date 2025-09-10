@@ -5,7 +5,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-db_auth = str(os.getenv("db_auth"))
+DATABASE = 'sqlite+aiosqlite:///maxload.db'
 admin_id = int(os.getenv("admin_id"))
 custom_api_url = str(os.getenv("custom_api_url"))
 MEASUREMENT_ID = str(os.getenv("MEASUREMENT_ID"))

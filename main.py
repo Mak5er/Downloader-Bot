@@ -58,6 +58,8 @@ async def send_analytics(user_id, chat_type, action_name):
 
 
 async def main():
+    await db.init_db()
+
     import handlers
     import middlewares
     from handlers.admin import clear_downloads_and_notify

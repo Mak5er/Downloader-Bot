@@ -1,9 +1,9 @@
 import logging
 from datetime import datetime, timedelta
-from sqlalchemy import Column, BigInteger, Text, TIMESTAMP, func, select, delete, update
+
+from sqlalchemy import Text, TIMESTAMP, func, select, delete, update, create_engine, Integer
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
-from sqlalchemy.orm import sessionmaker, declarative_base
-import config
+from sqlalchemy.orm import sessionmaker, declarative_base, Mapped, mapped_column
 
 Base = declarative_base()
 
@@ -11,38 +11,48 @@ Base = declarative_base()
 class DownloadedFile(Base):
     __tablename__ = "downloaded_files"
 
-    id = Column(BigInteger, primary_key=True, autoincrement=True)
-    url = Column(Text, unique=True, nullable=False)
-    file_id = Column(Text, nullable=False)
-    date_added = Column(TIMESTAMP(timezone=True), default=func.now())
-    file_type = Column(Text, nullable=True)
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    url: Mapped[str] = mapped_column(Text, unique=True, nullable=False)
+    file_id: Mapped[str] = mapped_column(Text, nullable=False)
+    date_added: Mapped[str] = mapped_column(TIMESTAMP(timezone=True), server_default=func.now())
+    file_type: Mapped[str] = mapped_column(Text, nullable=True)
 
 
 class User(Base):
     __tablename__ = "users"
 
-    user_id = Column(BigInteger, primary_key=True, autoincrement=True)
-    user_name = Column(Text, nullable=True)
-    user_username = Column(Text, nullable=True)
-    chat_type = Column(Text, nullable=True)
-    language = Column(Text, nullable=True)
-    status = Column(Text, nullable=True)
-    captions = Column(Text, default="off", nullable=False)
+    user_id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_name: Mapped[str] = mapped_column(Text, nullable=True)
+    user_username: Mapped[str] = mapped_column(Text, nullable=True)
+    chat_type: Mapped[str] = mapped_column(Text, nullable=True)
+    language: Mapped[str] = mapped_column(Text, nullable=True)
+    status: Mapped[str] = mapped_column(Text, nullable=True)
+    captions: Mapped[str] = mapped_column(Text, default="off", nullable=False)
+
 
 class AnalyticsEvent(Base):
     __tablename__ = "analytics_events"
 
-    id = Column(BigInteger, primary_key=True, autoincrement=True)
-    user_id = Column(BigInteger, nullable=False)
-    chat_type = Column(Text, nullable=True)
-    action_name = Column(Text, nullable=False)
-    created_at = Column(TIMESTAMP(timezone=True), server_default=func.now())
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    chat_type: Mapped[str] = mapped_column(Text, nullable=True)
+    action_name: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[str] = mapped_column(TIMESTAMP(timezone=True), server_default=func.now())
 
 
 class DataBase:
-    def __init__(self):
-        self.engine = create_async_engine(config.db_auth, echo=False)
+    def __init__(self, sqlite_path="maxload.db"):
+        # SQLite engine для бота
+        self.sqlite_path = sqlite_path
+        self.engine = create_async_engine(f"sqlite+aiosqlite:///{self.sqlite_path}", echo=False)
         self.SessionLocal = sessionmaker(bind=self.engine, class_=AsyncSession, expire_on_commit=False)
+
+    async def init_db(self):
+        """Створює таблиці у SQLite, якщо їх нема"""
+        # Для async_create_all треба зробити синхронний engine
+        sync_engine = create_engine(f"sqlite:///{self.sqlite_path}")
+        Base.metadata.create_all(sync_engine)
+        logging.info("SQLite база створена / підтверджена існування таблиць")
 
     async def get_session(self):
         async with self.SessionLocal() as session:
@@ -191,4 +201,3 @@ class DataBase:
             )
 
             return {row[0].strftime("%Y-%m-%d"): row[1] for row in result.all()}
-
