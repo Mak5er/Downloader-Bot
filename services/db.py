@@ -200,4 +200,4 @@ class DataBase:
                 .order_by(func.date(AnalyticsEvent.created_at))
             )
 
-            return {row[0].strftime("%Y-%m-%d"): row[1] for row in result.all()}
+            return {datetime.strptime(row[0], "%Y-%m-%d").strftime("%Y-%m-%d"): row[1] for row in result.all()}
