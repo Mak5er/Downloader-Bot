@@ -150,7 +150,7 @@ async def handle_tweet_links(message):
     business_id = message.business_connection_id
 
     if business_id is None:
-        react = types.ReactionTypeEmoji(emoji="👨‍💻")
+        react = types.ReactionTypeEmoji(emoji="👾")
         await message.react([react])
 
     bot_url = f"t.me/{(await bot.get_me()).username}"

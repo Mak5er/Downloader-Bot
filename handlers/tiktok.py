@@ -232,7 +232,7 @@ async def process_tiktok(message: types.Message):
         images = data.get("data", {}).get("images", [])
 
         if business_id is None:
-            await message.react([types.ReactionTypeEmoji(emoji="👨‍💻")])
+            await message.react([types.ReactionTypeEmoji(emoji="👾")])
 
         if not images:
             await process_tiktok_video(message, data, bot_url, user_captions, business_id)
@@ -243,10 +243,13 @@ async def process_tiktok(message: types.Message):
         else:
             if business_id is None:
                 await message.react([types.ReactionTypeEmoji(emoji="👎")])
+               
             await message.reply(bm.something_went_wrong())
     except Exception as e:
         logging.error(f"Error processing URL: {e}")
         await message.reply(bm.something_went_wrong())
+        reactions = await bot.get_available_reactions()
+        await message.answer(reactions)
     finally:
         await update_info(message)
 

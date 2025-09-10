@@ -196,7 +196,7 @@ async def process_instagram_url(message: types.Message):
         url = extract_instagram_url(message.text)
 
         if business_id is None:
-            await message.react([types.ReactionTypeEmoji(emoji="👨‍💻")])
+            await message.react([types.ReactionTypeEmoji(emoji="👾")])
 
         video_info = await DownloaderInstagram.fetch_instagram_post_data(url)
 
