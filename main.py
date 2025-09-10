@@ -1,15 +1,15 @@
 import os
 
 import httpx
+from aiocron import crontab
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from aiogram.client.session.aiohttp import AiohttpSession
 from aiogram.client.telegram import TelegramAPIServer
 from aiogram.enums.parse_mode import ParseMode
-from aiocron import crontab
 
 from config import BOT_TOKEN, BOT_COMMANDS, OUTPUT_DIR, custom_api_url, MEASUREMENT_ID, API_SECRET
-from services.db import DataBase
+from services.db import DataBase, AnalyticsEvent
 
 custom_timeout = 600
 session = AiohttpSession(
@@ -26,6 +26,7 @@ os.makedirs("downloads", exist_ok=True)
 
 
 async def send_analytics(user_id, chat_type, action_name):
+    # Надсилаємо в GA
     params = {
         'client_id': str(user_id),
         'user_id': str(user_id),
@@ -38,10 +39,22 @@ async def send_analytics(user_id, chat_type, action_name):
             }
         }],
     }
+
     async with httpx.AsyncClient() as client:
         await client.post(
             f'https://www.google-analytics.com/mp/collect?measurement_id={MEASUREMENT_ID}&api_secret={API_SECRET}',
-            json=params)
+            json=params
+        )
+
+    # Лог в БД
+    async with db.SessionLocal() as session:
+        async with session.begin():
+            event = AnalyticsEvent(
+                user_id=user_id,
+                chat_type=chat_type,
+                action_name=action_name
+            )
+            session.add(event)
 
 
 async def main():

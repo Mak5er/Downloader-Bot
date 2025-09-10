@@ -14,3 +14,4 @@ pytz
 colorlog
 SQLAlchemy
 yt-dlp
+pytubefix

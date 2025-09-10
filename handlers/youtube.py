@@ -1,7 +1,7 @@
 import asyncio
 import os
 import time
-from typing import Optional, Tuple, Any
+from typing import Tuple, Any
 
 import requests
 from aiogram import types, Router, F
@@ -147,7 +147,6 @@ async def safe_remove(file_path: str):
 async def handle_download_error(message):
     await message.react([types.ReactionTypeEmoji(emoji="👎")])
     await message.reply(bm.something_went_wrong())
-
 
 @router.message(F.text.regexp(r"(https?://(www\.)?(youtube|youtu|youtube-nocookie)\.(com|be)/(?!@)[\S]+)"))
 async def download_video(message: types.Message):

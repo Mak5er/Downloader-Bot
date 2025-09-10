@@ -29,6 +29,15 @@ class User(Base):
     status = Column(Text, nullable=True)
     captions = Column(Text, default="off", nullable=False)
 
+class AnalyticsEvent(Base):
+    __tablename__ = "analytics_events"
+
+    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    user_id = Column(BigInteger, nullable=False)
+    chat_type = Column(Text, nullable=True)
+    action_name = Column(Text, nullable=False)
+    created_at = Column(TIMESTAMP(timezone=True), server_default=func.now())
+
 
 class DataBase:
     def __init__(self):
@@ -172,10 +181,14 @@ class DataBase:
                 start_date -= timedelta(days=365)
 
             result = await session.execute(
-                select(func.date(DownloadedFile.date_added), func.count())
-                .where(DownloadedFile.date_added >= start_date)
-                .group_by(func.date(DownloadedFile.date_added))
-                .order_by(func.date(DownloadedFile.date_added))
+                select(func.date(AnalyticsEvent.created_at), func.count())
+                .where(
+                    AnalyticsEvent.created_at >= start_date,
+                    AnalyticsEvent.action_name.notin_(["start", "settings"])
+                )
+                .group_by(func.date(AnalyticsEvent.created_at))
+                .order_by(func.date(AnalyticsEvent.created_at))
             )
 
             return {row[0].strftime("%Y-%m-%d"): row[1] for row in result.all()}
+
