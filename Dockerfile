@@ -29,7 +29,7 @@ RUN pip install --upgrade pip setuptools
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy the rest of the application code
-COPY . .
+COPY . /app
 
 # Set the entry point for the container
 ENTRYPOINT ["python", "main.py"]
