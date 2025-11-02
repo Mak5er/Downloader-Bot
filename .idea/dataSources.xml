@@ -1,11 +1,11 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <project version="4">
   <component name="DataSourceManagerImpl" format="xml" multifile-model="true">
-    <data-source source="LOCAL" name="maxload" uuid="f6dc8e94-7970-4917-8330-867abb525307">
+    <data-source source="LOCAL" name="maxload [2]" uuid="5d44b3c0-66f8-4c37-a2c4-70f8b3722223">
       <driver-ref>sqlite.xerial</driver-ref>
       <synchronize>true</synchronize>
       <jdbc-driver>org.sqlite.JDBC</jdbc-driver>
-      <jdbc-url>jdbc:sqlite:D:\Python\Downloader-Bot\maxload.db</jdbc-url>
+      <jdbc-url>jdbc:sqlite:D:\Dev\Python\Downloader-Bot\maxload.db</jdbc-url>
       <working-dir>$ProjectFileDir$</working-dir>
       <libraries>
         <library>

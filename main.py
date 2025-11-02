@@ -9,6 +9,7 @@ from aiogram.client.telegram import TelegramAPIServer
 from aiogram.enums.parse_mode import ParseMode
 
 from config import BOT_TOKEN, BOT_COMMANDS, OUTPUT_DIR, custom_api_url, MEASUREMENT_ID, API_SECRET
+from log.logger import logger as logging
 from services.db import DataBase, AnalyticsEvent
 
 custom_timeout = 600
@@ -58,6 +59,7 @@ async def send_analytics(user_id, chat_type, action_name):
 
 
 async def main():
+    logging.info(f"Starting {(await bot.get_me()).username} bot initialisation")
     await db.init_db()
 
     import handlers
@@ -80,6 +82,7 @@ async def main():
 
     crontab('0 0 * * *', func=clear_downloads_and_notify, start=True)
 
+    logging.info("Launching polling loop")
     await dp.start_polling(bot)
 
 

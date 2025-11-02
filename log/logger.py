@@ -1,56 +1,74 @@
-import datetime
 import logging
+import os
+from logging.handlers import RotatingFileHandler
+
 import colorlog
 
+LOG_DIR = "log"
+INFO_LOG = os.path.join(LOG_DIR, "bot_log.log")
+ERROR_LOG = os.path.join(LOG_DIR, "error_log.log")
 
-class CustomFormatter(logging.Formatter):
-    def __init__(self, fmt):
-        super().__init__(fmt)
+os.makedirs(LOG_DIR, exist_ok=True)
 
+
+class LocalTimeFormatter(logging.Formatter):
     def formatTime(self, record, datefmt=None):
-        local_time = datetime.datetime.now()
-        return local_time.strftime('%Y-%m-%d %H:%M:%S')
+        return super().formatTime(record, datefmt=datefmt or "%Y-%m-%d %H:%M:%S")
 
-# Основний формат логування
-log_format = '%(asctime)s - %(levelname)s - %(message)s'
 
-logger = logging.getLogger()
+CONSOLE_FORMAT = "%(log_color)s%(asctime)s | %(levelname)s | %(message)s%(reset)s"
+FILE_FORMAT = "%(asctime)s | %(levelname)s | %(message)s"
+
+
+def _build_console_handler(level: int) -> logging.Handler:
+    handler = logging.StreamHandler()
+    handler.setLevel(level)
+    formatter = colorlog.ColoredFormatter(
+        CONSOLE_FORMAT,
+        log_colors={
+            "DEBUG": "cyan",
+            "INFO": "green",
+            "WARNING": "yellow",
+            "ERROR": "red",
+            "CRITICAL": "bold_red",
+        },
+    )
+    handler.setFormatter(formatter)
+    return handler
+
+
+def _build_file_handler(path: str, level: int) -> logging.Handler:
+    handler = RotatingFileHandler(path, maxBytes=5 * 1024 * 1024, backupCount=3, encoding="utf-8")
+    handler.setLevel(level)
+    formatter = LocalTimeFormatter(FILE_FORMAT)
+    handler.setFormatter(formatter)
+    return handler
+
+
+logger = logging.getLogger("maxload")
 logger.setLevel(logging.DEBUG)
+logger.propagate = False
+logger.handlers.clear()
 
-# Кольоровий обробник для консолі
-console_handler = logging.StreamHandler()
-color_formatter = colorlog.ColoredFormatter(
-    '%(log_color)s%(asctime)s - %(levelname)s - %(message)s%(reset)s',
-    datefmt='%Y-%m-%d %H:%M:%S'
-)
-console_handler.setFormatter(color_formatter)
+logger.addHandler(_build_console_handler(logging.INFO))
+logger.addHandler(_build_file_handler(INFO_LOG, logging.INFO))
+logger.addHandler(_build_file_handler(ERROR_LOG, logging.ERROR))
 
-# Обробник для помилок (Error logs)
-error_handler = logging.FileHandler('log/error_log.log')
-error_formatter = CustomFormatter('%(asctime)s - %(levelname)s - %(message)s')
-error_handler.setFormatter(error_formatter)
-error_handler.setLevel(logging.ERROR)
 
-info_handler = logging.FileHandler('log/bot_log.log')
-info_formatter = CustomFormatter('%(asctime)s - %(levelname)s - %(message)s')
-info_handler.setFormatter(info_formatter)
-info_handler.setLevel(logging.INFO)
+def _configure_third_party_loggers() -> None:
+    noisy_loggers = {
+        "aiogram": logging.ERROR,
+        "aiogram.event": logging.CRITICAL,
+        "aiosqlite": logging.ERROR,
+        "httpcore": logging.WARNING,
+        "httpx": logging.WARNING,
+        "asyncio": logging.WARNING,
+    }
 
-class MaxLevelFilter(logging.Filter):
-    def __init__(self, max_level):
-        super().__init__()
-        self.max_level = max_level
+    for name, level in noisy_loggers.items():
+        third_party_logger = logging.getLogger(name)
+        third_party_logger.setLevel(level)
+        third_party_logger.propagate = False
 
-    def filter(self, record):
-        return record.levelno < self.max_level
 
-info_handler.addFilter(MaxLevelFilter(logging.ERROR))
-
-logger.addHandler(console_handler)
-logger.addHandler(error_handler)
-logger.addHandler(info_handler)
-
-logger.info("This is an info message")
-logger.warning("This is a warning message")
-logger.error("This is an error message")
-logger.critical("This is a critical message")
+_configure_third_party_loggers()

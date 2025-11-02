@@ -1,9 +1,9 @@
 import logging
 from datetime import datetime, timedelta
 
-from sqlalchemy import Text, TIMESTAMP, func, select, delete, update, create_engine, Integer
+from sqlalchemy import Text, TIMESTAMP, func, select, delete, update, create_engine, Integer, ForeignKey
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
-from sqlalchemy.orm import sessionmaker, declarative_base, Mapped, mapped_column
+from sqlalchemy.orm import sessionmaker, declarative_base, Mapped, mapped_column, relationship
 
 Base = declarative_base()
 
@@ -27,7 +27,8 @@ class User(Base):
     chat_type: Mapped[str] = mapped_column(Text, nullable=True)
     language: Mapped[str] = mapped_column(Text, nullable=True)
     status: Mapped[str] = mapped_column(Text, nullable=True)
-    captions: Mapped[str] = mapped_column(Text, default="off", nullable=False)
+
+    settings: Mapped["Settings"] = relationship("Settings", back_populates="user", uselist=False)
 
 
 class AnalyticsEvent(Base):
@@ -40,6 +41,29 @@ class AnalyticsEvent(Base):
     created_at: Mapped[str] = mapped_column(TIMESTAMP(timezone=True), server_default=func.now())
 
 
+class Settings(Base):
+    __tablename__ = "settings"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.user_id"))
+    captions: Mapped[str] = mapped_column(Text, default="off", nullable=False)
+    delete_message: Mapped[str] = mapped_column(Text, default="off", nullable=False)
+    info_buttons: Mapped[str] = mapped_column(Text, default="off", nullable=False)
+    url_button: Mapped[str] = mapped_column(Text, default="off", nullable=False)
+
+    user = relationship("User", back_populates="settings")
+
+
+async def run_alembic_migration():
+    import subprocess, os
+    # 1️⃣ створюємо ревізію, якщо змінились моделі
+    subprocess.run([
+        "alembic", "revision", "--autogenerate", "-m", "auto update"
+    ], cwd=os.path.dirname(__file__), stdout=subprocess.DEVNULL)
+    # 2️⃣ оновлюємо базу до останньої ревізії
+    subprocess.run(["alembic", "upgrade", "head"], cwd=os.path.dirname(__file__))
+
+
 class DataBase:
     def __init__(self, sqlite_path="maxload.db"):
         # SQLite engine для бота
@@ -48,11 +72,11 @@ class DataBase:
         self.SessionLocal = sessionmaker(bind=self.engine, class_=AsyncSession, expire_on_commit=False)
 
     async def init_db(self):
-        """Створює таблиці у SQLite, якщо їх нема"""
-        # Для async_create_all треба зробити синхронний engine
         sync_engine = create_engine(f"sqlite:///{self.sqlite_path}")
         Base.metadata.create_all(sync_engine)
-        logging.info("SQLite база створена / підтверджена існування таблиць")
+        logging.info("✅ SQLite таблиці створені / підтверджено існування")
+
+        await run_alembic_migration()
 
     async def get_session(self):
         async with self.SessionLocal() as session:
@@ -103,27 +127,50 @@ class DataBase:
                 await session.execute(update(User).where(User.user_id == user_id)
                                       .values(user_name=user_name, user_username=user_username))
 
-    async def update_captions(self, user_id, captions):
+    async def get_user_setting(self, user_id, field):
         async with self.SessionLocal() as session:
-            async with session.begin():
-                await session.execute(update(User).where(User.user_id == user_id).values(captions=captions))
-
-    async def get_user_captions(self, user_id):
-        async with self.SessionLocal() as session:
-            result = await session.execute(select(User.captions).where(User.user_id == user_id))
+            result = await session.execute(
+                select(getattr(Settings, field)).where(Settings.user_id == user_id)
+            )
             return result.scalar()
+
+    async def user_settings(self, user_id):
+        async with self.SessionLocal() as session:
+            result = await session.execute(select(Settings).where(Settings.user_id == user_id))
+            settings = result.scalar_one_or_none()
+            if settings:
+                return {
+                    "captions": settings.captions or "off",
+                    "delete_message": settings.delete_message or "off",
+                    "info_buttons": settings.info_buttons or "off",
+                    "url_button": settings.url_button or "off",
+                }
+            return {
+                "captions": "off",
+                "delete_message": "off",
+                "info_buttons": "off",
+                "url_button": "off",
+            }
+
+    async def set_user_setting(self, user_id, field, value):
+        async with self.SessionLocal() as session:
+            existing = await session.execute(select(Settings).where(Settings.user_id == user_id))
+            setting = existing.scalar_one_or_none()
+            if not setting:
+                setting = Settings(user_id=user_id)
+                session.add(setting)
+            setattr(setting, field, value)
+            await session.commit()
 
     async def set_inactive(self, user_id):
         async with self.SessionLocal() as session:
             async with session.begin():
-                # Ensure user_id is treated as an integer
                 user_id_int = int(user_id)
                 await session.execute(update(User).where(User.user_id == user_id_int).values(status="inactive"))
 
     async def set_active(self, user_id):
         async with self.SessionLocal() as session:
             async with session.begin():
-                # Ensure user_id is treated as an integer
                 user_id_int = int(user_id)
                 await session.execute(update(User).where(User.user_id == user_id_int).values(status="active"))
 

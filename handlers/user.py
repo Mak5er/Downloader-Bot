@@ -1,11 +1,10 @@
 import datetime
+import os
 from collections import defaultdict
 
+import matplotlib.pyplot as plt
 from aiogram import types, Router, F
 from aiogram.filters import Command
-
-import os
-import matplotlib.pyplot as plt
 from aiogram.types import FSInputFile
 from matplotlib.ticker import MaxNLocator
 
@@ -63,37 +62,56 @@ async def remove_reply_keyboard(message: types.Message):
 
 
 @router.message(Command("settings"))
-async def settings(message: types.Message):
-    await send_analytics(user_id=message.from_user.id, chat_type=message.chat.type, action_name='settings')
-
+async def settings_menu(message: types.Message):
+    await send_analytics(user_id=message.from_user.id,
+                         chat_type=message.chat.type,
+                         action_name='settings')
     await message.reply(
         text=bm.settings(),
         reply_markup=kb.return_settings_keyboard(),
-        parse_mode="HTML")
+        parse_mode="HTML"
+    )
 
 
 @router.callback_query(F.data == 'back_to_settings')
 async def back_to_settings(call: types.CallbackQuery):
     await call.message.edit_text(
         text=bm.settings(),
-        reply_markup=kb.return_settings_keyboard())
+        reply_markup=kb.return_settings_keyboard(),
+        parse_mode="HTML"
+    )
     await call.answer()
 
 
-@router.callback_query(F.data == "settings_caption")
-async def captions_setting(call: types.CallbackQuery):
-    user_captions = await db.get_user_captions(call.from_user.id)
+@router.callback_query(F.data.startswith("settings:"))
+async def open_setting(call: types.CallbackQuery):
+    _, field = call.data.split(":")
+    current_value = await db.get_user_setting(user_id=call.from_user.id, field=field)
+
+    keyboard = kb.return_field_keyboard(field, current_value)
+
     await call.message.edit_text(
-        text=bm.captions_settings(),
-        reply_markup=kb.return_captions_keyboard(captions=user_captions), parse_mode='HTML')
+        text=bm.get_field_text(field),
+        reply_markup=keyboard,
+        parse_mode="HTML"
+    )
     await call.answer()
 
 
-@router.callback_query(F.data.startswith('captions_'))
-async def change_captions(call: types.CallbackQuery):
-    captions = call.data.split('_')[1]
-    await db.update_captions(captions=captions, user_id=call.from_user.id)
-    await call.message.edit_reply_markup(reply_markup=kb.return_captions_keyboard(captions))
+@router.callback_query(F.data.startswith("setting:"))
+async def change_setting(call: types.CallbackQuery):
+    _, field, value = call.data.split(":")
+    await db.set_user_setting(user_id=call.from_user.id, field=field, value=value)
+
+    current_value = await db.get_user_setting(user_id=call.from_user.id, field=field)
+    keyboard = kb.return_field_keyboard(field, current_value)
+
+    await call.message.edit_reply_markup(reply_markup=keyboard)
+    await call.answer()
+
+
+@router.callback_query(F.data == "noop")
+async def noop_callback(call: types.CallbackQuery):
     await call.answer()
 
 
@@ -101,28 +119,23 @@ def create_and_save_chart(data, period):
     filename = datetime.datetime.now().strftime("%Y_%m_%d_%H_%M_%S") + "_chart.png"
 
     if period == 'Week':
-        # Використовуємо лише перші 7 днів
         dates = list(data.keys())[:7]
         counts = list(data.values())[:7]
     elif period == 'Month':
-        dates = list(data.keys())[::3]  # Для місяця беремо кожну 3-ю точку
+        dates = list(data.keys())[::3]
         counts = list(data.values())[::3]
     elif period == 'Year':
-        # Агрегуємо дані за місяцями
         monthly_data = defaultdict(int)
         for date_str, count in data.items():
             date = datetime.datetime.strptime(date_str, "%Y-%m-%d")
-            month_key = date.strftime("%Y-%m")  # Формат: "2025-02"
+            month_key = date.strftime("%Y-%m")
             monthly_data[month_key] += count
-        # Беремо останні 12 місяців
         all_months = sorted(set(monthly_data.keys()))
         if len(all_months) > 12:
             all_months = all_months[-12:]
-        # Перетворюємо ключі місяців у datetime-об’єкти (наприклад, 1 число місяця)
         dates = [datetime.datetime.strptime(month, "%Y-%m") for month in all_months]
         counts = [monthly_data[month] for month in all_months]
     else:
-        # За замовчуванням (наприклад, для Week) використовуємо дані без змін
         dates = list(data.keys())
         counts = list(data.values())
 
@@ -137,11 +150,11 @@ def create_and_save_chart(data, period):
     ax.set_ylabel('Number of Downloads', fontsize=12, color='#B0B0B0')
 
     if period == 'Week':
-        ax.xaxis.set_major_locator(MaxNLocator(7))  # Для тижня 7 міток
+        ax.xaxis.set_major_locator(MaxNLocator(7))
     elif period == 'Month':
-        ax.xaxis.set_major_locator(MaxNLocator(8))  # Для місяця 8 міток
+        ax.xaxis.set_major_locator(MaxNLocator(8))
     elif period == 'Year':
-        ax.xaxis.set_major_locator(MaxNLocator(12))  # Для року 12 міток
+        ax.xaxis.set_major_locator(MaxNLocator(12))
 
     if period == 'Year':
         import matplotlib.dates as mdates

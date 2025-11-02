@@ -65,7 +65,7 @@ class DownloaderInstagram:
                 return True
             return False
         except Exception as e:
-            logging.error(f"Error downloading video from {video_url}: {e}")
+            logging.error("Error downloading Instagram video: url=%s error=%s", video_url, e)
             return False
 
     @staticmethod
@@ -92,7 +92,7 @@ class DownloaderInstagram:
                         if isinstance(video_data, dict) and "data" in video_data:
                             break
                 except requests.exceptions.RequestException as e:
-                    logging.error(f"Error with API key {api_key}: {e}")
+                    logging.error("Instagram API error with key: key=%s error=%s", api_key, e)
 
             data = video_data.get("data") if video_data else None
             if not isinstance(data, dict):
@@ -139,7 +139,7 @@ class DownloaderInstagram:
             )
 
         except Exception as e:
-            logging.error(f"Error in fetch_instagram_post_data: {e}")
+            logging.exception("Error fetching Instagram post data: url=%s error=%s", url, e)
             return None
 
     @staticmethod
@@ -152,7 +152,7 @@ class DownloaderInstagram:
 
             user_data = None
 
-            for api_key in RAPID_API_KEYS:  # Пробуємо кожен API-ключ
+            for api_key in RAPID_API_KEYS:
                 headers = {
                     "x-rapidapi-key": api_key,
                     "x-rapidapi-host": INSTAGRAM_RAPID_API_HOST
@@ -164,7 +164,7 @@ class DownloaderInstagram:
                         user_data = response.json()
                         break
                 except requests.exceptions.RequestException as e:
-                    logging.error(f"Error with API key {api_key}: {e}")
+                    logging.error("Instagram user API error with key: key=%s error=%s", api_key, e)
 
             if not user_data:
                 return None
@@ -181,7 +181,7 @@ class DownloaderInstagram:
             )
 
         except Exception as e:
-            logging.error(f"Error in fetch_instagram_user_data: {e}")
+            logging.exception("Error fetching Instagram user data: url=%s error=%s", url, e)
             return None
 
 
@@ -190,8 +190,17 @@ class DownloaderInstagram:
 async def process_instagram_url(message: types.Message):
     try:
         bot_url = f"t.me/{(await bot.get_me()).username}"
-        user_captions = await db.get_user_captions(message.from_user.id)
+        user_settings = await db.user_settings(message.from_user.id)
+        user_captions = user_settings["captions"]
         business_id = message.business_connection_id
+
+        logging.info(
+            "Instagram request received: user_id=%s username=%s business_id=%s text=%s",
+            message.from_user.id,
+            message.from_user.username,
+            business_id,
+            message.text,
+        )
 
         url = extract_instagram_url(message.text)
 
@@ -203,21 +212,32 @@ async def process_instagram_url(message: types.Message):
         if video_info is None and ("/p/" not in url and "/reel/" not in url):
             user_info = await DownloaderInstagram.fetch_instagram_user_data(url)
             if user_info:
-                await process_instagram_profile(message, user_info, bot_url, user_captions, business_id, url)
+                await process_instagram_profile(message, user_info, bot_url, user_settings, business_id, url)
                 return
+
+        logging.debug(
+            "Instagram content detected: has_video=%s has_images=%s",
+            bool(video_info and video_info.video_urls),
+            bool(video_info and video_info.image_urls),
+        )
 
         if not video_info or (not video_info.video_urls and not video_info.image_urls):
             await handle_download_error(message, business_id)
             return
 
         if video_info.image_urls:
-            await process_instagram_photos(message, video_info, bot_url, user_captions, business_id)
+            await process_instagram_photos(message, video_info, bot_url, user_settings, business_id)
         elif video_info.video_urls:
-            await process_instagram_video(message, video_info, bot_url, user_captions, business_id)
+            await process_instagram_video(message, video_info, bot_url, user_settings, business_id)
 
         await update_info(message)
     except Exception as e:
-        logging.error(f"Error in process_instagram_url: {e}")
+        logging.exception(
+            "Error processing Instagram URL: user_id=%s text=%s error=%s",
+            message.from_user.id,
+            message.text,
+            e,
+        )
         await handle_download_error(message, message.business_connection_id)
 
 
@@ -226,8 +246,9 @@ def extract_instagram_url(text: str) -> str:
     return match.group(0) if match else text
 
 
-async def process_instagram_video(message, video_info, bot_url, user_captions, business_id):
+async def process_instagram_video(message, video_info, bot_url, user_settings, business_id):
     try:
+        user_captions = user_settings["captions"]
         await send_analytics(user_id=message.from_user.id, chat_type=message.chat.type, action_name="instagram_reel")
         video_urls = video_info.video_urls
         video_id = video_info.id
@@ -238,19 +259,30 @@ async def process_instagram_video(message, video_info, bot_url, user_captions, b
 
         db_file_id = await db.get_file_id(post_url)
         if db_file_id:
+            logging.info(
+                "Serving cached Instagram video: url=%s file_id=%s",
+                post_url,
+                db_file_id,
+            )
             if business_id is None:
                 await bot.send_chat_action(message.chat.id, "upload_video")
             await message.answer_video(
                 video=db_file_id,
                 caption=bm.captions(user_captions, video_info.description, bot_url),
-                reply_markup=kb.return_video_info_keyboard(video_info.views, video_info.likes,
-                                                           video_info.comments, video_info.shares,
-                                                           None, post_url),
+                reply_markup=kb.return_video_info_keyboard(
+                    video_info.views,
+                    video_info.likes,
+                    video_info.comments,
+                    video_info.shares,
+                    None,
+                    post_url,
+                    user_settings
+                ),
                 parse_mode="HTML"
             )
             return
 
-        if downloader.download_video(video_urls[0]):
+        if video_urls and downloader.download_video(video_urls[0]):
             video = FSInputFile(video_file_path)
             file_size = os.path.getsize(video_file_path)
             try:
@@ -258,7 +290,7 @@ async def process_instagram_video(message, video_info, bot_url, user_captions, b
                 width, height = video_clip.size
                 video_clip.close()
             except Exception as e:
-                logging.error(f"Error in process_instagram_video: {e}")
+                logging.exception("Error in process_instagram_video: url=%s", post_url)
                 width, height = None, None
 
             if file_size < MAX_FILE_SIZE:
@@ -270,37 +302,67 @@ async def process_instagram_video(message, video_info, bot_url, user_captions, b
                     width=width,
                     height=height,
                     caption=bm.captions(user_captions, video_info.description, bot_url),
-                    reply_markup=kb.return_video_info_keyboard(video_info.views, video_info.likes, video_info.comments,
-                                                               video_info.shares, None, post_url),
+                    reply_markup=kb.return_video_info_keyboard(
+                        video_info.views,
+                        video_info.likes,
+                        video_info.comments,
+                        video_info.shares,
+                        None,
+                        post_url,
+                        user_settings
+                    ),
                     parse_mode="HTML"
                 )
                 await db.add_file(post_url, sent_message.video.file_id, "video")
+                logging.info(
+                    "Instagram video cached: url=%s file_id=%s",
+                    post_url,
+                    sent_message.video.file_id,
+                )
             else:
+                logging.warning(
+                    "Instagram video too large: url=%s size=%s",
+                    post_url,
+                    file_size,
+                )
                 await handle_large_file(message, business_id)
 
             await asyncio.sleep(5)
             try:
                 os.remove(video_file_path)
+                logging.debug("Removed temporary Instagram video file: path=%s", video_file_path)
             except Exception as e:
-                logging.error(f"Error removing file {video_file_path}: {e}")
+                logging.error("Error removing file: path=%s error=%s", video_file_path, e)
         else:
             await handle_download_error(message, business_id)
     except Exception as e:
-        logging.error(f"Error in process_instagram_video: {e}")
+        logging.exception("Error in process_instagram_video: url=%s", post_url)
         await handle_download_error(message, business_id)
 
 
-async def process_instagram_photos(message, video_info, bot_url, user_captions, business_id):
+async def process_instagram_photos(message, video_info, bot_url, user_settings, business_id):
     try:
+        user_captions = user_settings["captions"]
         await send_analytics(user_id=message.from_user.id, chat_type=message.chat.type, action_name="instagram_post")
 
         images = video_info.image_urls
 
         if not images:
+            logging.warning(
+                "Instagram post has no images: user_id=%s url=%s",
+                message.from_user.id,
+                message.text,
+            )
             await handle_download_error(message, business_id)
             return
 
         post_url = f"https://www.instagram.com/p/{video_info.code}"
+        logging.info(
+            "Sending Instagram photo post: user_id=%s url=%s image_count=%s",
+            message.from_user.id,
+            post_url,
+            len(images),
+        )
 
         if business_id is None:
             await bot.send_chat_action(message.chat.id, "upload_photo")
@@ -315,17 +377,29 @@ async def process_instagram_photos(message, video_info, bot_url, user_captions, 
         await message.answer_photo(
             photo=last_photo,
             caption=bm.captions(user_captions, video_info.description, bot_url),
-            reply_markup=kb.return_video_info_keyboard(video_info.views, video_info.likes,
-                                                       video_info.comments, video_info.shares,
-                                                       None, post_url)
+            reply_markup=kb.return_video_info_keyboard(
+                video_info.views,
+                video_info.likes,
+                video_info.comments,
+                video_info.shares,
+                None,
+                post_url,
+                user_settings
+            )
+        )
+        logging.debug(
+            "Instagram photo post delivered: user_id=%s url=%s",
+            message.from_user.id,
+            post_url,
         )
     except Exception as e:
-        logging.error(f"Error in process_instagram_photos: {e}")
+        logging.exception("Error in process_instagram_photos: url=%s", video_info.code if video_info else "unknown")
         await handle_download_error(message, business_id)
 
 
-async def process_instagram_profile(message, user_info, bot_url, user_captions, business_id, url):
+async def process_instagram_profile(message, user_info, bot_url, user_settings, business_id, url):
     try:
+        user_captions = user_settings["captions"]
         await send_analytics(user_id=message.from_user.id, chat_type=message.chat.type, action_name="instagram_profile")
 
         if business_id is None:
@@ -334,13 +408,18 @@ async def process_instagram_profile(message, user_info, bot_url, user_captions, 
         username = url.split('/')[3] if len(url.split('/')) > 3 else ""
         display_name = user_info.nickname.strip() if user_info.nickname else username
 
+        logging.info(
+            "Sending Instagram profile response: user_id=%s target=%s",
+            message.from_user.id,
+            username,
+        )
         await message.reply_photo(
             photo=user_info.profile_pic,
             caption=bm.captions(user_captions, user_info.description, bot_url),
             reply_markup=kb.return_user_info_keyboard(display_name, user_info.followers, user_info.videos, None, url)
         )
     except Exception as e:
-        logging.error(f"Error in process_instagram_profile: {e}")
+        logging.exception("Error in process_instagram_profile: url=%s", url)
         await handle_download_error(message, business_id)
 
 
@@ -349,12 +428,19 @@ async def inline_instagram_query(query: types.InlineQuery):
     try:
         await send_analytics(user_id=query.from_user.id, chat_type=query.chat_type,
                              action_name="inline_instagram_video")
+        logging.info(
+            "Inline Instagram request: user_id=%s query=%s",
+            query.from_user.id,
+            query.query,
+        )
 
-        user_captions = await db.get_user_captions(query.from_user.id)
+        user_settings = await db.user_settings(query.from_user.id)
+        user_captions = user_settings["captions"]
         bot_url = f"t.me/{(await bot.get_me()).username}"
 
         url_match = re.match(r"(https?://(www\.)?instagram\.com/\S+)", query.query)
         if not url_match:
+            logging.debug("Inline Instagram query pattern not matched: query=%s", query.query)
             return await query.answer([], cache_time=1, is_personal=True)
 
         url = query.query
@@ -373,6 +459,11 @@ async def inline_instagram_query(query: types.InlineQuery):
                 db_file_id = await db.get_file_id(url)
                 if db_file_id:
                     video_file_id = db_file_id
+                    logging.info(
+                        "Serving cached Instagram inline video: url=%s file_id=%s",
+                        url,
+                        video_file_id,
+                    )
                 else:
                     downloader.download_video(video_info.video_urls[0])
                     video = FSInputFile(video_file_path)
@@ -380,6 +471,11 @@ async def inline_instagram_query(query: types.InlineQuery):
                                                         caption=f"🎥 Instagram Reel Video from {query.from_user.full_name}")
                     video_file_id = sent_message.video.file_id
                     await db.add_file(url, video_file_id, "video")
+                    logging.info(
+                        "Instagram inline video cached: url=%s file_id=%s",
+                        url,
+                        video_file_id,
+                    )
 
                 results.append(
                     InlineQueryResultVideo(
@@ -390,9 +486,15 @@ async def inline_instagram_query(query: types.InlineQuery):
                         title="🎥 Instagram Reel",
                         mime_type="video/mp4",
                         caption=bm.captions(user_captions, video_info.description, bot_url),
-                        reply_markup=kb.return_video_info_keyboard(video_info.views, video_info.likes,
-                                                                   video_info.comments, video_info.shares,
-                                                                   None, url)
+                        reply_markup=kb.return_video_info_keyboard(
+                            video_info.views,
+                            video_info.likes,
+                            video_info.comments,
+                            video_info.shares,
+                            None,
+                            url,
+                            user_settings
+                        )
                     )
                 )
 
@@ -401,8 +503,9 @@ async def inline_instagram_query(query: types.InlineQuery):
             await asyncio.sleep(5)
             try:
                 os.remove(video_file_path)
+                logging.debug("Removed temporary Instagram inline file: path=%s", video_file_path)
             except Exception as e:
-                logging.error(f"Error removing file {video_file_path}: {e}")
+                logging.error("Error removing file: path=%s error=%s", video_file_path, e)
 
             return
 
@@ -417,28 +520,43 @@ async def inline_instagram_query(query: types.InlineQuery):
                     )
                 )
             )
+            logging.info(
+                "Inline Instagram photos requested but unsupported: user_id=%s query=%s",
+                query.from_user.id,
+                query.query,
+            )
             await query.answer(results, cache_time=10)
             return
 
         await query.answer([], cache_time=1, is_personal=True)
     except Exception as e:
-        logging.error(f"Error in inline_instagram_query: {e}")
+        logging.exception("Error processing inline Instagram query: user_id=%s query=%s", query.from_user.id, query.query)
         await query.answer([], cache_time=1, is_personal=True)
 
 
 async def handle_large_file(message, business_id):
     try:
+        logging.warning(
+            "Instagram file too large: user_id=%s chat_id=%s",
+            message.from_user.id,
+            message.chat.id,
+        )
         if business_id is None:
             await message.react([types.ReactionTypeEmoji(emoji="👎")])
         await message.reply(bm.video_too_large())
     except Exception as e:
-        logging.error(f"Error in handle_large_file: {e}")
+        logging.exception("Error in Instagram handle_large_file: user_id=%s", message.from_user.id)
 
 
 async def handle_download_error(message, business_id):
     try:
+        logging.error(
+            "Instagram download error reported: user_id=%s chat_id=%s",
+            message.from_user.id,
+            message.chat.id,
+        )
         if business_id is None:
             await message.react([types.ReactionTypeEmoji(emoji="👎")])
         await message.reply(bm.something_went_wrong())
     except Exception as e:
-        logging.error(f"Error in handle_download_error: {e}")
+        logging.exception("Error in Instagram handle_download_error: user_id=%s", message.from_user.id)

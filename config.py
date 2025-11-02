@@ -23,5 +23,4 @@ BOT_COMMANDS = [
     {'command': 'remove_keyboard', 'description': '🗑️Прибрати клавіатуру / Remove keyboard🗑️'},
 
 ]
-
 ADMINS_UID = [admin_id]

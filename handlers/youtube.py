@@ -39,30 +39,51 @@ def custom_oauth_verifier(verification_url, user_code):
         time.sleep(5)
 
 
-async def download_media(stream: dict, filename: str) -> bool:
-    try:
-        fmt = stream.get("format_id") or stream.get("format")
-        page_url = stream.get("webpage_url")
-        if not fmt or not page_url:
-            logging.error("download_media: missing format_id or webpage_url")
-            return False
+async def download_media(url: str, filename: str, format_candidates: list[str]) -> bool:
+    outtmpl = os.path.join(OUTPUT_DIR, filename)
+    last_error: Exception | None = None
 
-        outtmpl = os.path.join(OUTPUT_DIR, filename)
-        ydl_opts = {
-            'quiet': True,
-            'format': fmt,
-            'outtmpl': outtmpl,
-            'merge_output_format': 'mp4',
-            'oauth': True,
-            'oauth_verifier': custom_oauth_verifier,
-        }
-        # Завантажуємо через сторінку, а не прямою URL
-        await asyncio.to_thread(lambda: YoutubeDL(ydl_opts).download([page_url]))
-        return True
+    for format_expression in format_candidates:
+        try:
+            ydl_opts = {
+                'quiet': True,
+                'format': format_expression,
+                'outtmpl': outtmpl,
+                'merge_output_format': 'mp4',
+                'oauth': True,
+                'oauth_verifier': custom_oauth_verifier,
+            }
+            logging.debug(
+                "Attempting download: url=%s filename=%s format=%s",
+                url,
+                filename,
+                format_expression,
+            )
+            await asyncio.to_thread(lambda: YoutubeDL(ydl_opts).download([url]))
+            logging.info(
+                "Download succeeded: url=%s filename=%s format=%s",
+                url,
+                filename,
+                format_expression,
+            )
+            return True
+        except Exception as e:
+            last_error = e
+            logging.warning(
+                "Download attempt failed: url=%s format=%s error=%s",
+                url,
+                format_expression,
+                e,
+            )
 
-    except Exception as e:
-        logging.error(f"Download error: {e}")
-        return False
+    if last_error:
+        logging.error(
+            "Download failed after trying all formats: url=%s formats=%s error=%s",
+            url,
+            format_candidates,
+            last_error,
+        )
+    return False
 
 
 def get_youtube_video(url):
@@ -71,8 +92,6 @@ def get_youtube_video(url):
             'quiet': True,
             'no_warnings': True,
             'skip_download': True,
-            'oauth': True,
-            'oauth_verifier': custom_oauth_verifier,
         }
         with YoutubeDL(ydl_opts) as ydl:
             return ydl.extract_info(url, download=False)
@@ -83,15 +102,31 @@ def get_youtube_video(url):
 
 def get_video_stream(yt: dict) -> dict | None:
     formats = yt.get("formats", [])
-    vs = [f for f in formats
-          if f.get("vcodec") != "none"
-          and f.get("acodec") != "none"
-          and f.get("ext") == "mp4"]
-    vs.sort(key=lambda x: int(x.get("height", 0)), reverse=True)
-    best = vs[0] if vs else None
-    if best:
+    progressive = [
+        f for f in formats
+        if f.get("vcodec") != "none"
+        and f.get("acodec") != "none"
+        and f.get("ext") == "mp4"
+    ]
+    progressive.sort(key=lambda x: int(x.get("height", 0)), reverse=True)
+    if progressive:
+        best = progressive[0]
         best["webpage_url"] = yt["webpage_url"]
-    return best
+        return best
+
+    video_only = [
+        f for f in formats
+        if f.get("vcodec") != "none"
+        and f.get("acodec") == "none"
+        and f.get("ext") in ("mp4", "webm")
+    ]
+    video_only.sort(key=lambda x: int(x.get("height", 0)), reverse=True)
+    if video_only:
+        best = video_only[0]
+        best["webpage_url"] = yt["webpage_url"]
+        return best
+
+    return None
 
 
 def get_audio_stream(yt: dict) -> dict | None:
@@ -100,7 +135,6 @@ def get_audio_stream(yt: dict) -> dict | None:
         f for f in formats
         if f.get("vcodec") == "none" and f.get("ext") in ("m4a", "mp4")
     ]
-    # Якщо abr=None, то (f.get("abr") or 0) дасть 0
     audio_streams.sort(key=lambda f: float(f.get("abr") or 0), reverse=True)
     best = audio_streams[0] if audio_streams else None
     if best:
@@ -110,7 +144,6 @@ def get_audio_stream(yt: dict) -> dict | None:
 
 async def get_clip_dimensions(file_path: str) -> tuple[None, None] | Any:
     try:
-        # Offload VideoFileClip operations to thread pool
         return await asyncio.to_thread(_get_dimensions, file_path)
     except Exception as e:
         logging.error(f"Error getting video dimensions: {e}")
@@ -124,7 +157,6 @@ def _get_dimensions(file_path: str) -> Tuple[int, int]:
 
 async def get_audio_duration(file_path: str) -> float:
     try:
-        # Offload AudioFileClip operations to thread pool
         return await asyncio.to_thread(_get_audio_duration, file_path)
     except Exception as e:
         logging.error(f"Error getting audio duration: {e}")
@@ -138,7 +170,6 @@ def _get_audio_duration(file_path: str) -> float:
 
 async def safe_remove(file_path: str):
     try:
-        # Offload file removal to thread pool
         await asyncio.to_thread(os.remove, file_path)
     except Exception as e:
         logging.error(f"Error removing file {file_path}: {e}")
@@ -151,11 +182,21 @@ async def handle_download_error(message):
 @router.message(F.text.regexp(r"(https?://(www\.)?(youtube|youtu|youtube-nocookie)\.(com|be)/(?!@)[\S]+)"))
 async def download_video(message: types.Message):
     url = message.text
+    logging.info(
+        "Downloading YouTube video : user_id=%s username=%s url=%s",
+        message.from_user.id,
+        message.from_user.username,
+        url,
+    )
     await send_analytics(user_id=message.from_user.id, chat_type=message.chat.type, action_name="youtube_video")
     try:
         await message.react([types.ReactionTypeEmoji(emoji="👾")])
 
-        # Get YouTube video object - this is a heavy operation so run in thread pool
+        user_settings = await db.user_settings(message.from_user.id)
+        user_captions = user_settings["captions"]
+        bot_data = await bot.get_me()
+        bot_url = "t.me/" + bot_data.username
+
         yt = await asyncio.to_thread(get_youtube_video, url)
         video = await asyncio.to_thread(get_video_stream, yt)
 
@@ -163,12 +204,10 @@ async def download_video(message: types.Message):
             await message.reply(bm.nothing_found())
             return
 
-        # Get video metadata
         views = int(yt.get('view_count', 0))
         likes = int(yt.get('like_count', 0))
 
         size = video.get('filesize_approx', 0) // 1024  # Convert to KB
-
         if size >= MAX_FILE_SIZE:
             await message.reply(bm.video_too_large())
             return
@@ -176,12 +215,15 @@ async def download_video(message: types.Message):
         db_file_id = await db.get_file_id(yt['webpage_url'])
 
         if db_file_id:
+            logging.info(
+                "Serving cached YouTube video: url=%s file_id=%s",
+                yt['webpage_url'],
+                db_file_id,
+            )
             await bot.send_chat_action(message.chat.id, "upload_video")
             await message.answer_video(
                 video=db_file_id,
-                caption=bm.captions(await db.get_user_captions(message.from_user.id), yt['title']
-                                    ,
-                                    f"t.me/{(await bot.get_me()).username}"),
+                caption=bm.captions(user_captions, yt['title'], bot_url),
                 reply_markup=kb.return_video_info_keyboard(
                     views=views,
                     likes=likes,
@@ -189,43 +231,50 @@ async def download_video(message: types.Message):
                     shares=None,
                     music_play_url=None,
                     video_url=yt['webpage_url'],
+                    user_settings=user_settings,
                 ),
                 parse_mode="HTML"
             )
+            return
+
+        name = f"{yt['id']}_youtube_video.mp4"
+        video_file_path = os.path.join(OUTPUT_DIR, name)
+
+        format_candidates = [
+            "best",
+        ]
+
+        if await download_media(yt['webpage_url'], name, format_candidates):
+            width, height = await get_clip_dimensions(video_file_path)
+
+            await bot.send_chat_action(message.chat.id, "upload_video")
+            sent_message = await message.answer_video(
+                video=FSInputFile(video_file_path),
+                width=width,
+                height=height,
+                caption=bm.captions(user_captions, yt['title'], bot_url),
+                reply_markup=kb.return_video_info_keyboard(
+                    views=views,
+                    likes=likes,
+                    comments=None,
+                    shares=None,
+                    music_play_url=None,
+                    video_url=yt['webpage_url'],
+                    user_settings=user_settings,
+                ),
+                parse_mode="HTML"
+            )
+            await db.add_file(yt['webpage_url'], sent_message.video.file_id, "video")
+            logging.info(
+                "YouTube video cached: url=%s file_id=%s",
+                yt['webpage_url'],
+                sent_message.video.file_id,
+            )
+
+            await asyncio.sleep(5)
+            await safe_remove(video_file_path)
         else:
-            name = f"{yt['id']}_youtube_video.mp4"
-            video_file_path = os.path.join(OUTPUT_DIR, name)
-
-            # Download video asynchronously
-            if await download_media(video, name):
-                # Get video dimensions asynchronously
-                width, height = await get_clip_dimensions(video_file_path)
-
-                await bot.send_chat_action(message.chat.id, "upload_video")
-                sent_message = await message.answer_video(
-                    video=FSInputFile(video_file_path),
-                    width=width,
-                    height=height,
-                    caption=bm.captions(await db.get_user_captions(message.from_user.id), yt['title']
-                                        ,
-                                        f"t.me/{(await bot.get_me()).username}"),
-                    reply_markup=kb.return_video_info_keyboard(
-                        views=views,
-                        likes=likes,
-                        comments=None,
-                        shares=None,
-                        music_play_url=None,
-                        video_url=yt['webpage_url'],
-                    ),
-                    parse_mode="HTML"
-                )
-                await db.add_file(yt['webpage_url'], sent_message.video.file_id, "video")
-
-                # Clean up file asynchronously
-                await asyncio.sleep(5)
-                await safe_remove(video_file_path)
-            else:
-                await handle_download_error(message)
+            await handle_download_error(message)
     except Exception as e:
         logging.error(f"Video download error: {e}")
         await handle_download_error(message)
@@ -235,6 +284,12 @@ async def download_video(message: types.Message):
 @router.message(F.text.regexp(r'(https?://)?(music\.)?(youtube|youtu|youtube-nocookie)\.(com|be)/.+'))
 async def download_music(message: types.Message):
     url = message.text
+    logging.info(
+        "Downloading YouTube audio: user_id=%s username=%s url=%s",
+        message.from_user.id,
+        message.from_user.username,
+        url,
+    )
     try:
         await message.react([types.ReactionTypeEmoji(emoji="👾")])
 
@@ -250,7 +305,11 @@ async def download_music(message: types.Message):
         audio_file_path = os.path.join(OUTPUT_DIR, name)
 
         # Download audio asynchronously
-        if await download_media(audio, name):
+        format_candidates = [
+            "bestaudio/best",
+        ]
+
+        if await download_media(yt['webpage_url'], name, format_candidates):
             # Get audio duration asynchronously
             audio_duration = await get_audio_duration(audio_file_path)
 
@@ -280,30 +339,39 @@ async def download_music(message: types.Message):
 async def inline_youtube_query(query: types.InlineQuery):
     try:
         url = query.query
-        # Get YouTube video object - run in thread pool
+        logging.info(
+            "Downloading YouTube Inline: user_id=%s query=%s",
+            query.from_user.id,
+            url,
+        )
         yt = await asyncio.to_thread(get_youtube_video, url)
 
-        # Get video metadata
         views = int(yt.get('view_count', 0))
         likes = int(yt.get('like_count', 0))
 
         await send_analytics(user_id=query.from_user.id, chat_type=query.chat_type, action_name="inline_youtube_shorts")
-        user_captions = await db.get_user_captions(query.from_user.id)
-        bot_url = f"t.me/{(await bot.get_me()).username}"
 
-        # Check if video exists in database first
+        user_settings = await db.user_settings(query.from_user.id)
+        user_captions = user_settings["captions"]
+        bot_data = await bot.get_me()
+        bot_url = "t.me/" + bot_data.username
+
         db_file_id = await db.get_file_id(yt['webpage_url'])
         if db_file_id:
+            logging.info(
+                "Serving cached YouTube inline video: url=%s file_id=%s",
+                yt['webpage_url'],
+                db_file_id,
+            )
             results = [
                 InlineQueryResultVideo(
                     id=f"shorts_{yt['id']}",
                     video_url=db_file_id,
                     thumbnail_url=yt['thumbnail'],
                     description=yt['title'],
-                    title="🎥 YouTube Shorts",
+                    title="🎬 YouTube Shorts",
                     mime_type="video/mp4",
-                    caption=bm.captions(user_captions, yt['title']
-                                        , bot_url),
+                    caption=bm.captions(user_captions, yt['title'], bot_url),
                     reply_markup=kb.return_video_info_keyboard(
                         views=views,
                         likes=likes,
@@ -311,6 +379,7 @@ async def inline_youtube_query(query: types.InlineQuery):
                         shares=None,
                         music_play_url=None,
                         video_url=yt['webpage_url'],
+                        user_settings=user_settings,
                     )
                 )
             ]
@@ -321,10 +390,10 @@ async def inline_youtube_query(query: types.InlineQuery):
             results = [
                 InlineQueryResultArticle(
                     id="not_shorts",
-                    title="❌ Not a Shorts Video",
+                    title="⚠️ Not a Shorts Video",
                     description="Regular YouTube videos are not supported in inline mode due to size limitations.",
                     input_message_content=types.InputTextMessageContent(
-                        message_text="❌ Regular YouTube videos are not supported in inline mode due to size limitations. Please use the bot directly for regular videos."
+                        message_text="⚠️ Regular YouTube videos are not supported in inline mode due to size limitations. Please use the bot directly for regular videos."
                     )
                 )
             ]
@@ -339,29 +408,34 @@ async def inline_youtube_query(query: types.InlineQuery):
         name = f"{yt['id']}_youtube_shorts.mp4"
         video_file_path = os.path.join(OUTPUT_DIR, name)
 
-        # Download video asynchronously
-        if await download_media(video, name):
-            video = FSInputFile(video_file_path)
+        format_candidates = [
+            "best",
+        ]
+
+        if await download_media(yt['webpage_url'], name, format_candidates):
+            video_file = FSInputFile(video_file_path)
             sent_message = await bot.send_video(
                 chat_id=CHANNEL_ID,
-                video=video,
-                caption=f"🎥 YouTube Shorts from {query.from_user.full_name}"
+                video=video_file,
+                caption=f"🎬 YouTube Shorts from {query.from_user.full_name}"
             )
             video_file_id = sent_message.video.file_id
             await db.add_file(yt['webpage_url'], video_file_id, "video")
+            logging.info(
+                "YouTube inline video cached: url=%s file_id=%s",
+                yt['webpage_url'],
+                video_file_id,
+            )
 
             results = [
                 InlineQueryResultVideo(
                     id=f"shorts_{yt['id']}",
                     video_url=video_file_id,
-                    thumbnail_url=yt['thumbnail']
-                    ,
-                    description=yt['title']
-                    ,
-                    title="🎥 YouTube Shorts",
+                    thumbnail_url=yt['thumbnail'],
+                    description=yt['title'],
+                    title="🎬 YouTube Shorts",
                     mime_type="video/mp4",
-                    caption=bm.captions(user_captions, yt['title']
-                                        , bot_url),
+                    caption=bm.captions(user_captions, yt['title'], bot_url),
                     reply_markup=kb.return_video_info_keyboard(
                         views=views,
                         likes=likes,
@@ -369,13 +443,13 @@ async def inline_youtube_query(query: types.InlineQuery):
                         shares=None,
                         music_play_url=None,
                         video_url=yt['webpage_url'],
+                        user_settings=user_settings,
                     )
                 )
             ]
 
             await query.answer(results, cache_time=10)
 
-            # Clean up file asynchronously
             await asyncio.sleep(5)
             await safe_remove(video_file_path)
         else:
