@@ -1,9 +1,11 @@
-import logging
 from datetime import datetime, timedelta
 
 from sqlalchemy import Column, Text, TIMESTAMP, func, select, delete, update, create_engine, Integer, ForeignKey
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
 from sqlalchemy.orm import sessionmaker, declarative_base, relationship
+
+from config import sqlite_path
+from log.logger import logger as logging
 
 Base = declarative_base()
 
@@ -68,7 +70,7 @@ async def run_alembic_migration():
 
 
 class DataBase:
-    def __init__(self, sqlite_path="maxload.db"):
+    def __init__(self):
         # SQLite engine для бота
         self.sqlite_path = sqlite_path
         self.engine = create_async_engine(f"sqlite+aiosqlite:///{self.sqlite_path}", echo=False)
@@ -77,7 +79,7 @@ class DataBase:
     async def init_db(self):
         sync_engine = create_engine(f"sqlite:///{self.sqlite_path}")
         Base.metadata.create_all(sync_engine)
-        logging.info("✅ SQLite таблиці створені / підтверджено існування")
+        logging.info("SQLite tables checked.")
 
         await run_alembic_migration()
 
