@@ -1,14 +1,22 @@
+import os
+import sys
 from logging.config import fileConfig
 
 from alembic import context
 from sqlalchemy import engine_from_config, pool
 
-from services.db import Base  # 🔹 твої моделі
+BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+if BASE_DIR not in sys.path:
+    sys.path.append(BASE_DIR)
+
+from services.db import Base
+
 
 config = context.config
 target_metadata = Base.metadata
 
-fileConfig(config.config_file_name)
+if config.config_file_name:
+    fileConfig(config.config_file_name)
 
 
 def run_migrations_offline():
