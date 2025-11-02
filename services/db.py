@@ -1,9 +1,9 @@
 import logging
 from datetime import datetime, timedelta
 
-from sqlalchemy import Text, TIMESTAMP, func, select, delete, update, create_engine, Integer, ForeignKey
+from sqlalchemy import Column, Text, TIMESTAMP, func, select, delete, update, create_engine, Integer, ForeignKey
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
-from sqlalchemy.orm import sessionmaker, declarative_base, Mapped, mapped_column, relationship
+from sqlalchemy.orm import sessionmaker, declarative_base, relationship
 
 Base = declarative_base()
 
@@ -11,45 +11,45 @@ Base = declarative_base()
 class DownloadedFile(Base):
     __tablename__ = "downloaded_files"
 
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    url: Mapped[str] = mapped_column(Text, unique=True, nullable=False)
-    file_id: Mapped[str] = mapped_column(Text, nullable=False)
-    date_added: Mapped[str] = mapped_column(TIMESTAMP(timezone=True), server_default=func.now())
-    file_type: Mapped[str] = mapped_column(Text, nullable=True)
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    url = Column(Text, unique=True, nullable=False)
+    file_id = Column(Text, nullable=False)
+    date_added = Column(TIMESTAMP(timezone=True), server_default=func.now())
+    file_type = Column(Text, nullable=True)
 
 
 class User(Base):
     __tablename__ = "users"
 
-    user_id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    user_name: Mapped[str] = mapped_column(Text, nullable=True)
-    user_username: Mapped[str] = mapped_column(Text, nullable=True)
-    chat_type: Mapped[str] = mapped_column(Text, nullable=True)
-    language: Mapped[str] = mapped_column(Text, nullable=True)
-    status: Mapped[str] = mapped_column(Text, nullable=True)
+    user_id = Column(Integer, primary_key=True, autoincrement=True)
+    user_name = Column(Text, nullable=True)
+    user_username = Column(Text, nullable=True)
+    chat_type = Column(Text, nullable=True)
+    language = Column(Text, nullable=True)
+    status = Column(Text, nullable=True)
 
-    settings: Mapped["Settings"] = relationship("Settings", back_populates="user", uselist=False)
+    settings = relationship("Settings", back_populates="user", uselist=False)
 
 
 class AnalyticsEvent(Base):
     __tablename__ = "analytics_events"
 
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    user_id: Mapped[int] = mapped_column(Integer, nullable=False)
-    chat_type: Mapped[str] = mapped_column(Text, nullable=True)
-    action_name: Mapped[str] = mapped_column(Text, nullable=False)
-    created_at: Mapped[str] = mapped_column(TIMESTAMP(timezone=True), server_default=func.now())
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(Integer, nullable=False)
+    chat_type = Column(Text, nullable=True)
+    action_name = Column(Text, nullable=False)
+    created_at = Column(TIMESTAMP(timezone=True), server_default=func.now())
 
 
 class Settings(Base):
     __tablename__ = "settings"
 
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    user_id: Mapped[int] = mapped_column(ForeignKey("users.user_id"))
-    captions: Mapped[str] = mapped_column(Text, default="off", nullable=False)
-    delete_message: Mapped[str] = mapped_column(Text, default="off", nullable=False)
-    info_buttons: Mapped[str] = mapped_column(Text, default="off", nullable=False)
-    url_button: Mapped[str] = mapped_column(Text, default="off", nullable=False)
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(ForeignKey("users.user_id"))
+    captions = Column(Text, default="off", nullable=False)
+    delete_message = Column(Text, default="off", nullable=False)
+    info_buttons = Column(Text, default="off", nullable=False)
+    url_button = Column(Text, default="off", nullable=False)
 
     user = relationship("User", back_populates="settings")
 
