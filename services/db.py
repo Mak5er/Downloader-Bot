@@ -55,12 +55,15 @@ class Settings(Base):
 
 
 async def run_alembic_migration():
-    import subprocess, os
-    # 1️⃣ створюємо ревізію, якщо змінились моделі
+    import os
+    import subprocess
+
+    versions_dir = os.path.join(os.path.dirname(__file__), "alembic", "versions")
+    os.makedirs(versions_dir, exist_ok=True)
+
     subprocess.run([
         "alembic", "revision", "--autogenerate", "-m", "auto update"
     ], cwd=os.path.dirname(__file__), stdout=subprocess.DEVNULL)
-    # 2️⃣ оновлюємо базу до останньої ревізії
     subprocess.run(["alembic", "upgrade", "head"], cwd=os.path.dirname(__file__))
 
 
