@@ -5,16 +5,22 @@ import re
 from urllib.parse import urlsplit
 
 import requests
-from aiogram import types, Router, F
+from aiogram import Router, F
 from aiogram.types import FSInputFile
 from aiogram.utils.media_group import MediaGroupBuilder
 
+import keyboards as kb
 import messages as bm
 from config import OUTPUT_DIR
-from handlers.utils import get_bot_url, maybe_delete_user_message, remove_file, send_chat_action_if_needed
-import keyboards as kb
-from main import bot, db, send_analytics
+from handlers.utils import (
+    get_bot_url,
+    maybe_delete_user_message,
+    react_to_message,
+    remove_file,
+    send_chat_action_if_needed,
+)
 from log.logger import logger as logging
+from main import bot, db, send_analytics
 
 MAX_FILE_SIZE = 500 * 1024 * 1024
 
@@ -115,13 +121,15 @@ async def reply_media(message, tweet_id, tweet_media, bot_url, business_id, user
             await message.answer_photo(
                 photo=FSInputFile(last_photo),
                 caption=bm.captions(user_captions, post_caption, bot_url),
-                reply_markup=kb.return_video_info_keyboard(None, likes, comments, retweets, None, post_url, user_settings)
+                reply_markup=kb.return_video_info_keyboard(None, likes, comments, retweets, None, post_url,
+                                                           user_settings)
             )
         elif all_files_photo:
             await message.answer_photo(
                 photo=FSInputFile(all_files_photo[0]),
                 caption=bm.captions(user_captions, post_caption, bot_url),
-                reply_markup=kb.return_video_info_keyboard(None, likes, comments, retweets, None, post_url, user_settings)
+                reply_markup=kb.return_video_info_keyboard(None, likes, comments, retweets, None, post_url,
+                                                           user_settings)
             )
 
         if len(all_files_video) > 1:
@@ -133,13 +141,15 @@ async def reply_media(message, tweet_id, tweet_media, bot_url, business_id, user
             await message.answer_video(
                 video=FSInputFile(last_video),
                 caption=bm.captions(user_captions, post_caption, bot_url),
-                reply_markup=kb.return_video_info_keyboard(None, likes, comments, retweets, None, post_url, user_settings)
+                reply_markup=kb.return_video_info_keyboard(None, likes, comments, retweets, None, post_url,
+                                                           user_settings)
             )
         elif all_files_video:
             await message.answer_video(
                 video=FSInputFile(all_files_video[0]),
                 caption=bm.captions(user_captions, post_caption, bot_url),
-                reply_markup=kb.return_video_info_keyboard(None, likes, comments, retweets, None, post_url, user_settings)
+                reply_markup=kb.return_video_info_keyboard(None, likes, comments, retweets, None, post_url,
+                                                           user_settings)
             )
 
         logging.info(
@@ -162,10 +172,10 @@ async def reply_media(message, tweet_id, tweet_media, bot_url, business_id, user
             message.from_user.id,
             e,
         )
-        if business_id is None:
-            react = types.ReactionTypeEmoji(emoji="👎")
-            await message.react([react])
+        await react_to_message(message, "👎", business_id=business_id)
         await message.reply(bm.something_went_wrong())
+
+
 @router.message(F.text.regexp(r"(https?://(www\.)?(twitter|x)\.com/\S+|https?://t\.co/\S+)"))
 @router.business_message(F.text.regexp(r"(https?://(www\.)?(twitter|x)\.com/\S+|https?://t\.co/\S+)"))
 async def handle_tweet_links(message):
@@ -179,9 +189,7 @@ async def handle_tweet_links(message):
         message.text,
     )
 
-    if business_id is None:
-        react = types.ReactionTypeEmoji(emoji="??")
-        await message.react([react])
+    await react_to_message(message, "👾", business_id=business_id)
 
     bot_url = await get_bot_url(bot)
     user_settings = await db.user_settings(message.from_user.id)
@@ -202,13 +210,10 @@ async def handle_tweet_links(message):
                     await message.answer(bm.something_went_wrong())
         else:
             logging.info("No tweet links found: user_id=%s", message.from_user.id)
-            if business_id is None:
-                react = types.ReactionTypeEmoji(emoji="??")
-                await message.react([react])
+            await react_to_message(message, "👎", business_id=business_id)
             await message.answer(bm.nothing_found())
     except Exception as e:
         logging.exception("Error handling tweet links: user_id=%s error=%s", message.from_user.id, e)
         await message.answer(bm.something_went_wrong())
 
     await maybe_delete_user_message(message, user_settings.get("delete_message"))
-

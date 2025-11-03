@@ -42,6 +42,7 @@ async def send_welcome(message: types.Message):
 async def handle_bot_membership(update: ChatMemberUpdated):
     chat = update.chat
     new_status = update.new_chat_member.status
+    old_status = getattr(update.old_chat_member, "status", None)
 
     if new_status in {ChatMemberStatus.MEMBER, ChatMemberStatus.ADMINISTRATOR}:
         chat_id = chat.id
@@ -60,10 +61,22 @@ async def handle_bot_membership(update: ChatMemberUpdated):
         )
         chat_title = chat.title or chat_name
 
-        await bot.send_message(
-            chat_id=chat_id,
-            text=bm.join_group(chat_title),
-            parse_mode="HTML")
+        became_member = old_status not in {ChatMemberStatus.MEMBER, ChatMemberStatus.ADMINISTRATOR}
+        became_admin = new_status == ChatMemberStatus.ADMINISTRATOR and old_status != ChatMemberStatus.ADMINISTRATOR
+
+        if became_member:
+            await bot.send_message(
+                chat_id=chat_id,
+                text=bm.join_group(chat_title),
+                parse_mode="HTML",
+            )
+
+        if became_admin:
+            await bot.send_message(
+                chat_id=chat_id,
+                text=bm.admin_rights_granted(chat_title),
+                parse_mode="HTML",
+            )
 
     elif new_status in {ChatMemberStatus.KICKED, ChatMemberStatus.LEFT, ChatMemberStatus.RESTRICTED}:
         await db.set_inactive(update.chat.id)

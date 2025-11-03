@@ -20,7 +20,10 @@ from config import OUTPUT_DIR, CHANNEL_ID
 from handlers.user import update_info
 from handlers.utils import (
     get_bot_url,
+    handle_download_error,
+    handle_video_too_large,
     maybe_delete_user_message,
+    react_to_message,
     remove_file,
     send_chat_action_if_needed,
 )
@@ -54,6 +57,7 @@ def process_tiktok_url(text: str) -> str:
 
 def get_video_id_from_url(url: str) -> str:
     return url.split('/')[-1].split('?')[0]
+
 
 async def get_user_settings(user_id):
     return await db.user_settings(user_id)
@@ -254,8 +258,7 @@ async def process_tiktok(message: types.Message):
 
         user_settings = await get_user_settings(message.from_user.id)
 
-        if business_id is None:
-            await message.react([types.ReactionTypeEmoji(emoji="👾")])
+        await react_to_message(message, "👾", business_id=business_id)
 
         logging.debug(
             "TikTok content classification: has_images=%s is_profile=%s",
@@ -270,10 +273,7 @@ async def process_tiktok(message: types.Message):
         elif "@" in message.text:
             await process_tiktok_profile(message, message.text, bot_url, user_settings)
         else:
-            if business_id is None:
-                await message.react([types.ReactionTypeEmoji(emoji="👎")])
-
-            await message.reply(bm.something_went_wrong())
+            await handle_download_error(message, business_id=business_id)
 
     except Exception as e:
         logging.exception(
@@ -282,7 +282,7 @@ async def process_tiktok(message: types.Message):
             message.text,
             e,
         )
-        await message.reply(bm.something_went_wrong())
+        await handle_download_error(message)
     finally:
         await update_info(message)
 
@@ -297,7 +297,7 @@ async def process_tiktok_video(message: types.Message, data: dict, bot_url: str,
             message.from_user.id,
             list(data.keys()),
         )
-        await handle_download_error(message, business_id)
+        await handle_download_error(message, business_id=business_id)
         return
 
     timestamp = datetime.datetime.now().strftime("%Y%m%d%H%M%S")
@@ -323,7 +323,7 @@ async def process_tiktok_video(message: types.Message, data: dict, bot_url: str,
             ),
             parse_mode="HTML"
         )
-        await maybe_delete_user_message(message, user_settings.get("delete_message"))
+        await maybe_delete_user_message(message, user_settings["delete_message"])
         return
 
     if await downloader.download_video(info.id):
@@ -349,7 +349,7 @@ async def process_tiktok_video(message: types.Message, data: dict, bot_url: str,
                 ),
                 parse_mode="HTML"
             )
-            await maybe_delete_user_message(message, user_settings.get("delete_message"))
+            await maybe_delete_user_message(message, user_settings["delete_message"])
             try:
                 await db.add_file(db_video_url, sent.video.file_id, "video")
                 logging.info(
@@ -366,12 +366,12 @@ async def process_tiktok_video(message: types.Message, data: dict, bot_url: str,
                 db_video_url,
                 e,
             )
-            await handle_download_error(message, business_id)
+            await handle_download_error(message, business_id=business_id)
         finally:
             await remove_file(path)
             logging.debug("Removed temporary TikTok video file: path=%s", path)
     else:
-        await handle_download_error(message, business_id)
+        await handle_download_error(message, business_id=business_id)
 
 
 async def process_tiktok_photos(message: types.Message, data: dict, bot_url: str, user_settings: list,
@@ -385,7 +385,7 @@ async def process_tiktok_photos(message: types.Message, data: dict, bot_url: str
             message.from_user.id,
             video_url,
         )
-        await handle_download_error(message, business_id)
+        await handle_download_error(message, business_id=business_id)
         return
     logging.info(
         "Sending TikTok photo set: user_id=%s url=%s image_count=%s",
@@ -412,7 +412,7 @@ async def process_tiktok_photos(message: types.Message, data: dict, bot_url: str
             info.shares, info.music_play_url, video_url, user_settings
         )
     )
-    await maybe_delete_user_message(message, user_settings.get("delete_message"))
+    await maybe_delete_user_message(message, user_settings["delete_message"])
 
 
 async def process_tiktok_profile(message: types.Message, full_url: str, bot_url: str, user_captions: list):
@@ -452,20 +452,7 @@ async def handle_large_file(message, business_id):
         message.from_user.id,
         message.chat.id,
     )
-    if business_id is None:
-        await message.react([types.ReactionTypeEmoji(emoji="👎")])
-    await message.reply(bm.video_too_large())
-
-
-async def handle_download_error(message, business_id):
-    logging.error(
-        "TikTok download error reported to user: user_id=%s chat_id=%s",
-        message.from_user.id,
-        message.chat.id,
-    )
-    if business_id is None:
-        await message.react([types.ReactionTypeEmoji(emoji="👎")])
-    await message.reply(bm.something_went_wrong())
+    await handle_video_too_large(message, business_id=business_id)
 
 
 @router.inline_query(F.query.regexp(r"(https?://(www\.|vm\.|vt\.|vn\.)?tiktok\.com/\S+)"))

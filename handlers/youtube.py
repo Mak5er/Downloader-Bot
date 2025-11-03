@@ -14,7 +14,14 @@ import keyboards as kb
 import messages as bm
 from config import OUTPUT_DIR, BOT_TOKEN, admin_id, CHANNEL_ID
 from handlers.user import update_info
-from handlers.utils import get_bot_url, maybe_delete_user_message, remove_file
+from handlers.utils import (
+    get_bot_url,
+    handle_download_error,
+    handle_video_too_large,
+    maybe_delete_user_message,
+    react_to_message,
+    remove_file,
+)
 from log.logger import logger as logging
 from main import bot, db, send_analytics
 
@@ -106,8 +113,8 @@ def get_video_stream(yt: dict) -> dict | None:
     progressive = [
         f for f in formats
         if f.get("vcodec") != "none"
-        and f.get("acodec") != "none"
-        and f.get("ext") == "mp4"
+           and f.get("acodec") != "none"
+           and f.get("ext") == "mp4"
     ]
     progressive.sort(key=lambda x: int(x.get("height", 0)), reverse=True)
     if progressive:
@@ -118,8 +125,8 @@ def get_video_stream(yt: dict) -> dict | None:
     video_only = [
         f for f in formats
         if f.get("vcodec") != "none"
-        and f.get("acodec") == "none"
-        and f.get("ext") in ("mp4", "webm")
+           and f.get("acodec") == "none"
+           and f.get("ext") in ("mp4", "webm")
     ]
     video_only.sort(key=lambda x: int(x.get("height", 0)), reverse=True)
     if video_only:
@@ -169,10 +176,6 @@ def _get_audio_duration(file_path: str) -> float:
         return clip.duration
 
 
-async def handle_download_error(message):
-    await message.react([types.ReactionTypeEmoji(emoji="👎")])
-    await message.reply(bm.something_went_wrong())
-
 @router.message(F.text.regexp(r"(https?://(www\.)?(youtube|youtu|youtube-nocookie)\.(com|be)/(?!@)[\S]+)"))
 async def download_video(message: types.Message):
     url = message.text
@@ -184,10 +187,9 @@ async def download_video(message: types.Message):
     )
     await send_analytics(user_id=message.from_user.id, chat_type=message.chat.type, action_name="youtube_video")
     try:
-        await message.react([types.ReactionTypeEmoji(emoji="👾")])
+        await react_to_message(message, "👾", skip_if_business=False)
 
         user_settings = await db.user_settings(message.from_user.id)
-        bot_url = await get_bot_url(bot)
         user_captions = user_settings["captions"]
         bot_url = await get_bot_url(bot)
 
@@ -203,7 +205,7 @@ async def download_video(message: types.Message):
 
         size = video.get('filesize_approx', 0) // 1024  # Convert to KB
         if size >= MAX_FILE_SIZE:
-            await message.reply(bm.video_too_large())
+            await handle_video_too_large(message, skip_if_business=False)
             return
 
         db_file_id = await db.get_file_id(yt['webpage_url'])
@@ -270,10 +272,10 @@ async def download_video(message: types.Message):
             await asyncio.sleep(5)
             await remove_file(video_file_path)
         else:
-            await handle_download_error(message)
+            await handle_download_error(message, skip_if_business=False)
     except Exception as e:
         logging.error(f"Video download error: {e}")
-        await handle_download_error(message)
+        await handle_download_error(message, skip_if_business=False)
     await update_info(message)
 
 
@@ -287,8 +289,9 @@ async def download_music(message: types.Message):
         url,
     )
     try:
-        await message.react([types.ReactionTypeEmoji(emoji="👾")])
+        await react_to_message(message, "👾", skip_if_business=False)
         user_settings = await db.user_settings(message.from_user.id)
+        bot_url = await get_bot_url(bot)
 
         # Get YouTube audio object - run in thread pool
         yt = await asyncio.to_thread(get_youtube_video, url)
@@ -304,6 +307,7 @@ async def download_music(message: types.Message):
         # Download audio asynchronously
         format_candidates = [
             "bestaudio/best",
+            'best'
         ]
 
         if await download_media(yt['webpage_url'], name, format_candidates):
@@ -326,10 +330,10 @@ async def download_music(message: types.Message):
             await asyncio.sleep(5)
             await remove_file(audio_file_path)
         else:
-            await handle_download_error(message)
+            await handle_download_error(message, skip_if_business=False)
     except Exception as e:
         logging.error(f"Audio download error: {e}")
-        await handle_download_error(message)
+        await handle_download_error(message, skip_if_business=False)
     await update_info(message)
 
 

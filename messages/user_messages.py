@@ -59,6 +59,13 @@ def join_group(chat_title: str) -> str:
     ).format(chat_title=chat_title)
 
 
+def admin_rights_granted(chat_title: str) -> str:
+    return (
+        "Thanks for granting admin rights in <b>{chat_title}</b> 🌸\n"
+        "💻 I'll keep downloads running smoothly."
+    ).format(chat_title=chat_title)
+
+
 def something_went_wrong():
     return "Something went wrong :(\nPlease try again later."
 
