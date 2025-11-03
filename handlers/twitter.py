@@ -58,15 +58,92 @@ def scrape_media(tweet_id):
 
 
 async def download_media(media_url, file_path):
-    try:
+    def _download():
         response = requests.get(media_url, stream=True)
         response.raise_for_status()
         with open(file_path, 'wb') as file:
             for chunk in response.iter_content(chunk_size=8192):
                 file.write(chunk)
+
+    try:
+        await asyncio.to_thread(_download)
     except Exception as e:
         logging.error("Failed to download media: url=%s error=%s", media_url, e)
         raise
+
+
+async def _collect_media_files(tweet_id, tweet_media, tweet_dir):
+    photos: list[str] = []
+    videos: list[str] = []
+
+    for media in tweet_media.get('media_extended', []):
+        media_url = media['url']
+        media_type = media['type']
+        file_name = os.path.join(tweet_dir, os.path.basename(urlsplit(media_url).path))
+
+        logging.debug(
+            "Downloading tweet media: tweet_id=%s type=%s url=%s",
+            tweet_id,
+            media_type,
+            media_url,
+        )
+        await download_media(media_url, file_name)
+
+        if media_type == 'image':
+            photos.append(file_name)
+        elif media_type in ('video', 'gif'):
+            videos.append(file_name)
+
+    return photos, videos
+
+
+async def _send_photo_responses(message, photos, caption, keyboard):
+    if not photos:
+        return
+
+    if len(photos) > 1:
+        media_group = MediaGroupBuilder()
+        for file_path in photos[:-1]:
+            media_group.add_photo(media=FSInputFile(file_path))
+        await message.answer_media_group(media_group.build())
+        photos = [photos[-1]]
+
+    await message.answer_photo(
+        photo=FSInputFile(photos[0]),
+        caption=caption,
+        reply_markup=keyboard,
+    )
+
+
+async def _send_video_responses(message, videos, caption, keyboard):
+    if not videos:
+        return
+
+    if len(videos) > 1:
+        media_group = MediaGroupBuilder()
+        for file_path in videos[:-1]:
+            media_group.add_video(media=FSInputFile(file_path))
+        await message.answer_media_group(media_group.build())
+        videos = [videos[-1]]
+
+    await message.answer_video(
+        video=FSInputFile(videos[0]),
+        caption=caption,
+        reply_markup=keyboard,
+    )
+
+
+async def _cleanup_tweet_dir(tweet_dir):
+    try:
+        for root, _dirs, files in os.walk(tweet_dir):
+            for file in files:
+                await remove_file(os.path.join(root, file))
+        await asyncio.to_thread(os.rmdir, tweet_dir)
+        logging.debug("Cleaned tweet temp directory: path=%s", tweet_dir)
+    except FileNotFoundError:
+        pass
+    except Exception as exc:
+        logging.debug("Failed to cleanup tweet directory: path=%s error=%s", tweet_dir, exc)
 
 
 async def reply_media(message, tweet_id, tweet_media, bot_url, business_id, user_settings):
@@ -88,82 +165,26 @@ async def reply_media(message, tweet_id, tweet_media, bot_url, business_id, user
     retweets = tweet_media['retweets']
     user_captions = user_settings["captions"]
 
-    all_files_photo = []
-    all_files_video = []
-
     try:
-        for media in tweet_media.get('media_extended', []):
-            media_url = media['url']
-            media_type = media['type']
-            file_name = os.path.join(tweet_dir, os.path.basename(urlsplit(media_url).path))
-
-            logging.debug("Downloading tweet media: tweet_id=%s type=%s url=%s", tweet_id, media_type, media_url)
-            await download_media(media_url, file_name)
-
-            if media_type == 'image':
-                all_files_photo.append(file_name)
-            elif media_type in ('video', 'gif'):
-                all_files_video.append(file_name)
-
+        photos, videos = await _collect_media_files(tweet_id, tweet_media, tweet_dir)
         logging.info(
             "Tweet media fetched: tweet_id=%s photos=%s videos=%s",
             tweet_id,
-            len(all_files_photo),
-            len(all_files_video),
+            len(photos),
+            len(videos),
         )
 
-        if len(all_files_photo) > 1:
-            media_group = MediaGroupBuilder()
-            for file_path in all_files_photo[:-1]:
-                media_group.add_photo(media=FSInputFile(file_path))
-            await message.answer_media_group(media_group.build())
-            last_photo = all_files_photo[-1]
-            await message.answer_photo(
-                photo=FSInputFile(last_photo),
-                caption=bm.captions(user_captions, post_caption, bot_url),
-                reply_markup=kb.return_video_info_keyboard(None, likes, comments, retweets, None, post_url,
-                                                           user_settings)
-            )
-        elif all_files_photo:
-            await message.answer_photo(
-                photo=FSInputFile(all_files_photo[0]),
-                caption=bm.captions(user_captions, post_caption, bot_url),
-                reply_markup=kb.return_video_info_keyboard(None, likes, comments, retweets, None, post_url,
-                                                           user_settings)
-            )
+        caption = bm.captions(user_captions, post_caption, bot_url)
+        keyboard = kb.return_video_info_keyboard(None, likes, comments, retweets, None, post_url, user_settings)
 
-        if len(all_files_video) > 1:
-            media_group = MediaGroupBuilder()
-            for file_path in all_files_video[:-1]:
-                media_group.add_video(media=FSInputFile(file_path))
-            await message.answer_media_group(media_group.build())
-            last_video = all_files_video[-1]
-            await message.answer_video(
-                video=FSInputFile(last_video),
-                caption=bm.captions(user_captions, post_caption, bot_url),
-                reply_markup=kb.return_video_info_keyboard(None, likes, comments, retweets, None, post_url,
-                                                           user_settings)
-            )
-        elif all_files_video:
-            await message.answer_video(
-                video=FSInputFile(all_files_video[0]),
-                caption=bm.captions(user_captions, post_caption, bot_url),
-                reply_markup=kb.return_video_info_keyboard(None, likes, comments, retweets, None, post_url,
-                                                           user_settings)
-            )
+        await _send_photo_responses(message, photos, caption, keyboard)
+        await _send_video_responses(message, videos, caption, keyboard)
 
         logging.info(
             "Tweet media delivered: user_id=%s tweet_id=%s",
             message.from_user.id,
             tweet_id,
         )
-        await asyncio.sleep(5)
-
-        for root, _dirs, files in os.walk(tweet_dir):
-            for file in files:
-                await remove_file(os.path.join(root, file))
-        await asyncio.to_thread(os.rmdir, tweet_dir)
-        logging.debug("Cleaned tweet temp directory: path=%s", tweet_dir)
 
     except Exception as e:
         logging.exception(
@@ -174,6 +195,8 @@ async def reply_media(message, tweet_id, tweet_media, bot_url, business_id, user
         )
         await react_to_message(message, "👎", business_id=business_id)
         await message.reply(bm.something_went_wrong())
+    finally:
+        asyncio.create_task(_cleanup_tweet_dir(tweet_dir))
 
 
 @router.message(F.text.regexp(r"(https?://(www\.)?(twitter|x)\.com/\S+|https?://t\.co/\S+)"))
