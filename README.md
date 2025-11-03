@@ -31,7 +31,6 @@ Set up the necessary configuration by creating a  `.env`  file and defining the 
 Example  `.env`  file:
 
     BOT_TOKEN = TELEGRAM_BOT_TOKEN
-    db_auth = DATABASE_CONNECT_URL
     admin_id = BOT_ADMIN_ID
     custom_api_url = YOUR_CUSTOM_TELEGRAM_API_URL
     INSTAGRAM_RAPID_API_HOST = INSTAGRAM_RAPID_API_HOST
