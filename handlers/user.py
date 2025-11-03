@@ -162,6 +162,10 @@ def create_and_save_chart(data, period):
     filename = datetime.datetime.now().strftime("%Y_%m_%d_%H_%M_%S") + "_chart.png"
 
     series = _prepare_series(data)
+    if not series:
+        now = datetime.datetime.now()
+        series = [(now, 0)]
+
     dates = [dt for dt, _ in series]
     counts = [count for _, count in series]
 
@@ -182,19 +186,35 @@ def create_and_save_chart(data, period):
             all_months = all_months[-12:]
         dates = [datetime.datetime.strptime(month, "%Y-%m") for month in all_months]
         counts = [monthly_data[month] for month in all_months]
-    else:
-        dates = list(data.keys())
-        counts = list(data.values())
 
     plt.style.use('dark_background')
-    fig, ax = plt.subplots(figsize=(10, 5), facecolor='#2E2E2E')
+    fig, ax = plt.subplots(figsize=(10, 5), facecolor='#0E1117')
+    ax.set_facecolor('#0E1117')
 
-    ax.plot(dates, counts, marker='o', color='#4CAF50', markersize=8, linewidth=2, label='Downloads')
-    ax.fill_between(dates, counts, color='#4CAF50', alpha=0.3)
+    line_color = '#6C5DD3'
+    fill_color = '#6C5DD3'
+    highlight_color = '#FF9F43'
 
-    ax.set_title('Statistics of Downloaded Videos', fontsize=16, color='#FFFFFF')
-    ax.set_xlabel('Date', fontsize=12, color='#B0B0B0')
-    ax.set_ylabel('Number of Downloads', fontsize=12, color='#B0B0B0')
+    ax.plot(dates, counts, color=line_color, linewidth=2.5, label='Downloads')
+    ax.fill_between(dates, counts, color=fill_color, alpha=0.25)
+    ax.scatter(dates, counts, color=line_color, s=45, zorder=3)
+
+    if dates and counts:
+        ax.scatter(dates[-1], counts[-1], color=highlight_color, s=80, zorder=4)
+        ax.annotate(
+            f"{counts[-1]}",
+            (dates[-1], counts[-1]),
+            textcoords="offset points",
+            xytext=(0, 10),
+            ha='center',
+            color=highlight_color,
+            fontsize=10,
+            fontweight='bold'
+        )
+
+    ax.set_title('Downloads Overview', fontsize=18, color='#F9FAFC', pad=16)
+    ax.set_xlabel('Date', fontsize=12, color='#A1A5B7')
+    ax.set_ylabel('Downloads', fontsize=12, color='#A1A5B7')
 
     if period == 'Week':
         ax.xaxis.set_major_locator(MaxNLocator(7))
@@ -208,16 +228,18 @@ def create_and_save_chart(data, period):
         ax.xaxis.set_major_locator(mdates.MonthLocator())
         ax.xaxis.set_major_formatter(mdates.DateFormatter('%Y-%m'))
 
-    ax.grid(True, color='#444444', linestyle='--', linewidth=0.5)
-    ax.spines['bottom'].set_color('#FFFFFF')
-    ax.spines['left'].set_color('#FFFFFF')
-    ax.tick_params(axis='x', colors='#B0B0B0')
-    ax.tick_params(axis='y', colors='#B0B0B0')
+    ax.grid(color='#1E2233', linestyle='--', linewidth=0.8, alpha=0.6)
+    for spine in ax.spines.values():
+        spine.set_color('#2C3142')
+    ax.tick_params(axis='x', colors='#D0D3F9')
+    ax.tick_params(axis='y', colors='#D0D3F9')
+    ax.set_ylim(bottom=0)
 
     fig.savefig(filename, bbox_inches='tight', facecolor=fig.get_facecolor())
     plt.close(fig)
 
     return filename
+
 
 
 def build_stats_caption(period: str, data: dict[str, int]) -> str:
@@ -230,14 +252,22 @@ def build_stats_caption(period: str, data: dict[str, int]) -> str:
     days_tracked = len(data)
     top_day, top_value = max(data.items(), key=lambda item: item[1])
     average = total / days_tracked if days_tracked else 0
+    today_key = datetime.datetime.now().strftime("%Y-%m-%d")
+    today_downloads = data.get(today_key, 0)
 
     summary_lines = [
         f"📊 Total downloads: <b>{total}</b>",
+        f"🕓 Today: <b>{today_downloads}</b>",
+        f"📅 Days tracked: <b>{days_tracked}</b>",
         f"⭐ Peak day: <b>{top_day}</b> — <b>{top_value}</b>",
         f"⚖️ Average per day: <b>{average:.1f}</b>",
     ]
 
     return f"{header}\n\n" + "\n".join(summary_lines)
+
+
+
+
 
 
 @router.message(Command("stats"))
