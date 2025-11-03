@@ -96,6 +96,37 @@ class DataBase:
                 )
                 session.add(user)
 
+    async def upsert_chat(self, user_id, user_name, user_username, chat_type, language=None, status="active"):
+        async with self.SessionLocal() as session:
+            async with session.begin():
+                existing = await session.execute(select(User).where(User.user_id == user_id))
+                record = existing.scalar_one_or_none()
+                values = {
+                    "user_name": user_name,
+                    "user_username": user_username,
+                    "chat_type": chat_type,
+                    "language": language,
+                    "status": status,
+                }
+
+                if record:
+                    await session.execute(
+                        update(User)
+                        .where(User.user_id == user_id)
+                        .values(**values)
+                    )
+                else:
+                    session.add(
+                        User(
+                            user_id=user_id,
+                            user_name=user_name,
+                            user_username=user_username,
+                            chat_type=chat_type,
+                            language=language,
+                            status=status,
+                        )
+                    )
+
     async def delete_user(self, user_id):
         async with self.SessionLocal() as session:
             async with session.begin():
@@ -114,6 +145,24 @@ class DataBase:
     async def inactive_user_count(self):
         async with self.SessionLocal() as session:
             result = await session.execute(select(func.count()).select_from(User).where(User.status != "active"))
+            return result.scalar()
+
+    async def private_chat_count(self):
+        async with self.SessionLocal() as session:
+            result = await session.execute(
+                select(func.count())
+                .select_from(User)
+                .where(User.chat_type == "private")
+            )
+            return result.scalar()
+
+    async def group_chat_count(self):
+        async with self.SessionLocal() as session:
+            result = await session.execute(
+                select(func.count())
+                .select_from(User)
+                .where(User.chat_type != "private", User.chat_type.isnot(None))
+            )
             return result.scalar()
 
     async def all_users(self):

@@ -47,8 +47,8 @@ def return_settings_keyboard():
 def admin_keyboard():
     buttons = [
         [InlineKeyboardButton(text="👥 Check Active Users", callback_data="check_active_users")],
+        [InlineKeyboardButton(text="✉️ Message by Chat ID", callback_data="message_chat_id")],
         [InlineKeyboardButton(text="📬 Mailing", callback_data="send_to_all")],
-        [InlineKeyboardButton(text="👤 Control User", callback_data="control_user")],
         [
             InlineKeyboardButton(text="📄 View Log", callback_data="download_log"),
             InlineKeyboardButton(text="🗑️ Delete Log", callback_data="delete_log"),

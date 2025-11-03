@@ -34,6 +34,8 @@ class Admin(StatesGroup):
     ban_reason = State()
     feedback_answer = State()
     write_message = State()
+    write_chat_id = State()
+    write_chat_text = State()
 
 
 @router.message(Command("admin"), IsBotAdmin())
@@ -42,11 +44,20 @@ async def admin(message: types.Message):
 
     if message.chat.type == 'private':
         user_count = await db.user_count()
+        private_chat_count = await db.private_chat_count()
+        group_chat_count = await db.group_chat_count()
         active_user_count = await db.active_user_count()
         inactive_user_count = await db.inactive_user_count()
 
         await message.answer(
-            text=bm.admin_panel(user_count, active_user_count, inactive_user_count), reply_markup=kb.admin_keyboard(),
+            text=bm.admin_panel(
+                user_count,
+                private_chat_count,
+                group_chat_count,
+                active_user_count,
+                inactive_user_count,
+            ),
+            reply_markup=kb.admin_keyboard(),
             parse_mode='HTML')
 
     else:
@@ -148,6 +159,111 @@ async def check_active_users(call: types.CallbackQuery):
     )
 
 
+@router.callback_query(F.data == 'message_chat_id')
+async def message_chat_id(call: types.CallbackQuery, state: FSMContext):
+    await call.answer()
+    await bot.send_chat_action(call.message.chat.id, "typing")
+    await call.message.answer(
+        bm.enter_chat_id(),
+        reply_markup=kb.cancel_keyboard()
+    )
+    await state.set_state(Admin.write_chat_id)
+
+
+@router.message(Admin.write_chat_id)
+async def admin_collect_chat_id(message: types.Message, state: FSMContext):
+    if message.text == bm.cancel():
+        await bot.send_message(message.chat.id, bm.canceled(), reply_markup=types.ReplyKeyboardRemove())
+        await state.clear()
+        return
+
+    chat_id_text = message.text.strip()
+    try:
+        chat_id = int(chat_id_text)
+    except ValueError:
+        await message.reply(bm.invalid_chat_id())
+        return
+
+    await state.update_data(target_chat_id=chat_id)
+    await message.answer(bm.enter_chat_message(), reply_markup=kb.cancel_keyboard())
+    await state.set_state(Admin.write_chat_text)
+
+
+@router.message(Admin.write_chat_text)
+async def admin_send_to_chat(message: types.Message, state: FSMContext):
+    if message.text == bm.cancel():
+        await bot.send_message(message.chat.id, bm.canceled(), reply_markup=types.ReplyKeyboardRemove())
+        await state.clear()
+        return
+
+    data = await state.get_data()
+    chat_id = data.get("target_chat_id")
+
+    if chat_id is None:
+        await message.reply(bm.chat_message_failed("unknown"), reply_markup=types.ReplyKeyboardRemove())
+        await state.clear()
+        return
+
+    chat_text = message.text
+    chat_text = message.text
+    await state.clear()
+
+    progress_message = await message.reply(bm.chat_message_sending(), reply_markup=types.ReplyKeyboardRemove())
+
+    sent_message = None
+
+    try:
+        sent_message = await bot.send_message(chat_id=chat_id, text=chat_text)
+    except (TelegramForbiddenError, TelegramNotFound, TelegramBadRequest) as error:
+        logging.info(f"Failed to send message to chat {chat_id}: {error}")
+        await bot.delete_message(message.chat.id, progress_message.message_id)
+        await message.answer(bm.chat_message_failed(chat_id), reply_markup=kb.return_back_to_admin_keyboard())
+        return
+    except TelegramAPIError as error:
+        logging.error(f"API error while sending message to chat {chat_id}: {error}")
+        await bot.delete_message(message.chat.id, progress_message.message_id)
+        await message.answer(bm.chat_message_failed(chat_id), reply_markup=kb.return_back_to_admin_keyboard())
+        return
+    except Exception as error:
+        logging.error(f"Unexpected error while sending message to chat {chat_id}: {error}")
+        await bot.delete_message(message.chat.id, progress_message.message_id)
+        await message.answer(bm.chat_message_failed(chat_id), reply_markup=kb.return_back_to_admin_keyboard())
+        return
+
+    if sent_message:
+        chat_obj = sent_message.chat
+        chat_type_raw = getattr(chat_obj, "type", None)
+        chat_type_str = chat_type_raw.value if hasattr(chat_type_raw, "value") else str(chat_type_raw)
+        chat_type_value = "private" if chat_type_str == "private" else "public"
+
+        chat_name = getattr(chat_obj, "title", None) or getattr(chat_obj, "full_name", None)
+
+        if not chat_name:
+            first_name = getattr(chat_obj, "first_name", None)
+            last_name = getattr(chat_obj, "last_name", None)
+            name_parts = [part for part in (first_name, last_name) if part]
+            if name_parts:
+                chat_name = " ".join(name_parts)
+
+        if not chat_name:
+            chat_name = f"Chat {chat_id}"
+
+        chat_username = getattr(chat_obj, "username", None)
+        language_code = getattr(chat_obj, "language_code", None)
+
+        await db.upsert_chat(
+            user_id=chat_id,
+            user_name=chat_name,
+            user_username=chat_username,
+            chat_type=chat_type_value,
+            language=language_code,
+            status="active",
+        )
+
+    await bot.delete_message(message.chat.id, progress_message.message_id)
+    await message.answer(bm.chat_message_sent(chat_id), reply_markup=kb.return_back_to_admin_keyboard())
+
+
 @router.callback_query(F.data == 'back_to_admin')
 async def back_to_admin(call: types.CallbackQuery):
     await bot.delete_message(call.message.chat.id, call.message.message_id)
@@ -207,152 +323,6 @@ async def send_to_all_message(message: types.Message, state: FSMContext):
                                text=bm.finish_mailing(),
                                reply_markup=types.ReplyKeyboardRemove())
         return
-
-
-@router.callback_query(F.data == 'control_user')
-async def control_user_callback(call: types.CallbackQuery):
-    await bot.delete_message(call.message.chat.id, call.message.message_id)
-    await call.message.answer(text=bm.search_user_by(), reply_markup=kb.return_search_keyboard())
-    await call.answer()
-
-
-@router.callback_query(F.data.startswith("search_"))
-async def search_user_by(call: types.CallbackQuery, state: FSMContext):
-    search = call.data.split('_')[1]
-    await bot.delete_message(call.message.chat.id, call.message.message_id)
-    await call.message.answer(text=bm.type_user(search), reply_markup=kb.cancel_keyboard())
-
-    await state.set_state(Admin.control_user)
-    await state.update_data(search=search)
-    await call.answer()
-
-
-@router.message(Admin.control_user)
-async def control_user(message: types.Message, state: FSMContext):
-    answer = message.text
-    answer = answer.replace("@", "")
-    answer = answer.replace("https://t.me/", "")
-    data = await state.get_data()
-    search = data.get("search")
-
-    if message.text == bm.cancel():
-        await bot.send_message(message.chat.id, bm.canceled(),
-                               reply_markup=types.ReplyKeyboardRemove())
-        await state.clear()
-        await admin(message)
-        return
-
-    else:
-        await bot.send_chat_action(message.chat.id, "typing")
-
-        clock = await bot.send_message(message.chat.id, '⏳', reply_markup=types.ReplyKeyboardRemove())
-
-        await asyncio.sleep(2)
-
-        await bot.delete_message(message.chat.id, clock.message_id)
-
-        user = None
-
-        if search == "id":
-            user = await db.get_user_info(answer)
-
-        elif search == "username":
-            user = await db.get_user_info_username(answer)
-
-        result = user
-
-        if result is not None:
-            user_name = None
-            user_username = None
-            status = None
-            user_id = None
-
-            if search == "id":
-                user_name, user_username, status = result
-                user_id = answer
-
-            elif search == "username":
-                user_name, user_id, status = result
-                user_username = answer
-
-            if user_username == "":
-                user_username = "None"
-            else:
-                user_username = f"@{user_username}"
-
-            user_photo = await bot.get_user_profile_photos(user_id, limit=1)
-
-            if user_photo.total_count > 0:
-                await message.reply_photo(user_photo.photos[0][-1].file_id,
-                                          caption=bm.return_user_info(user_name, user_id, user_username, status),
-                                          reply_markup=kb.return_control_user_keyboard(user_id, status),
-                                          parse_mode="HTML")
-            else:
-                await bot.send_message(message.chat.id, bm.return_user_info(user_name, user_id, user_username, status),
-                                       reply_markup=kb.return_control_user_keyboard(user_id, status), parse_mode="HTML")
-
-        else:
-            await bot.send_message(message.chat.id, bm.user_not_found())
-
-        await state.clear()
-
-
-@router.callback_query(F.data.startswith("ban_"))
-async def message_handler(call: types.CallbackQuery, state: FSMContext):
-    banned_user_id = call.data.split("_")[1]
-
-    await call.message.delete()
-    await call.message.answer(bm.enter_ban_reason(), reply_markup=kb.cancel_keyboard())
-    await state.set_state(Admin.ban_reason)
-    await state.update_data(banned_user_id=banned_user_id)
-    await call.answer()
-
-
-@router.message(Admin.ban_reason)
-async def control_user(message: types.Message, state: FSMContext):
-    reason = message.text
-    data = await state.get_data()
-    banned_user_id = data.get("banned_user_id")
-
-    if message.text == bm.cancel():
-        await bot.send_message(message.chat.id, bm.canceled(),
-                               reply_markup=types.ReplyKeyboardRemove())
-        await state.clear()
-        await admin(message)
-        return
-
-    await db.ban_user(banned_user_id)
-
-    await state.clear()
-
-    await bot.send_message(chat_id=banned_user_id,
-                           text=bm.ban_message(reason),
-                           reply_markup=types.ReplyKeyboardRemove())
-
-    ban_message = await message.answer(bm.successful_ban(banned_user_id),
-                                       reply_markup=types.ReplyKeyboardRemove())
-
-    await bot.delete_message(message.chat.id, ban_message.message_id)
-
-    await message.answer(bm.successful_ban(banned_user_id), reply_markup=kb.return_back_to_admin_keyboard())
-
-
-@router.callback_query(F.data.startswith("unban_"))
-async def message_handler(call: types.CallbackQuery):
-    unbanned_user_id = call.data.split("_")[1]
-
-    await db.set_active(unbanned_user_id)
-
-    await bot.send_message(chat_id=unbanned_user_id,
-                           text=bm.unban_message())
-
-    await call.message.delete()
-
-    await call.message.answer(bm.successful_unban(unbanned_user_id),
-                              reply_markup=kb.return_back_to_admin_keyboard())
-
-    await call.answer()
-
 
 @router.callback_query(F.data.startswith("write_"))
 async def write_message_handler(call: types.CallbackQuery, state: FSMContext):

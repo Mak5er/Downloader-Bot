@@ -1,14 +1,22 @@
-def admin_panel(user_count, active_user_count, inactive_user_count):
+def admin_panel(total_count, private_count, group_count, active_user_count, inactive_user_count):
     return ("""<b>Hello, this is the admin panel.</b>
 
-🪪Number of bot users: <b>{user_count}</b>
-📱Number of active users: <b>{active_user_count}</b>
-📵Number of inactive users: <b>{inactive_user_count}</b>
+👥 Total chats: <b>{total_count}</b>
+   • 👤 Private users: <b>{private_count}</b>
+   • 🏘️ Groups: <b>{group_count}</b>
+
+✅ Active: <b>{active_user_count}</b>
+🚫 Inactive: <b>{inactive_user_count}</b>
 
 <b>Admin commands:</b>
-Coming soon...""").format(user_count=user_count,
-                          active_user_count=active_user_count,
-                          inactive_user_count=inactive_user_count, )
+Coming soon...""").format(
+        total_count=total_count,
+        private_count=private_count,
+        group_count=group_count,
+        active_user_count=active_user_count,
+        inactive_user_count=inactive_user_count,
+    )
+
 
 
 def not_groups():
@@ -72,11 +80,11 @@ def successful_unban(unbanned_user_id):
 
 
 def ban_message(reason):
-    return ("🚫You have been banned, contact @mak5er for more information!\nReason: {reason}").format(reason=reason)
+    return ("🚫 You have been banned, contact @mak5er for more information!\nReason: {reason}").format(reason=reason)
 
 
 def unban_message():
-    return ("🎉You have been unbanned!")
+    return ("🎉 You have been unbanned!")
 
 
 def please_type_message():
@@ -104,3 +112,26 @@ def active_users_check_completed(total_users, reachable_users, unreachable_users
 
 def active_users_check_no_targets():
     return ("ℹ️ There are no users available for checking.")
+
+def enter_chat_id():
+    return ("🆔 Enter the chat ID (for example, -1001234567890):")
+
+
+def invalid_chat_id():
+    return ("⚠️ Chat ID must be a number like -1001234567890. Try again or tap Cancel.")
+
+
+def enter_chat_message():
+    return ("✉️ Enter the message you want to send to this chat:")
+
+
+def chat_message_sent(chat_id):
+    return ("✅ Message delivered to chat {chat_id}.").format(chat_id=chat_id)
+
+
+def chat_message_failed(chat_id):
+    return ("⚠️ Failed to send message to chat {chat_id}. Make sure the bot is a member and can write there.").format(chat_id=chat_id)
+
+
+def chat_message_sending():
+    return ("⏳ Sending message...")
