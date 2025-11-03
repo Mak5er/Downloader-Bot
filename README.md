@@ -24,7 +24,8 @@ Install the required Python packages using pip:
 
     pip install -r requirements.txt
 
-Before running the script, you also need to set up your custom Telegram API node by using [this repository](https://github.com/aiogram/telegram-bot-api). 
+Before running the script, you also need to set up your custom Telegram API node by
+using [this repository](https://github.com/aiogram/telegram-bot-api).
 
 Set up the necessary configuration by creating a  `.env`  file and defining the required variables.
 
@@ -47,20 +48,6 @@ Or using Docker:
 
     docker compose up -d
 
-To use your local image, update `docker-compose.yml` to:
-
-```yaml
-services:
-  downloader-bot:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    volumes:
-      - .:/app
-    container_name: downloader-bot
-    restart: always
-```
-
 ### Database Tables
 
 The PostgreSQL database used by the bot includes the following tables:
@@ -70,14 +57,14 @@ The PostgreSQL database used by the bot includes the following tables:
 
 ### Usage
 
-Once the bot is running, it will start listening for incoming messages and commands from users. 
+Once the bot is running, it will start listening for incoming messages and commands from users.
 
 Commands:
 
 - /start : Start the conversation with the bot.
 - /setting : Change the bot settings.
-
-Users can also send feedback and the bot will provide answers.
+- /stats : View bot statistics.
+- /remove_keyboard : Remove reply keyboard.
 
 ### Telegram Bot Link
 
