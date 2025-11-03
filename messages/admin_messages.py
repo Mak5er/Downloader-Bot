@@ -85,3 +85,22 @@ def please_type_message():
 
 def log_deleted():
     return ("Log deleted, starting to write a new one.")
+
+
+def active_users_check_started(total_users):
+    return ("🔄 Starting availability check for {total_users} users...").format(total_users=total_users)
+
+
+def active_users_check_completed(total_users, reachable_users, unreachable_users):
+    return ("""<b>✅ Availability check finished.</b>
+👥 Total users processed: <b>{total_users}</b>
+📬 Reachable: <b>{reachable_users}</b>
+🚫 Unreachable: <b>{unreachable_users}</b>""").format(
+        total_users=total_users,
+        reachable_users=reachable_users,
+        unreachable_users=unreachable_users,
+    )
+
+
+def active_users_check_no_targets():
+    return ("ℹ️ There are no users available for checking.")

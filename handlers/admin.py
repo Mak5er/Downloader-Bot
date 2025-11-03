@@ -1,18 +1,25 @@
-from log.logger import logger as logging
 import asyncio
 import os
 
 from aiogram import types, F, Router
+from aiogram.exceptions import (
+    TelegramAPIError,
+    TelegramBadRequest,
+    TelegramForbiddenError,
+    TelegramNotFound,
+    TelegramRetryAfter,
+)
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import StatesGroup, State
 from aiogram.types import BufferedInputFile
 
-from main import bot, db
-from filters import IsBotAdmin
 import keyboards as kb
 import messages as bm
 from config import ADMINS_UID, OUTPUT_DIR
+from filters import IsBotAdmin
+from log.logger import logger as logging
+from main import bot, db
 
 router = Router()
 
@@ -72,6 +79,73 @@ async def download_log_handler(call: types.CallbackQuery):
             await call.message.answer_document(BufferedInputFile(file.read(), filename=filename))
 
     logging.info(f"User action: Downloaded logs (User ID: {user_id})")
+
+
+@router.callback_query(F.data == 'check_active_users')
+async def check_active_users(call: types.CallbackQuery):
+    await call.answer()
+    await bot.send_chat_action(call.message.chat.id, "typing")
+
+    users_info = await db.get_all_users_info()
+    users_to_check = [user for user in users_info if (user.status or "inactive") != "ban"]
+
+    if not users_to_check:
+        await call.message.edit_text(
+            bm.active_users_check_no_targets(),
+            reply_markup=kb.return_back_to_admin_keyboard()
+        )
+        return
+
+    total_users = len(users_to_check)
+    status_message = await call.message.edit_text(bm.active_users_check_started(total_users))
+
+    reachable = 0
+    unreachable = 0
+
+    for user in users_to_check:
+        user_id = int(user.user_id)
+        user_status = user.status or "inactive"
+        send_successful = False
+
+        try:
+            await bot.send_chat_action(chat_id=user_id, action="typing")
+            send_successful = True
+        except TelegramRetryAfter as error:
+            await asyncio.sleep(error.retry_after)
+            try:
+                await bot.send_chat_action(chat_id=user_id, action="typing")
+                send_successful = True
+            except TelegramRetryAfter as retry_error:
+                logging.warning(f"Retry-after triggered twice while checking user {user_id}: {retry_error}")
+            except (TelegramForbiddenError, TelegramNotFound, TelegramBadRequest) as retry_error:
+                logging.info(f"User {user_id} unreachable on retry: {retry_error}")
+            except TelegramAPIError as retry_error:
+                logging.error(f"API error on retry while checking user {user_id}: {retry_error}")
+            except Exception as retry_error:
+                logging.error(f"Unexpected retry error while checking user {user_id}: {retry_error}")
+        except (TelegramForbiddenError, TelegramNotFound, TelegramBadRequest) as error:
+            logging.info(f"User {user_id} unreachable: {error}")
+        except TelegramAPIError as error:
+            logging.error(f"API error while checking user {user_id}: {error}")
+        except Exception as error:
+            logging.error(f"Unexpected error while checking user {user_id}: {error}")
+
+        if send_successful:
+            reachable += 1
+            if user_status != "active":
+                await db.set_active(user_id)
+        else:
+            unreachable += 1
+            if user_status != "ban":
+                await db.set_inactive(user_id)
+
+        await asyncio.sleep(0.05)
+
+    await status_message.edit_text(
+        bm.active_users_check_completed(total_users, reachable, unreachable),
+        reply_markup=kb.return_back_to_admin_keyboard(),
+        parse_mode="HTML"
+    )
 
 
 @router.callback_query(F.data == 'back_to_admin')
