@@ -205,15 +205,14 @@ async def handle_tweet_links(message):
                     logging.info("Fetching tweet media: tweet_id=%s", tweet_id)
                     media = scrape_media(tweet_id)
                     await reply_media(message, tweet_id, media, bot_url, business_id, user_settings)
+                    await maybe_delete_user_message(message, user_settings.get("delete_message"))
                 except Exception as e:
                     logging.exception("Failed to process tweet: tweet_id=%s error=%s", tweet_id, e)
-                    await message.answer(bm.something_went_wrong())
+                    await message.reply(bm.something_went_wrong())
         else:
             logging.info("No tweet links found: user_id=%s", message.from_user.id)
             await react_to_message(message, "👎", business_id=business_id)
-            await message.answer(bm.nothing_found())
+            await message.reply(bm.nothing_found())
     except Exception as e:
         logging.exception("Error handling tweet links: user_id=%s error=%s", message.from_user.id, e)
-        await message.answer(bm.something_went_wrong())
-
-    await maybe_delete_user_message(message, user_settings.get("delete_message"))
+        await message.reply(bm.something_went_wrong())
