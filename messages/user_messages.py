@@ -52,8 +52,11 @@ def captions(user_captions, post_caption, bot_url):
     return footer
 
 
-def join_group(chat_title):
-    return "Hi! Thank you for adding me to <b>{chat_title}</b>!\nHave a nice day!".format(chat_title=chat_title)
+def join_group(chat_title: str) -> str:
+    return (
+        "👋 Hi! Thanks for adding me to <b>{chat_title}</b> 🌸\n"
+        "Please grant me <b>admin rights</b> to unlock full functionality 🔓"
+    ).format(chat_title=chat_title)
 
 
 def something_went_wrong():
