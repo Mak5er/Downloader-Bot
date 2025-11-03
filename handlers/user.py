@@ -1,5 +1,6 @@
 import datetime
 from collections import defaultdict
+from pathlib import Path
 from typing import List, Tuple
 
 import matplotlib.pyplot as plt
@@ -160,6 +161,9 @@ def _decimate_series(
 
 def create_and_save_chart(data, period):
     filename = datetime.datetime.now().strftime("%Y_%m_%d_%H_%M_%S") + "_chart.png"
+    charts_dir = Path("downloads")
+    charts_dir.mkdir(parents=True, exist_ok=True)
+    file_path = charts_dir / filename
 
     series = _prepare_series(data)
     if not series:
@@ -235,10 +239,10 @@ def create_and_save_chart(data, period):
     ax.tick_params(axis='y', colors='#D0D3F9')
     ax.set_ylim(bottom=0)
 
-    fig.savefig(filename, bbox_inches='tight', facecolor=fig.get_facecolor())
+    fig.savefig(file_path, bbox_inches='tight', facecolor=fig.get_facecolor())
     plt.close(fig)
 
-    return filename
+    return str(file_path)
 
 
 
