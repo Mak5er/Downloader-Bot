@@ -141,9 +141,9 @@ def _prepare_series(data: dict[str, int]) -> List[Tuple[datetime.datetime, int]]
 
 
 def _decimate_series(
-    dates: List[datetime.datetime],
-    counts: List[int],
-    max_points: int,
+        dates: List[datetime.datetime],
+        counts: List[int],
+        max_points: int,
 ) -> tuple[list[datetime.datetime], list[int]]:
     if len(dates) <= max_points:
         return dates, counts
@@ -245,7 +245,6 @@ def create_and_save_chart(data, period):
     return str(file_path)
 
 
-
 def build_stats_caption(period: str, data: dict[str, int]) -> str:
     header = f"<b>Statistics for {period}</b>"
 
@@ -261,17 +260,11 @@ def build_stats_caption(period: str, data: dict[str, int]) -> str:
 
     summary_lines = [
         f"📊 Total downloads: <b>{total}</b>",
-        f"🕓 Today: <b>{today_downloads}</b>",
-        f"📅 Days tracked: <b>{days_tracked}</b>",
         f"⭐ Peak day: <b>{top_day}</b> — <b>{top_value}</b>",
         f"⚖️ Average per day: <b>{average:.1f}</b>",
     ]
 
     return f"{header}\n\n" + "\n".join(summary_lines)
-
-
-
-
 
 
 @router.message(Command("stats"))
