@@ -27,35 +27,40 @@ os.makedirs("downloads", exist_ok=True)
 
 
 async def send_analytics(user_id, chat_type, action_name):
-    # Надсилаємо в GA
-    params = {
-        'client_id': str(user_id),
-        'user_id': str(user_id),
-        'events': [{
-            'name': action_name,
-            'params': {
-                'chat_type': chat_type,
-                "session_id": str(user_id),
-                "engagement_time_msec": "1000"
-            }
-        }],
-    }
+    try:
+        chat_type_value = chat_type.value if hasattr(chat_type, 'value') else str(chat_type)
 
-    async with httpx.AsyncClient() as client:
-        await client.post(
-            f'https://www.google-analytics.com/mp/collect?measurement_id={MEASUREMENT_ID}&api_secret={API_SECRET}',
-            json=params
-        )
+        params = {
+            'client_id': str(user_id),
+            'user_id': str(user_id),
+            'events': [{
+                'name': action_name,
+                'params': {
+                    'chat_type': chat_type_value,
+                    'session_id': str(user_id),
+                    'engagement_time_msec': '1000'
+                }
+            }],
+        }
 
-    # Лог в БД
-    async with db.SessionLocal() as session:
-        async with session.begin():
+        async with httpx.AsyncClient() as client:
+            await client.post(
+                f'https://www.google-analytics.com/mp/collect?measurement_id={MEASUREMENT_ID}&api_secret={API_SECRET}',
+                json=params,
+                timeout=10,
+            )
+
+        async with db.SessionLocal() as session:
             event = AnalyticsEvent(
                 user_id=user_id,
-                chat_type=chat_type,
+                chat_type=chat_type_value,
                 action_name=action_name
             )
             session.add(event)
+            await session.commit()
+    except Exception as error:
+        logging.error(f"Failed to record analytics event '{action_name}' for user {user_id}: {error}")
+
 
 
 async def main():

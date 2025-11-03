@@ -1,8 +1,8 @@
 # Use the official Python image as a base image
 FROM python:3.10-slim
 
-# Set Kyiv timezone
-ENV TZ=Europe/Kyiv
+# Set UTC timezone
+ENV TZ=UTC
 RUN ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && echo $TZ > /etc/timezone
 
 # Set the working directory in the container

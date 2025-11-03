@@ -159,11 +159,37 @@ async def check_active_users(call: types.CallbackQuery):
     )
 
 
+@router.callback_query(F.data == 'cancel_action')
+async def cancel_action(call: types.CallbackQuery, state: FSMContext):
+    current_state = await state.get_state()
+    if current_state is None:
+        await call.answer("Nothing to cancel")
+        return
+
+    await state.clear()
+    await call.answer("Canceled")
+
+    try:
+        await call.message.edit_text(
+            bm.canceled(),
+            reply_markup=kb.return_back_to_admin_keyboard()
+        )
+    except TelegramBadRequest:
+        try:
+            await call.message.edit_reply_markup(reply_markup=None)
+        except TelegramBadRequest:
+            pass
+        await call.message.answer(
+            bm.canceled(),
+            reply_markup=kb.return_back_to_admin_keyboard()
+        )
+
+
 @router.callback_query(F.data == 'message_chat_id')
 async def message_chat_id(call: types.CallbackQuery, state: FSMContext):
     await call.answer()
     await bot.send_chat_action(call.message.chat.id, "typing")
-    await call.message.answer(
+    await call.message.edit_text(
         bm.enter_chat_id(),
         reply_markup=kb.cancel_keyboard()
     )
@@ -204,7 +230,6 @@ async def admin_send_to_chat(message: types.Message, state: FSMContext):
         await state.clear()
         return
 
-    chat_text = message.text
     chat_text = message.text
     await state.clear()
 
@@ -272,9 +297,8 @@ async def back_to_admin(call: types.CallbackQuery):
 
 @router.callback_query(F.data == 'send_to_all')
 async def send_to_all_callback(call: types.CallbackQuery, state: FSMContext):
-    await bot.send_message(chat_id=call.message.chat.id,
-                           text=bm.mailing_message(),
-                           reply_markup=kb.cancel_keyboard())
+    await call.message.edit_text(text=bm.mailing_message(),
+                                 reply_markup=kb.cancel_keyboard())
     await state.set_state(Mailing.send_to_all_message)
     await call.answer()
 
@@ -323,6 +347,7 @@ async def send_to_all_message(message: types.Message, state: FSMContext):
                                text=bm.finish_mailing(),
                                reply_markup=types.ReplyKeyboardRemove())
         return
+
 
 @router.callback_query(F.data.startswith("write_"))
 async def write_message_handler(call: types.CallbackQuery, state: FSMContext):
