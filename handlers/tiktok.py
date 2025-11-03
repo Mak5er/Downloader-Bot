@@ -18,6 +18,12 @@ import keyboards as kb
 import messages as bm
 from config import OUTPUT_DIR, CHANNEL_ID
 from handlers.user import update_info
+from handlers.utils import (
+    get_bot_url,
+    maybe_delete_user_message,
+    remove_file,
+    send_chat_action_if_needed,
+)
 from log.logger import logger as logging
 from main import bot, db, send_analytics
 
@@ -46,23 +52,8 @@ def process_tiktok_url(text: str) -> str:
     return expand_tiktok_url(url)
 
 
-def safe_remove(file_path: str):
-    try:
-        if os.path.exists(file_path):
-            os.remove(file_path)
-            logging.debug("Removed temporary file: path=%s", file_path)
-    except Exception as e:
-        logging.error("Error removing file: path=%s error=%s", file_path, e)
-
-
 def get_video_id_from_url(url: str) -> str:
     return url.split('/')[-1].split('?')[0]
-
-
-async def send_chat_action_if_needed(chat_id: int, action: str, business_id: Optional[int]):
-    if business_id is None:
-        await bot.send_chat_action(chat_id, action)
-
 
 async def get_user_settings(user_id):
     return await db.user_settings(user_id)
@@ -240,7 +231,7 @@ class DownloaderTikTok:
 @router.business_message(F.text.regexp(r"(https?://(www\.|vm\.|vt\.|vn\.)?tiktok\.com/\S+)"))
 async def process_tiktok(message: types.Message):
     try:
-        bot_url = f"t.me/{(await bot.get_me()).username}"
+        bot_url = await get_bot_url(bot)
         business_id = message.business_connection_id
 
         logging.info(
@@ -322,7 +313,7 @@ async def process_tiktok_video(message: types.Message, data: dict, bot_url: str,
             db_video_url,
             db_file_id,
         )
-        await send_chat_action_if_needed(message.chat.id, "upload_video", business_id)
+        await send_chat_action_if_needed(bot, message.chat.id, "upload_video", business_id)
         await message.answer_video(
             video=db_file_id,
             caption=bm.captions(user_settings["captions"], info.description, bot_url),
@@ -332,8 +323,7 @@ async def process_tiktok_video(message: types.Message, data: dict, bot_url: str,
             ),
             parse_mode="HTML"
         )
-        if user_settings["delete_message"] == "on":
-            await message.delete()
+        await maybe_delete_user_message(message, user_settings.get("delete_message"))
         return
 
     if await downloader.download_video(info.id):
@@ -349,7 +339,7 @@ async def process_tiktok_video(message: types.Message, data: dict, bot_url: str,
                 return
 
             width, height = await downloader.get_video_size(path)
-            await send_chat_action_if_needed(message.chat.id, "upload_video", business_id)
+            await send_chat_action_if_needed(bot, message.chat.id, "upload_video", business_id)
             sent = await message.reply_video(
                 video=FSInputFile(path), width=width, height=height,
                 caption=bm.captions(user_settings["captions"], info.description, bot_url),
@@ -359,8 +349,7 @@ async def process_tiktok_video(message: types.Message, data: dict, bot_url: str,
                 ),
                 parse_mode="HTML"
             )
-            if user_settings["delete_message"] == "on":
-                await message.delete()
+            await maybe_delete_user_message(message, user_settings.get("delete_message"))
             try:
                 await db.add_file(db_video_url, sent.video.file_id, "video")
                 logging.info(
@@ -379,7 +368,7 @@ async def process_tiktok_video(message: types.Message, data: dict, bot_url: str,
             )
             await handle_download_error(message, business_id)
         finally:
-            await asyncio.to_thread(os.remove, path)
+            await remove_file(path)
             logging.debug("Removed temporary TikTok video file: path=%s", path)
     else:
         await handle_download_error(message, business_id)
@@ -404,7 +393,7 @@ async def process_tiktok_photos(message: types.Message, data: dict, bot_url: str
         video_url,
         len(images),
     )
-    await send_chat_action_if_needed(message.chat.id, "upload_photo", business_id)
+    await send_chat_action_if_needed(bot, message.chat.id, "upload_photo", business_id)
 
     if len(images) > 1:
         photos_for_album = images[:-1]
@@ -423,8 +412,7 @@ async def process_tiktok_photos(message: types.Message, data: dict, bot_url: str
             info.shares, info.music_play_url, video_url, user_settings
         )
     )
-    if user_settings["delete_message"] == "on":
-        await message.delete()
+    await maybe_delete_user_message(message, user_settings.get("delete_message"))
 
 
 async def process_tiktok_profile(message: types.Message, full_url: str, bot_url: str, user_captions: list):
@@ -490,7 +478,7 @@ async def inline_tiktok_query(query: types.InlineQuery):
             query.query,
         )
         user_settings = await db.user_settings(query.from_user.id)
-        bot_url = f"t.me/{(await bot.get_me()).username}"
+        bot_url = await get_bot_url(bot)
         match = re.search(r"(https?://(?:www\.|vm\.|vt\.|vn\.)?tiktok\.com/\S+)", query.query)
         if not match:
             logging.debug("Inline TikTok query pattern not matched: query=%s", query.query)
@@ -545,7 +533,7 @@ async def inline_tiktok_query(query: types.InlineQuery):
                     )
                 ))
                 await query.answer(results, cache_time=10, is_personal=True)
-                await asyncio.to_thread(os.remove, path)
+                await remove_file(path)
                 logging.debug("Removed inline TikTok temp file: path=%s", path)
                 return
         elif images:

@@ -14,6 +14,12 @@ from log.logger import logger as logging
 import messages as bm
 from config import OUTPUT_DIR, INSTAGRAM_RAPID_API_KEY1, INSTAGRAM_RAPID_API_KEY2, CHANNEL_ID, INSTAGRAM_RAPID_API_HOST
 from handlers.user import update_info
+from handlers.utils import (
+    get_bot_url,
+    maybe_delete_user_message,
+    remove_file,
+    send_chat_action_if_needed,
+)
 import keyboards as kb
 from main import bot, db, send_analytics
 
@@ -189,7 +195,7 @@ class DownloaderInstagram:
 @router.business_message(F.text.regexp(r"(https?://(www\.)?instagram\.com/\S+)"))
 async def process_instagram_url(message: types.Message):
     try:
-        bot_url = f"t.me/{(await bot.get_me()).username}"
+        bot_url = await get_bot_url(bot)
         user_settings = await db.user_settings(message.from_user.id)
         user_captions = user_settings["captions"]
         business_id = message.business_connection_id
@@ -264,8 +270,7 @@ async def process_instagram_video(message, video_info, bot_url, user_settings, b
                 post_url,
                 db_file_id,
             )
-            if business_id is None:
-                await bot.send_chat_action(message.chat.id, "upload_video")
+            await send_chat_action_if_needed(bot, message.chat.id, "upload_video", business_id)
             await message.answer_video(
                 video=db_file_id,
                 caption=bm.captions(user_captions, video_info.description, bot_url),
@@ -280,6 +285,7 @@ async def process_instagram_video(message, video_info, bot_url, user_settings, b
                 ),
                 parse_mode="HTML"
             )
+            await maybe_delete_user_message(message, user_settings.get("delete_message"))
             return
 
         if video_urls and downloader.download_video(video_urls[0]):
@@ -294,8 +300,7 @@ async def process_instagram_video(message, video_info, bot_url, user_settings, b
                 width, height = None, None
 
             if file_size < MAX_FILE_SIZE:
-                if business_id is None:
-                    await bot.send_chat_action(message.chat.id, "upload_video")
+                await send_chat_action_if_needed(bot, message.chat.id, "upload_video", business_id)
 
                 sent_message = await message.reply_video(
                     video=video,
@@ -319,6 +324,7 @@ async def process_instagram_video(message, video_info, bot_url, user_settings, b
                     post_url,
                     sent_message.video.file_id,
                 )
+                await maybe_delete_user_message(message, user_settings.get("delete_message"))
             else:
                 logging.warning(
                     "Instagram video too large: url=%s size=%s",
@@ -328,15 +334,11 @@ async def process_instagram_video(message, video_info, bot_url, user_settings, b
                 await handle_large_file(message, business_id)
 
             await asyncio.sleep(5)
-            try:
-                os.remove(video_file_path)
-                logging.debug("Removed temporary Instagram video file: path=%s", video_file_path)
-            except Exception as e:
-                logging.error("Error removing file: path=%s error=%s", video_file_path, e)
+            await remove_file(video_file_path)
         else:
             await handle_download_error(message, business_id)
     except Exception as e:
-        logging.exception("Error in process_instagram_video: url=%s", post_url)
+        logging.exception("Error in process_instagram_video: %s", e)
         await handle_download_error(message, business_id)
 
 
@@ -364,8 +366,7 @@ async def process_instagram_photos(message, video_info, bot_url, user_settings, 
             len(images),
         )
 
-        if business_id is None:
-            await bot.send_chat_action(message.chat.id, "upload_photo")
+        await send_chat_action_if_needed(bot, message.chat.id, "upload_photo", business_id)
 
         if len(images) > 1:
             media_group = MediaGroupBuilder()
@@ -387,6 +388,7 @@ async def process_instagram_photos(message, video_info, bot_url, user_settings, 
                 user_settings
             )
         )
+        await maybe_delete_user_message(message, user_settings.get("delete_message"))
         logging.debug(
             "Instagram photo post delivered: user_id=%s url=%s",
             message.from_user.id,
@@ -402,8 +404,7 @@ async def process_instagram_profile(message, user_info, bot_url, user_settings, 
         user_captions = user_settings["captions"]
         await send_analytics(user_id=message.from_user.id, chat_type=message.chat.type, action_name="instagram_profile")
 
-        if business_id is None:
-            await bot.send_chat_action(message.chat.id, "upload_photo")
+        await send_chat_action_if_needed(bot, message.chat.id, "upload_photo", business_id)
 
         username = url.split('/')[3] if len(url.split('/')) > 3 else ""
         display_name = user_info.nickname.strip() if user_info.nickname else username
@@ -418,6 +419,7 @@ async def process_instagram_profile(message, user_info, bot_url, user_settings, 
             caption=bm.captions(user_captions, user_info.description, bot_url),
             reply_markup=kb.return_user_info_keyboard(display_name, user_info.followers, user_info.videos, None, url)
         )
+        await maybe_delete_user_message(message, user_settings.get("delete_message"))
     except Exception as e:
         logging.exception("Error in process_instagram_profile: url=%s", url)
         await handle_download_error(message, business_id)
@@ -436,7 +438,7 @@ async def inline_instagram_query(query: types.InlineQuery):
 
         user_settings = await db.user_settings(query.from_user.id)
         user_captions = user_settings["captions"]
-        bot_url = f"t.me/{(await bot.get_me()).username}"
+        bot_url = await get_bot_url(bot)
 
         url_match = re.match(r"(https?://(www\.)?instagram\.com/\S+)", query.query)
         if not url_match:
@@ -501,11 +503,7 @@ async def inline_instagram_query(query: types.InlineQuery):
             await query.answer(results, cache_time=10)
 
             await asyncio.sleep(5)
-            try:
-                os.remove(video_file_path)
-                logging.debug("Removed temporary Instagram inline file: path=%s", video_file_path)
-            except Exception as e:
-                logging.error("Error removing file: path=%s error=%s", video_file_path, e)
+            await remove_file(video_file_path)
 
             return
 
@@ -560,3 +558,10 @@ async def handle_download_error(message, business_id):
         await message.reply(bm.something_went_wrong())
     except Exception as e:
         logging.exception("Error in Instagram handle_download_error: user_id=%s", message.from_user.id)
+
+
+
+
+
+
+

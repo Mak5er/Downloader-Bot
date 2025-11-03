@@ -14,6 +14,7 @@ import keyboards as kb
 import messages as bm
 from config import OUTPUT_DIR, BOT_TOKEN, admin_id, CHANNEL_ID
 from handlers.user import update_info
+from handlers.utils import get_bot_url, maybe_delete_user_message, remove_file
 from log.logger import logger as logging
 from main import bot, db, send_analytics
 
@@ -168,13 +169,6 @@ def _get_audio_duration(file_path: str) -> float:
         return clip.duration
 
 
-async def safe_remove(file_path: str):
-    try:
-        await asyncio.to_thread(os.remove, file_path)
-    except Exception as e:
-        logging.error(f"Error removing file {file_path}: {e}")
-
-
 async def handle_download_error(message):
     await message.react([types.ReactionTypeEmoji(emoji="👎")])
     await message.reply(bm.something_went_wrong())
@@ -193,9 +187,9 @@ async def download_video(message: types.Message):
         await message.react([types.ReactionTypeEmoji(emoji="👾")])
 
         user_settings = await db.user_settings(message.from_user.id)
+        bot_url = await get_bot_url(bot)
         user_captions = user_settings["captions"]
-        bot_data = await bot.get_me()
-        bot_url = "t.me/" + bot_data.username
+        bot_url = await get_bot_url(bot)
 
         yt = await asyncio.to_thread(get_youtube_video, url)
         video = await asyncio.to_thread(get_video_stream, yt)
@@ -235,6 +229,7 @@ async def download_video(message: types.Message):
                 ),
                 parse_mode="HTML"
             )
+            await maybe_delete_user_message(message, user_settings.get("delete_message"))
             return
 
         name = f"{yt['id']}_youtube_video.mp4"
@@ -264,6 +259,7 @@ async def download_video(message: types.Message):
                 ),
                 parse_mode="HTML"
             )
+            await maybe_delete_user_message(message, user_settings.get("delete_message"))
             await db.add_file(yt['webpage_url'], sent_message.video.file_id, "video")
             logging.info(
                 "YouTube video cached: url=%s file_id=%s",
@@ -272,7 +268,7 @@ async def download_video(message: types.Message):
             )
 
             await asyncio.sleep(5)
-            await safe_remove(video_file_path)
+            await remove_file(video_file_path)
         else:
             await handle_download_error(message)
     except Exception as e:
@@ -292,6 +288,7 @@ async def download_music(message: types.Message):
     )
     try:
         await message.react([types.ReactionTypeEmoji(emoji="👾")])
+        user_settings = await db.user_settings(message.from_user.id)
 
         # Get YouTube audio object - run in thread pool
         yt = await asyncio.to_thread(get_youtube_video, url)
@@ -320,13 +317,14 @@ async def download_music(message: types.Message):
                 title=yt['title']
                 ,
                 duration=round(audio_duration),
-                caption=bm.captions(None, None, f"t.me/{(await bot.get_me()).username}"),
+                caption=bm.captions(None, None, bot_url),
                 parse_mode="HTML"
             )
+            await maybe_delete_user_message(message, user_settings.get("delete_message"))
 
             # Clean up file asynchronously
             await asyncio.sleep(5)
-            await safe_remove(audio_file_path)
+            await remove_file(audio_file_path)
         else:
             await handle_download_error(message)
     except Exception as e:
@@ -353,8 +351,7 @@ async def inline_youtube_query(query: types.InlineQuery):
 
         user_settings = await db.user_settings(query.from_user.id)
         user_captions = user_settings["captions"]
-        bot_data = await bot.get_me()
-        bot_url = "t.me/" + bot_data.username
+        bot_url = await get_bot_url(bot)
 
         db_file_id = await db.get_file_id(yt['webpage_url'])
         if db_file_id:
@@ -451,7 +448,7 @@ async def inline_youtube_query(query: types.InlineQuery):
             await query.answer(results, cache_time=10)
 
             await asyncio.sleep(5)
-            await safe_remove(video_file_path)
+            await remove_file(video_file_path)
         else:
             await query.answer([], cache_time=1, is_personal=True)
 

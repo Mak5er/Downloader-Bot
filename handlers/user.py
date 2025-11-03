@@ -1,5 +1,4 @@
 import datetime
-import os
 from collections import defaultdict
 
 import matplotlib.pyplot as plt
@@ -10,6 +9,7 @@ from matplotlib.ticker import MaxNLocator
 
 import keyboards as kb
 import messages as bm
+from handlers.utils import remove_file
 from main import db, send_analytics, bot
 
 router = Router()
@@ -66,6 +66,9 @@ async def settings_menu(message: types.Message):
     await send_analytics(user_id=message.from_user.id,
                          chat_type=message.chat.type,
                          action_name='settings')
+    if message.chat.type != "private":
+        await message.reply(bm.settings_private_only())
+        return
     await message.reply(
         text=bm.settings(),
         reply_markup=kb.return_settings_keyboard(),
@@ -183,8 +186,7 @@ async def stats_command(message: types.Message):
     await message.answer_photo(chart_input_file, caption='Statistics for Week',
                                reply_markup=kb.stats_keyboard())
 
-    if os.path.exists(filename):
-        os.remove(filename)
+    await remove_file(filename)
 
 
 @router.callback_query(F.data.startswith('date_'))
@@ -199,5 +201,7 @@ async def switch_period(call: types.CallbackQuery):
     await call.message.answer_photo(chart_input_file, caption=f'Statistics for {period}',
                                     reply_markup=kb.stats_keyboard())
 
-    if os.path.exists(filename):
-        os.remove(filename)
+    await remove_file(filename)
+
+
+

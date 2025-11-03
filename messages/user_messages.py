@@ -14,6 +14,13 @@ def settings():
     )
 
 
+def settings_private_only():
+    return (
+        "Settings are available only in a private chat. "
+        "Please message the bot directly to update your preferences."
+    )
+
+
 def get_field_text(field: str):
     texts = {
         "captions": (

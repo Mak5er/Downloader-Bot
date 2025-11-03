@@ -11,6 +11,7 @@ from aiogram.utils.media_group import MediaGroupBuilder
 
 import messages as bm
 from config import OUTPUT_DIR
+from handlers.utils import get_bot_url, maybe_delete_user_message, remove_file, send_chat_action_if_needed
 import keyboards as kb
 from main import bot, db, send_analytics
 from log.logger import logger as logging
@@ -146,13 +147,12 @@ async def reply_media(message, tweet_id, tweet_media, bot_url, business_id, user
             message.from_user.id,
             tweet_id,
         )
-
         await asyncio.sleep(5)
 
         for root, _dirs, files in os.walk(tweet_dir):
             for file in files:
-                os.remove(os.path.join(root, file))
-        os.rmdir(tweet_dir)
+                await remove_file(os.path.join(root, file))
+        await asyncio.to_thread(os.rmdir, tweet_dir)
         logging.debug("Cleaned tweet temp directory: path=%s", tweet_dir)
 
     except Exception as e:
@@ -180,18 +180,17 @@ async def handle_tweet_links(message):
     )
 
     if business_id is None:
-        react = types.ReactionTypeEmoji(emoji="👾")
+        react = types.ReactionTypeEmoji(emoji="??")
         await message.react([react])
 
-    bot_url = f"t.me/{(await bot.get_me()).username}"
+    bot_url = await get_bot_url(bot)
     user_settings = await db.user_settings(message.from_user.id)
 
     try:
         tweet_ids = extract_tweet_ids(message.text)
         if tweet_ids:
             logging.info("Twitter links parsed: user_id=%s count=%s", message.from_user.id, len(tweet_ids))
-            if business_id is None:
-                await bot.send_chat_action(message.chat.id, "typing")
+            await send_chat_action_if_needed(bot, message.chat.id, "typing", business_id)
 
             for tweet_id in tweet_ids:
                 try:
@@ -204,39 +203,12 @@ async def handle_tweet_links(message):
         else:
             logging.info("No tweet links found: user_id=%s", message.from_user.id)
             if business_id is None:
-                react = types.ReactionTypeEmoji(emoji="👎")
+                react = types.ReactionTypeEmoji(emoji="??")
                 await message.react([react])
             await message.answer(bm.nothing_found())
     except Exception as e:
         logging.exception("Error handling tweet links: user_id=%s error=%s", message.from_user.id, e)
         await message.answer(bm.something_went_wrong())
 
+    await maybe_delete_user_message(message, user_settings.get("delete_message"))
 
-    if business_id is None:
-        react = types.ReactionTypeEmoji(emoji="👾")
-        await message.react([react])
-
-    bot_url = f"t.me/{(await bot.get_me()).username}"
-    user_settings = await db.user_settings(message.from_user.id)
-
-    try:
-        tweet_ids = extract_tweet_ids(message.text)
-        if tweet_ids:
-            if business_id is None:
-                await bot.send_chat_action(message.chat.id, "typing")
-
-            for tweet_id in tweet_ids:
-                try:
-                    media = scrape_media(tweet_id)
-                    await reply_media(message, tweet_id, media, bot_url, business_id, user_settings)
-                except Exception as e:
-                    logging.error(f"Failed to process tweet {tweet_id}: {e}")
-                    await message.answer(bm.something_went_wrong())
-        else:
-            if business_id is None:
-                react = types.ReactionTypeEmoji(emoji="👎")
-                await message.react([react])
-            await message.answer(bm.nothing_found())
-    except Exception as e:
-        logging.error(f"Error handling tweet links: {e}")
-        await message.answer(bm.something_went_wrong())
