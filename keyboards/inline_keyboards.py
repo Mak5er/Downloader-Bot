@@ -137,7 +137,16 @@ def return_user_info_keyboard(nickname, followers, videos, likes, url):
     return builder.as_markup()
 
 
-def return_video_info_keyboard(views, likes, comments, shares, music_play_url, video_url, user_settings):
+def return_video_info_keyboard(
+        views,
+        likes,
+        comments,
+        shares,
+        music_play_url,
+        video_url,
+        user_settings,
+        full_quality_callback: str | None = None,
+):
     builder = InlineKeyboardBuilder()
 
     if user_settings["info_buttons"] == "on":
@@ -183,6 +192,9 @@ def return_video_info_keyboard(views, likes, comments, shares, music_play_url, v
 
     if user_settings["url_button"] == "on" and video_url:
         builder.row(InlineKeyboardButton(text="🔗 URL", url=video_url))
+
+    if full_quality_callback:
+        builder.row(InlineKeyboardButton(text="⬇️ Повна якість", callback_data=full_quality_callback))
 
     return builder.as_markup()
 

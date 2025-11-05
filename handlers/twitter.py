@@ -28,15 +28,22 @@ router = Router()
 
 
 def extract_tweet_ids(text):
-    unshortened_links = ''
-    for link in re.findall(r't\.co\/[a-zA-Z0-9]+', text):
-        try:
-            unshortened_link = requests.get('https://' + link).url
-            unshortened_links += '\n' + unshortened_link
-        except Exception as e:
-            logging.error("Failed to expand t.co URL: url=%s error=%s", link, e)
+    expanded_links: list[str] = []
+    short_links = re.findall(r't\.co\/[a-zA-Z0-9]+', text)
+    if short_links:
+        with requests.Session() as session:
+            for link in short_links:
+                try:
+                    response = session.get(f'https://{link}', allow_redirects=True, timeout=5)
+                    expanded_links.append(response.url)
+                except requests.RequestException as exc:
+                    logging.error("Failed to expand t.co URL: url=%s error=%s", link, exc)
 
-    tweet_ids = re.findall(r"(?:twitter|x)\.com/.{1,15}/(?:web|status(?:es)?)/([0-9]{1,20})", text + unshortened_links)
+    combined_text = '\n'.join([text, *expanded_links]) if expanded_links else text
+    tweet_ids = re.findall(
+        r"(?:twitter|x)\.com/.{1,15}/(?:web|status(?:es)?)/([0-9]{1,20})",
+        combined_text,
+    )
     return list(dict.fromkeys(tweet_ids)) if tweet_ids else None
 
 
@@ -76,23 +83,46 @@ async def _collect_media_files(tweet_id, tweet_media, tweet_dir):
     photos: list[str] = []
     videos: list[str] = []
 
+    download_tasks = []
+    media_meta: list[tuple[str, str]] = []
+
     for media in tweet_media.get('media_extended', []):
-        media_url = media['url']
-        media_type = media['type']
+        media_url = media.get('url')
+        media_type = media.get('type')
+        if not media_url or not media_type:
+            logging.debug("Skipping malformed media entry: tweet_id=%s entry=%s", tweet_id, media)
+            continue
+
         file_name = os.path.join(tweet_dir, os.path.basename(urlsplit(media_url).path))
 
         logging.debug(
-            "Downloading tweet media: tweet_id=%s type=%s url=%s",
+            "Queueing tweet media download: tweet_id=%s type=%s url=%s",
             tweet_id,
             media_type,
             media_url,
         )
-        await download_media(media_url, file_name)
+        download_tasks.append(download_media(media_url, file_name))
+        media_meta.append((media_type, file_name))
+
+    if not download_tasks:
+        logging.debug("No downloadable media found: tweet_id=%s", tweet_id)
+        return photos, videos
+
+    results = await asyncio.gather(*download_tasks, return_exceptions=True)
+    for (media_type, file_path), result in zip(media_meta, results):
+        if isinstance(result, Exception):
+            logging.error(
+                "Failed to download tweet media chunk: tweet_id=%s path=%s error=%s",
+                tweet_id,
+                file_path,
+                result,
+            )
+            continue
 
         if media_type == 'image':
-            photos.append(file_name)
+            photos.append(file_path)
         elif media_type in ('video', 'gif'):
-            videos.append(file_name)
+            videos.append(file_path)
 
     return photos, videos
 
@@ -218,7 +248,7 @@ async def handle_tweet_links(message):
     user_settings = await db.user_settings(message.from_user.id)
 
     try:
-        tweet_ids = extract_tweet_ids(message.text)
+        tweet_ids = await asyncio.to_thread(extract_tweet_ids, message.text)
         if tweet_ids:
             logging.info("Twitter links parsed: user_id=%s count=%s", message.from_user.id, len(tweet_ids))
             await send_chat_action_if_needed(bot, message.chat.id, "typing", business_id)
@@ -226,7 +256,7 @@ async def handle_tweet_links(message):
             for tweet_id in tweet_ids:
                 try:
                     logging.info("Fetching tweet media: tweet_id=%s", tweet_id)
-                    media = scrape_media(tweet_id)
+                    media = await asyncio.to_thread(scrape_media, tweet_id)
                     await reply_media(message, tweet_id, media, bot_url, business_id, user_settings)
                     await maybe_delete_user_message(message, user_settings.get("delete_message"))
                 except Exception as e:

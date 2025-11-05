@@ -61,29 +61,48 @@ class UserData:
 
 
 class DownloaderInstagram:
+    STREAM_CHUNK_SIZE = 512 * 1024
+
     def __init__(self, output_dir, filename):
         self.output_dir = output_dir
         self.filename = filename
 
     def download_video(self, video_url):
         try:
-            response = requests.get(video_url, allow_redirects=True)
-            if response.status_code == 200:
-                with open(self.filename, 'wb') as f:
-                    f.write(response.content)
-                return True
+            os.makedirs(os.path.dirname(self.filename) or self.output_dir, exist_ok=True)
+            with requests.get(
+                    video_url,
+                    stream=True,
+                    allow_redirects=True,
+                    timeout=(5, 30),
+            ) as response:
+                response.raise_for_status()
+                with open(self.filename, "wb") as target:
+                    for chunk in response.iter_content(chunk_size=self.STREAM_CHUNK_SIZE):
+                        if chunk:
+                            target.write(chunk)
+            return True
+        except requests.RequestException as exc:
+            logging.error("Error downloading Instagram video: url=%s error=%s", video_url, exc)
             return False
-        except Exception as e:
-            logging.error("Error downloading Instagram video: url=%s error=%s", video_url, e)
+        except Exception as exc:  # pragma: no cover - defensive
+            logging.error("Unexpected Instagram download error: url=%s error=%s", video_url, exc)
             return False
 
-    @staticmethod
-    async def fetch_instagram_post_data(url):
+    async def download_video_async(self, video_url: str) -> bool:
+        return await asyncio.to_thread(self.download_video, video_url)
+
+    @classmethod
+    async def fetch_instagram_post_data(cls, url):
+        return await asyncio.to_thread(cls._fetch_instagram_post_data_sync, url)
+
+    @classmethod
+    def _fetch_instagram_post_data_sync(cls, url):
         try:
             api_url = f"https://{INSTAGRAM_RAPID_API_HOST}/v1/post_info"
             querystring = {
                 "code_or_id_or_url": url,
-                "include_insights": "true"
+                "include_insights": "true",
             }
 
             video_data = None
@@ -91,26 +110,26 @@ class DownloaderInstagram:
             for api_key in RAPID_API_KEYS:
                 headers = {
                     "x-rapidapi-key": api_key,
-                    "x-rapidapi-host": INSTAGRAM_RAPID_API_HOST
+                    "x-rapidapi-host": INSTAGRAM_RAPID_API_HOST,
                 }
 
                 try:
                     response = requests.get(api_url, headers=headers, params=querystring, timeout=10)
-                    if response.status_code == 200:
-                        video_data = response.json()
-                        if isinstance(video_data, dict) and "data" in video_data:
-                            break
-                except requests.exceptions.RequestException as e:
-                    logging.error("Instagram API error with key: key=%s error=%s", api_key, e)
+                    response.raise_for_status()
+                    video_data = response.json()
+                    if isinstance(video_data, dict) and "data" in video_data:
+                        break
+                except requests.exceptions.RequestException as exc:
+                    logging.error("Instagram API error with key: key=%s error=%s", api_key, exc)
 
-            data = video_data.get("data") if video_data else None
+            data = video_data.get("data") if isinstance(video_data, dict) else None
             if not isinstance(data, dict):
                 return None
 
-            image_urls = []
-            video_urls = []
+            image_urls: list[str] = []
+            video_urls: list[str] = []
 
-            if "carousel_media" in data and isinstance(data["carousel_media"], list):
+            if isinstance(data.get("carousel_media"), list):
                 for item in data["carousel_media"]:
                     if item.get("is_video"):
                         video_url = item.get("video_url")
@@ -131,32 +150,39 @@ class DownloaderInstagram:
                 if video_url:
                     video_urls.append(video_url)
 
+            caption = data.get("caption") or {}
+            metrics = data.get("metrics") or {}
+
             return InstagramVideo(
                 id=data.get("id", ""),
                 code=data.get("code", ""),
                 video_urls=video_urls,
                 image_urls=image_urls,
-                description=data.get("caption", None) and data["caption"].get("text", None),
+                description=caption.get("text"),
                 cover=data.get("thumbnail_url", ""),
-                views=data.get("metrics", None) and data["metrics"].get("play_count", 0),
-                likes=data.get("metrics", None) and data["metrics"].get("like_count", 0),
-                comments=data.get("metrics", None) and data["metrics"].get("comment_count", 0),
-                shares=data.get("metrics", None) and data["metrics"].get("share_count", 0),
+                views=metrics.get("play_count", 0),
+                likes=metrics.get("like_count", 0),
+                comments=metrics.get("comment_count", 0),
+                shares=metrics.get("share_count", 0),
                 height=data.get("original_height", 0),
                 width=data.get("original_width", 0),
                 is_video=data.get("is_video", False),
             )
 
-        except Exception as e:
-            logging.exception("Error fetching Instagram post data: url=%s error=%s", url, e)
+        except Exception as exc:  # pragma: no cover - defensive
+            logging.exception("Error fetching Instagram post data: url=%s error=%s", url, exc)
             return None
 
-    @staticmethod
-    async def fetch_instagram_user_data(url):
+    @classmethod
+    async def fetch_instagram_user_data(cls, url):
+        return await asyncio.to_thread(cls._fetch_instagram_user_data_sync, url)
+
+    @classmethod
+    def _fetch_instagram_user_data_sync(cls, url):
         try:
             api_url = f"https://{INSTAGRAM_RAPID_API_HOST}/v1/info"
             querystring = {
-                "username_or_id_or_url": url
+                "username_or_id_or_url": url,
             }
 
             user_data = None
@@ -164,21 +190,24 @@ class DownloaderInstagram:
             for api_key in RAPID_API_KEYS:
                 headers = {
                     "x-rapidapi-key": api_key,
-                    "x-rapidapi-host": INSTAGRAM_RAPID_API_HOST
+                    "x-rapidapi-host": INSTAGRAM_RAPID_API_HOST,
                 }
 
                 try:
                     response = requests.get(api_url, headers=headers, params=querystring, timeout=10)
-                    if response.status_code == 200:
-                        user_data = response.json()
+                    response.raise_for_status()
+                    user_data = response.json()
+                    if user_data:
                         break
-                except requests.exceptions.RequestException as e:
-                    logging.error("Instagram user API error with key: key=%s error=%s", api_key, e)
+                except requests.exceptions.RequestException as exc:
+                    logging.error("Instagram user API error with key: key=%s error=%s", api_key, exc)
 
-            if not user_data:
+            if not isinstance(user_data, dict):
                 return None
 
             data = user_data.get("data", {})
+            if not isinstance(data, dict) or not data:
+                return None
 
             return UserData(
                 id=data.get("id", 0),
@@ -189,9 +218,22 @@ class DownloaderInstagram:
                 description=data.get("biography", ""),
             )
 
-        except Exception as e:
-            logging.exception("Error fetching Instagram user data: url=%s error=%s", url, e)
+        except Exception as exc:  # pragma: no cover - defensive
+            logging.exception("Error fetching Instagram user data: url=%s error=%s", url, exc)
             return None
+
+
+def _read_video_dimensions(path: str) -> tuple[int, int]:
+    with VideoFileClip(path) as clip:
+        return clip.size
+
+
+async def get_video_dimensions(path: str) -> tuple[int | None, int | None]:
+    try:
+        return await asyncio.to_thread(_read_video_dimensions, path)
+    except Exception as exc:
+        logging.debug("Failed to read Instagram video dimensions: path=%s error=%s", path, exc)
+        return None, None
 
 
 @router.message(F.text.regexp(r"(https?://(www\.)?instagram\.com/\S+)"))
@@ -293,24 +335,19 @@ async def process_instagram_video(message, video_info, bot_url, user_settings, b
             await maybe_delete_user_message(message, user_settings.get("delete_message"))
             return
 
-        if video_urls and downloader.download_video(video_urls[0]):
-            video = FSInputFile(video_file_path)
-            file_size = os.path.getsize(video_file_path)
-            try:
-                video_clip = VideoFileClip(video_file_path)
-                width, height = video_clip.size
-                video_clip.close()
-            except Exception as e:
-                logging.exception("Error in process_instagram_video: url=%s", post_url)
-                width, height = None, None
+        if video_urls and await downloader.download_video_async(video_urls[0]):
+            file_size = await asyncio.to_thread(os.path.getsize, video_file_path)
+            width, height = await get_video_dimensions(video_file_path)
+            video_kwargs = {}
+            if width and height:
+                video_kwargs["width"] = width
+                video_kwargs["height"] = height
 
             if file_size < MAX_FILE_SIZE:
                 await send_chat_action_if_needed(bot, message.chat.id, "upload_video", business_id)
 
                 sent_message = await message.reply_video(
-                    video=video,
-                    width=width,
-                    height=height,
+                    video=FSInputFile(video_file_path),
                     caption=bm.captions(user_captions, video_info.description, bot_url),
                     reply_markup=kb.return_video_info_keyboard(
                         video_info.views,
@@ -321,7 +358,8 @@ async def process_instagram_video(message, video_info, bot_url, user_settings, b
                         post_url,
                         user_settings
                     ),
-                    parse_mode="HTML"
+                    parse_mode="HTML",
+                    **video_kwargs,
                 )
                 await db.add_file(post_url, sent_message.video.file_id, "video")
                 logging.info(
@@ -472,10 +510,21 @@ async def inline_instagram_query(query: types.InlineQuery):
                         video_file_id,
                     )
                 else:
-                    downloader.download_video(video_info.video_urls[0])
-                    video = FSInputFile(video_file_path)
-                    sent_message = await bot.send_video(chat_id=CHANNEL_ID, video=video,
-                                                        caption=f"🎥 Instagram Reel Video from {query.from_user.full_name}")
+                    if not video_info.video_urls:
+                        logging.warning("Instagram inline reel has no video URLs: url=%s", url)
+                        await query.answer([], cache_time=1, is_personal=True)
+                        return
+
+                    success = await downloader.download_video_async(video_info.video_urls[0])
+                    if not success:
+                        logging.error("Instagram inline download failed: url=%s", url)
+                        await query.answer([], cache_time=1, is_personal=True)
+                        return
+                    sent_message = await bot.send_video(
+                        chat_id=CHANNEL_ID,
+                        video=FSInputFile(video_file_path),
+                        caption=f"🎥 Instagram Reel Video from {query.from_user.full_name}",
+                    )
                     video_file_id = sent_message.video.file_id
                     await db.add_file(url, video_file_id, "video")
                     logging.info(
