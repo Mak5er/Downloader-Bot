@@ -26,6 +26,20 @@ from log.logger import logger as logging
 from main import bot, db, send_analytics
 
 MAX_FILE_SIZE = 1 * 1024 * 1024
+YTDLP_SPEED_OPTS: dict[str, Any] = {
+    'quiet': True,
+    'no_warnings': True,
+    'noprogress': True,
+    'continuedl': True,
+    'overwrites': True,
+    'noplaylist': True,
+    'cachedir': False,
+    'socket_timeout': 15,
+    'retries': 3,
+    'fragment_retries': 3,
+    'concurrent_fragment_downloads': 4,
+    'http_chunk_size': 1 << 19,  # 512 KiB chunks keep memory low while enabling concurrency
+}
 
 router = Router()
 
@@ -49,12 +63,13 @@ def custom_oauth_verifier(verification_url, user_code):
 
 async def download_media(url: str, filename: str, format_candidates: list[str]) -> bool:
     outtmpl = os.path.join(OUTPUT_DIR, filename)
+    os.makedirs(os.path.dirname(outtmpl) or OUTPUT_DIR, exist_ok=True)
     last_error: Exception | None = None
 
     for format_expression in format_candidates:
         try:
             ydl_opts = {
-                'quiet': True,
+                **YTDLP_SPEED_OPTS,
                 'format': format_expression,
                 'outtmpl': outtmpl,
                 'merge_output_format': 'mp4',

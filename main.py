@@ -10,6 +10,7 @@ from aiogram.enums.parse_mode import ParseMode
 
 from config import BOT_TOKEN, BOT_COMMANDS, OUTPUT_DIR, custom_api_url, MEASUREMENT_ID, API_SECRET
 from log.logger import logger as logging
+from services.http_client import close_http_session
 from services.db import DataBase, AnalyticsEvent
 
 custom_timeout = 600
@@ -88,7 +89,10 @@ async def main():
     crontab('0 0 * * *', func=clear_downloads_and_notify, start=True)
 
     logging.info("Launching polling loop")
-    await dp.start_polling(bot)
+    try:
+        await dp.start_polling(bot)
+    finally:
+        await close_http_session()
 
 
 if __name__ == "__main__":

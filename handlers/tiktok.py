@@ -3,8 +3,10 @@ import datetime
 import os
 import re
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from typing import Optional
+from urllib.parse import urlparse, urlunparse
 
 import aiohttp
 import requests
@@ -29,22 +31,56 @@ from handlers.utils import (
 )
 from log.logger import logger as logging
 from main import bot, db, send_analytics
+from services.http_client import get_http_session
 
 MAX_FILE_SIZE = 500 * 1024 * 1024
+TIKTOK_USER_AGENT = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36"
+)
+TIKTOK_API_TIMEOUT = aiohttp.ClientTimeout(total=10)
+
+_user_agent_provider: Optional[UserAgent] = None
+
+
+def _get_user_agent() -> str:
+    global _user_agent_provider
+    if _user_agent_provider is None:
+        try:
+            _user_agent_provider = UserAgent()
+        except Exception as e:
+            logging.debug("Failed to initialise UserAgent provider: %s", e)
+            _user_agent_provider = None
+
+    if _user_agent_provider:
+        try:
+            return _user_agent_provider.random
+        except Exception as e:
+            logging.debug("Falling back to static User-Agent: %s", e)
+            _user_agent_provider = None
+
+    return TIKTOK_USER_AGENT
 
 router = Router()
 
 
 def process_tiktok_url(text: str) -> str:
-    def expand_tiktok_url(short_url: str) -> str:
-        ua = UserAgent()
+    def strip_tracking(url: str) -> str:
         try:
-            response = requests.head(short_url, allow_redirects=True, headers={'User-Agent': ua.random})
+            parsed = urlparse(url)
+        except Exception:
+            return url
+        return urlunparse((parsed.scheme, parsed.netloc, parsed.path, parsed.params, "", ""))
+
+    def expand_tiktok_url(short_url: str) -> str:
+        headers = {'User-Agent': _get_user_agent()}
+        try:
+            response = requests.head(short_url, allow_redirects=True, headers=headers)
             logging.debug("TikTok short URL expanded: raw=%s expanded=%s", short_url, response.url)
-            return response.url
+            return strip_tracking(response.url or short_url)
         except requests.RequestException as e:
             logging.error("Error expanding TikTok URL: url=%s error=%s", short_url, e)
-            return short_url
+            return strip_tracking(short_url)
 
     def extract_tiktok_url(input_text: str) -> str:
         match = re.search(r"(https?://(?:www\.|vm\.|vt\.|vn\.)?tiktok\.com/\S+)", input_text)
@@ -52,7 +88,7 @@ def process_tiktok_url(text: str) -> str:
 
     url = extract_tiktok_url(text)
     logging.debug("TikTok URL extracted: raw=%s extracted=%s", text, url)
-    return expand_tiktok_url(url)
+    return strip_tracking(expand_tiktok_url(url))
 
 
 def get_video_id_from_url(url: str) -> str:
@@ -99,18 +135,22 @@ async def fetch_tiktok_data(video_url: str) -> dict:
         if elapsed < 1.0:
             await asyncio.sleep(1.0 - elapsed)
 
-        ua = UserAgent()
+        user_agent = _get_user_agent()
         params = {"url": video_url, "count": 12, "cursor": 0, "web": 1, "hd": 1}
         logging.debug("Fetching TikTok data: url=%s params=%s", video_url, params)
-        async with aiohttp.ClientSession() as session:
+        session = await get_http_session()
+        try:
             async with session.get(
                     "https://tikwm.com/api/",
                     params=params,
-                    timeout=10,
-                    headers={"User-Agent": ua.random}
+                    timeout=TIKTOK_API_TIMEOUT,
+                    headers={"User-Agent": user_agent},
             ) as resp:
                 resp.raise_for_status()
-                data = await resp.json()
+                data = await resp.json(content_type=None)
+        except (aiohttp.ClientError, aiohttp.ContentTypeError, asyncio.TimeoutError) as exc:
+            logging.error("TikTok API request failed: url=%s error=%s", video_url, exc)
+            raise
 
         _last_call_time = time.monotonic()
         logging.debug(
@@ -150,6 +190,10 @@ async def video_info(data: dict) -> Optional[TikTokVideo]:
 
 
 class DownloaderTikTok:
+    STREAM_CHUNK_SIZE = 512 * 1024
+    MULTIPART_MIN_SIZE = 8 * 1024 * 1024
+    MAX_WORKERS = 4
+
     def __init__(self, output_dir: str, filename: str):
         self.output_dir = output_dir
         self.filename = filename
@@ -158,17 +202,130 @@ class DownloaderTikTok:
         return await asyncio.to_thread(self._download_video_sync, video_id)
 
     def _download_video_sync(self, video_id: str) -> bool:
+        if not self.filename:
+            logging.error("TikTok download invoked without target filename: video_id=%s", video_id)
+            return False
+
         try:
             download_url = f"https://tikwm.com/video/media/play/{video_id}.mp4"
-            response = requests.get(download_url, allow_redirects=True, timeout=10)
-            response.raise_for_status()
-            with open(self.filename, 'wb') as f:
-                f.write(response.content)
-            logging.info("TikTok video downloaded: video_id=%s path=%s", video_id, self.filename)
-            return True
+            os.makedirs(os.path.dirname(self.filename) or self.output_dir, exist_ok=True)
+
+            total_size, supports_range = self._probe_video(download_url)
+            if supports_range and total_size >= self.MULTIPART_MIN_SIZE:
+                logging.debug(
+                    "TikTok multipart download triggered: video_id=%s size=%s",
+                    video_id,
+                    total_size,
+                )
+                return self._download_multipart(download_url, total_size)
+
+            return self._download_single(download_url)
         except Exception as e:
             logging.error("Error downloading TikTok video: video_id=%s error=%s", video_id, e)
             return False
+
+    @staticmethod
+    def _base_headers() -> dict[str, str]:
+        return {
+            "User-Agent": _get_user_agent(),
+            "Referer": "https://www.tiktok.com/",
+        }
+
+    def _probe_video(self, url: str) -> tuple[int, bool]:
+        headers = self._base_headers()
+        try:
+            response = requests.head(url, headers=headers, allow_redirects=True, timeout=10)
+            response.raise_for_status()
+            total_size = int(response.headers.get("Content-Length", "0") or 0)
+            supports_range = response.headers.get("Accept-Ranges", "").lower() == "bytes"
+            return total_size, supports_range
+        except Exception as e:
+            logging.debug("TikTok HEAD probe failed: url=%s error=%s", url, e)
+            return 0, False
+
+    def _download_single(self, url: str) -> bool:
+        headers = self._base_headers()
+        try:
+            with requests.get(
+                url,
+                headers=headers,
+                stream=True,
+                allow_redirects=True,
+                timeout=(5, 60),
+            ) as response:
+                response.raise_for_status()
+                with open(self.filename, "wb") as outfile:
+                    for chunk in response.iter_content(chunk_size=self.STREAM_CHUNK_SIZE):
+                        if chunk:
+                            outfile.write(chunk)
+            logging.info("TikTok video downloaded: path=%s", self.filename)
+            return True
+        except Exception as e:
+            logging.error("TikTok single download failed: url=%s error=%s", url, e)
+            return False
+
+    def _download_multipart(self, url: str, total_size: int) -> bool:
+        temp_path = f"{self.filename}.part"
+        ranges = self._split_ranges(total_size)
+        headers = self._base_headers()
+
+        try:
+            with open(temp_path, "wb") as temp_file:
+                temp_file.truncate(total_size)
+
+            def fetch_range(start: int, end: int) -> None:
+                range_headers = {**headers, "Range": f"bytes={start}-{end}"}
+                with requests.get(
+                    url,
+                    headers=range_headers,
+                    stream=True,
+                    allow_redirects=True,
+                    timeout=(5, 60),
+                ) as response:
+                    response.raise_for_status()
+                    with open(temp_path, "r+b") as part_file:
+                        part_file.seek(start)
+                        for chunk in response.iter_content(chunk_size=self.STREAM_CHUNK_SIZE):
+                            if chunk:
+                                part_file.write(chunk)
+
+            with ThreadPoolExecutor(max_workers=min(self.MAX_WORKERS, len(ranges))) as executor:
+                futures = [executor.submit(fetch_range, start, end) for start, end in ranges]
+                for future in as_completed(futures):
+                    future.result()
+
+            os.replace(temp_path, self.filename)
+            logging.info(
+                "TikTok video downloaded with multipart: path=%s size=%s ranges=%s",
+                self.filename,
+                total_size,
+                len(ranges),
+            )
+            return True
+        except Exception as e:
+            logging.error("TikTok multipart download failed: url=%s error=%s", url, e)
+            if os.path.exists(temp_path):
+                try:
+                    os.remove(temp_path)
+                except OSError:
+                    logging.debug("Failed to clean temp TikTok file: path=%s", temp_path)
+            return False
+
+    def _split_ranges(self, total_size: int) -> list[tuple[int, int]]:
+        if total_size <= 0:
+            return [(0, 0)]
+
+        target_part_size = max(
+            self.MULTIPART_MIN_SIZE,
+            total_size // (self.MAX_WORKERS * 2) or self.MULTIPART_MIN_SIZE,
+        )
+        ranges: list[tuple[int, int]] = []
+        start = 0
+        while start < total_size:
+            end = min(start + target_part_size - 1, total_size - 1)
+            ranges.append((start, end))
+            start = end + 1
+        return ranges
 
     async def get_video_size(self, path: str) -> tuple[int, int]:
         return await asyncio.to_thread(self._get_size_sync, path)
@@ -184,8 +341,7 @@ class DownloaderTikTok:
         max_retries = 10
         retry_delay = 1.5
         try:
-            ua = UserAgent()
-            headers = {'User-Agent': ua.random}
+            headers = {'User-Agent': _get_user_agent()}
             exist_url = f"https://countik.com/api/exist/{username}"
 
             sec_user_id = None
