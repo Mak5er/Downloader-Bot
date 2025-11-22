@@ -26,8 +26,13 @@ COPY requirements.txt .
 RUN pip install --upgrade pip setuptools
 
 # Install any dependencies
-RUN pip install --no-cache-dir -r requirements.txt
-
+RUN pip install \
+    --no-cache-dir \
+    --index-url https://pypi.org/simple \
+    --default-timeout=60 \
+    --retries=5 \
+    -r requirements.txt
+    
 # Copy the rest of the application code
 COPY . .
 
