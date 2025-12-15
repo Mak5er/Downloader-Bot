@@ -13,6 +13,7 @@ from matplotlib.ticker import MaxNLocator
 import keyboards as kb
 import messages as bm
 from handlers.utils import remove_file
+from log.logger import logger as logging
 from main import db, send_analytics, bot
 
 router = Router()
@@ -282,16 +283,23 @@ def build_stats_caption(period: str, data: dict[str, int]) -> str:
 
 @router.message(Command("stats"))
 async def stats_command(message: types.Message):
-    period = "Week"
-    data_today = await db.get_downloaded_files_count(period)
-    filename = create_and_save_chart(data_today, period)
-    caption = build_stats_caption(period, data_today)
+    try:
+        period = "Week"
+        data_today = await db.get_downloaded_files_count(period)
+        filename = create_and_save_chart(data_today, period)
+        caption = build_stats_caption(period, data_today)
 
-    chart_input_file = FSInputFile(filename)
-    await message.answer_photo(chart_input_file, caption=caption,
-                               reply_markup=kb.stats_keyboard())
+        chart_input_file = FSInputFile(filename)
+        await message.answer_photo(
+            chart_input_file,
+            caption=caption,
+            reply_markup=kb.stats_keyboard(),
+        )
 
-    await remove_file(filename)
+        await remove_file(filename)
+    except Exception:
+        await message.answer("⚠️ Could not generate stats right now. Please try again later.")
+        logging.exception("Error handling /stats")
 
 
 @router.callback_query(F.data.startswith('date_'))

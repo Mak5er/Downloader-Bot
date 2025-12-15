@@ -12,6 +12,8 @@ fake-useragent
 pytz
 colorlog
 SQLAlchemy
-aiosqlite
 yt-dlp
 alembic
+psycopg2-binary
+asyncpg
+pytest-asyncio

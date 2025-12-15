@@ -1,4 +1,5 @@
 from datetime import datetime, timedelta
+import os
 
 import pytest
 import pytest_asyncio
@@ -7,16 +8,17 @@ from services import db as db_module
 
 
 @pytest_asyncio.fixture
-async def database(tmp_path, monkeypatch):
-    sqlite_file = tmp_path / "test.db"
+async def database(monkeypatch):
+    db_url = os.getenv("DATABASE_URL")
+    if not db_url:
+        pytest.skip("DATABASE_URL env not set for tests.")
 
     async def noop_migration():
         return None
 
-    monkeypatch.setattr(db_module, "sqlite_path", str(sqlite_file))
     monkeypatch.setattr(db_module, "run_alembic_migration", noop_migration)
 
-    database = db_module.DataBase()
+    database = db_module.DataBase(db_url)
     await database.init_db()
     yield database
     await database.engine.dispose()

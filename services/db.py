@@ -1,10 +1,11 @@
 from datetime import datetime, timedelta
+import re
 
-from sqlalchemy import Column, Text, TIMESTAMP, func, select, delete, update, create_engine, Integer, ForeignKey
-from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
-from sqlalchemy.orm import sessionmaker, declarative_base, relationship
+from sqlalchemy import Column, Text, TIMESTAMP, func, select, delete, update, ForeignKey, BigInteger, text
+from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
+from sqlalchemy.orm import declarative_base, relationship
 
-from config import sqlite_path
+from config import DATABASE_URL
 from log.logger import logger as logging
 
 Base = declarative_base()
@@ -13,7 +14,7 @@ Base = declarative_base()
 class DownloadedFile(Base):
     __tablename__ = "downloaded_files"
 
-    id = Column(Integer, primary_key=True, autoincrement=True)
+    id = Column(BigInteger, primary_key=True, autoincrement=True)
     url = Column(Text, unique=True, nullable=False)
     file_id = Column(Text, nullable=False)
     date_added = Column(TIMESTAMP(timezone=True), server_default=func.now())
@@ -23,7 +24,7 @@ class DownloadedFile(Base):
 class User(Base):
     __tablename__ = "users"
 
-    user_id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(BigInteger, primary_key=True, autoincrement=True)
     user_name = Column(Text, nullable=True)
     user_username = Column(Text, nullable=True)
     chat_type = Column(Text, nullable=True)
@@ -36,8 +37,8 @@ class User(Base):
 class AnalyticsEvent(Base):
     __tablename__ = "analytics_events"
 
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    user_id = Column(Integer, nullable=False)
+    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    user_id = Column(BigInteger, nullable=False)
     chat_type = Column(Text, nullable=True)
     action_name = Column(Text, nullable=False)
     created_at = Column(TIMESTAMP(timezone=True), server_default=func.now())
@@ -46,8 +47,8 @@ class AnalyticsEvent(Base):
 class Settings(Base):
     __tablename__ = "settings"
 
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    user_id = Column(ForeignKey("users.user_id"))
+    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    user_id = Column(BigInteger, ForeignKey("users.user_id"))
     captions = Column(Text, default="off", nullable=False)
     delete_message = Column(Text, default="off", nullable=False)
     info_buttons = Column(Text, default="off", nullable=False)
@@ -59,29 +60,52 @@ class Settings(Base):
 async def run_alembic_migration():
     import os
     import subprocess
+    import shutil
 
     versions_dir = os.path.join(os.path.dirname(__file__), "alembic", "versions")
     os.makedirs(versions_dir, exist_ok=True)
 
+    alembic_exe = shutil.which("alembic")
+    if not alembic_exe:
+        logging.warning("Alembic executable not found. Skipping migrations.")
+        return
+
     subprocess.run([
-        "alembic", "revision", "--autogenerate", "-m", "auto update"
+        alembic_exe, "revision", "--autogenerate", "-m", "auto update"
     ], cwd=os.path.dirname(__file__), stdout=subprocess.DEVNULL)
-    subprocess.run(["alembic", "upgrade", "head"], cwd=os.path.dirname(__file__))
+    subprocess.run([alembic_exe, "upgrade", "head"], cwd=os.path.dirname(__file__))
 
 
 class DataBase:
-    def __init__(self):
-        # SQLite engine для бота
-        self.sqlite_path = sqlite_path
-        self.engine = create_async_engine(f"sqlite+aiosqlite:///{self.sqlite_path}", echo=False)
-        self.SessionLocal = sessionmaker(bind=self.engine, class_=AsyncSession, expire_on_commit=False)
+    def __init__(self, database_url: str | None = None):
+        self.database_url = database_url or DATABASE_URL
+        if not self.database_url:
+            raise ValueError("DATABASE_URL is not set. Configure PostgreSQL connection string.")
+
+        # Follow Neon example: swap driver to asyncpg directly
+        self.async_url = re.sub(r"^postgresql:", "postgresql+asyncpg:", self.database_url)
+
+        self.engine = create_async_engine(self.async_url, echo=False, future=True)
+        self.SessionLocal = async_sessionmaker(bind=self.engine, expire_on_commit=False, class_=AsyncSession)
 
     async def init_db(self):
-        sync_engine = create_engine(f"sqlite:///{self.sqlite_path}")
-        Base.metadata.create_all(sync_engine)
-        logging.info("SQLite tables checked.")
-
-        await run_alembic_migration()
+        async with self.engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+            # If using PostgreSQL, sync sequences to current max IDs to avoid PK collisions after migrations
+            if self.async_url.startswith("postgresql+asyncpg"):
+                await conn.execute(
+                    text("SELECT setval(pg_get_serial_sequence('downloaded_files','id'), COALESCE(MAX(id),0)+1, false) FROM downloaded_files")
+                )
+                await conn.execute(
+                    text("SELECT setval(pg_get_serial_sequence('analytics_events','id'), COALESCE(MAX(id),0)+1, false) FROM analytics_events")
+                )
+                await conn.execute(
+                    text("SELECT setval(pg_get_serial_sequence('settings','id'), COALESCE(MAX(id),0)+1, false) FROM settings")
+                )
+                await conn.execute(
+                    text("SELECT setval(pg_get_serial_sequence('users','user_id'), COALESCE(MAX(user_id),0)+1, false) FROM users")
+                )
+        logging.info("Database tables checked.")
 
     async def get_session(self):
         async with self.SessionLocal() as session:
@@ -301,4 +325,13 @@ class DataBase:
                 .order_by(func.date(AnalyticsEvent.created_at))
             )
 
-            return {datetime.strptime(row[0], "%Y-%m-%d").strftime("%Y-%m-%d"): row[1] for row in result.all()}
+            counts: dict[str, int] = {}
+            for row in result.all():
+                date_val = row[0]
+                if isinstance(date_val, str):
+                    normalized = datetime.strptime(date_val, "%Y-%m-%d").strftime("%Y-%m-%d")
+                else:
+                    normalized = date_val.strftime("%Y-%m-%d")
+                counts[normalized] = row[1]
+
+            return counts

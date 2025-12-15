@@ -2,7 +2,7 @@ import asyncio
 import os
 import re
 from dataclasses import dataclass
-from typing import List
+from typing import List, Optional
 
 import requests
 from aiogram import Router, F, types
@@ -25,6 +25,12 @@ from handlers.utils import (
 )
 from log.logger import logger as logging
 from main import bot, db, send_analytics
+from services.download_manager import (
+    DownloadConfig,
+    DownloadError,
+    DownloadMetrics,
+    ResilientDownloader,
+)
 
 MAX_FILE_SIZE = 500 * 1024 * 1024
 
@@ -60,44 +66,32 @@ class UserData:
     description: str
 
 
-class DownloaderInstagram:
-    STREAM_CHUNK_SIZE = 512 * 1024
+class InstagramService:
+    """High-level helper that encapsulates API access and media downloads."""
 
-    def __init__(self, output_dir, filename):
-        self.output_dir = output_dir
-        self.filename = filename
+    def __init__(self, output_dir: str) -> None:
+        config = DownloadConfig(
+            chunk_size=1024 * 1024,
+            multipart_threshold=10 * 1024 * 1024,
+            max_workers=6,
+            retry_backoff=0.75,
+        )
+        self._downloader = ResilientDownloader(output_dir, config=config)
 
-    def download_video(self, video_url):
+    async def download_video(self, video_url: str, filename: str) -> Optional[DownloadMetrics]:
         try:
-            os.makedirs(os.path.dirname(self.filename) or self.output_dir, exist_ok=True)
-            with requests.get(
-                    video_url,
-                    stream=True,
-                    allow_redirects=True,
-                    timeout=(5, 30),
-            ) as response:
-                response.raise_for_status()
-                with open(self.filename, "wb") as target:
-                    for chunk in response.iter_content(chunk_size=self.STREAM_CHUNK_SIZE):
-                        if chunk:
-                            target.write(chunk)
-            return True
-        except requests.RequestException as exc:
+            return await self._downloader.download(video_url, filename)
+        except DownloadError as exc:
             logging.error("Error downloading Instagram video: url=%s error=%s", video_url, exc)
-            return False
+            return None
         except Exception as exc:  # pragma: no cover - defensive
             logging.error("Unexpected Instagram download error: url=%s error=%s", video_url, exc)
-            return False
+            return None
 
-    async def download_video_async(self, video_url: str) -> bool:
-        return await asyncio.to_thread(self.download_video, video_url)
+    async def fetch_post_data(self, url: str) -> Optional[InstagramVideo]:
+        return await asyncio.to_thread(self._fetch_post_data_sync, url)
 
-    @classmethod
-    async def fetch_instagram_post_data(cls, url):
-        return await asyncio.to_thread(cls._fetch_instagram_post_data_sync, url)
-
-    @classmethod
-    def _fetch_instagram_post_data_sync(cls, url):
+    def _fetch_post_data_sync(self, url: str) -> Optional[InstagramVideo]:
         try:
             api_url = f"https://{INSTAGRAM_RAPID_API_HOST}/v1/post_info"
             querystring = {
@@ -173,12 +167,10 @@ class DownloaderInstagram:
             logging.exception("Error fetching Instagram post data: url=%s error=%s", url, exc)
             return None
 
-    @classmethod
-    async def fetch_instagram_user_data(cls, url):
-        return await asyncio.to_thread(cls._fetch_instagram_user_data_sync, url)
+    async def fetch_user_data(self, url: str) -> Optional[UserData]:
+        return await asyncio.to_thread(self._fetch_user_data_sync, url)
 
-    @classmethod
-    def _fetch_instagram_user_data_sync(cls, url):
+    def _fetch_user_data_sync(self, url: str) -> Optional[UserData]:
         try:
             api_url = f"https://{INSTAGRAM_RAPID_API_HOST}/v1/info"
             querystring = {
@@ -223,6 +215,9 @@ class DownloaderInstagram:
             return None
 
 
+instagram_service = InstagramService(OUTPUT_DIR)
+
+
 def _read_video_dimensions(path: str) -> tuple[int, int]:
     with VideoFileClip(path) as clip:
         return clip.size
@@ -257,10 +252,10 @@ async def process_instagram_url(message: types.Message):
 
         await react_to_message(message, "👾", business_id=business_id)
 
-        video_info = await DownloaderInstagram.fetch_instagram_post_data(url)
+        video_info = await instagram_service.fetch_post_data(url)
 
         if video_info is None and ("/p/" not in url and "/reel/" not in url):
-            user_info = await DownloaderInstagram.fetch_instagram_user_data(url)
+            user_info = await instagram_service.fetch_user_data(url)
             if user_info:
                 await process_instagram_profile(message, user_info, bot_url, user_settings, business_id, url)
                 return
@@ -306,8 +301,7 @@ async def process_instagram_video(message, video_info, bot_url, user_settings, b
         video_urls = video_info.video_urls
         video_id = video_info.id
         name = f"{video_id}_instagram_video.mp4"
-        video_file_path = os.path.join(OUTPUT_DIR, name)
-        downloader = DownloaderInstagram(OUTPUT_DIR, video_file_path)
+        download_path: Optional[str] = None
         post_url = f"https://www.instagram.com/reel/{video_info.code}"
 
         db_file_id = await db.get_file_id(post_url)
@@ -335,51 +329,57 @@ async def process_instagram_video(message, video_info, bot_url, user_settings, b
             await maybe_delete_user_message(message, user_settings.get("delete_message"))
             return
 
-        if video_urls and await downloader.download_video_async(video_urls[0]):
-            file_size = await asyncio.to_thread(os.path.getsize, video_file_path)
-            width, height = await get_video_dimensions(video_file_path)
-            video_kwargs = {}
-            if width and height:
-                video_kwargs["width"] = width
-                video_kwargs["height"] = height
+        metrics: Optional[DownloadMetrics] = None
+        if video_urls:
+            metrics = await instagram_service.download_video(video_urls[0], name)
 
-            if file_size < MAX_FILE_SIZE:
-                await send_chat_action_if_needed(bot, message.chat.id, "upload_video", business_id)
-
-                sent_message = await message.reply_video(
-                    video=FSInputFile(video_file_path),
-                    caption=bm.captions(user_captions, video_info.description, bot_url),
-                    reply_markup=kb.return_video_info_keyboard(
-                        video_info.views,
-                        video_info.likes,
-                        video_info.comments,
-                        video_info.shares,
-                        None,
-                        post_url,
-                        user_settings
-                    ),
-                    parse_mode="HTML",
-                    **video_kwargs,
-                )
-                await db.add_file(post_url, sent_message.video.file_id, "video")
-                logging.info(
-                    "Instagram video cached: url=%s file_id=%s",
-                    post_url,
-                    sent_message.video.file_id,
-                )
-                await maybe_delete_user_message(message, user_settings.get("delete_message"))
-            else:
-                logging.warning(
-                    "Instagram video too large: url=%s size=%s",
-                    post_url,
-                    file_size,
-                )
-                await handle_large_file(message, business_id)
-
-            await asyncio.sleep(5)
-            await remove_file(video_file_path)
-        else:
+        if not metrics:
             await handle_download_error(message, business_id=business_id)
+            return
+
+        download_path = metrics.path
+        file_size = metrics.size
+        width, height = await get_video_dimensions(download_path)
+        video_kwargs: dict[str, int] = {}
+        if width and height:
+            video_kwargs["width"] = width
+            video_kwargs["height"] = height
+
+        if file_size < MAX_FILE_SIZE:
+            await send_chat_action_if_needed(bot, message.chat.id, "upload_video", business_id)
+
+            sent_message = await message.reply_video(
+                video=FSInputFile(download_path),
+                caption=bm.captions(user_captions, video_info.description, bot_url),
+                reply_markup=kb.return_video_info_keyboard(
+                    video_info.views,
+                    video_info.likes,
+                    video_info.comments,
+                    video_info.shares,
+                    None,
+                    post_url,
+                    user_settings
+                ),
+                parse_mode="HTML",
+                **video_kwargs,
+            )
+            await db.add_file(post_url, sent_message.video.file_id, "video")
+            logging.info(
+                "Instagram video cached: url=%s file_id=%s",
+                post_url,
+                sent_message.video.file_id,
+            )
+            await maybe_delete_user_message(message, user_settings.get("delete_message"))
+        else:
+            logging.warning(
+                "Instagram video too large: url=%s size=%s",
+                post_url,
+                file_size,
+            )
+            await handle_large_file(message, business_id)
+
+        await asyncio.sleep(5)
+        await remove_file(download_path)
     except Exception as e:
         logging.exception("Error in process_instagram_video: %s", e)
         await handle_download_error(message, business_id=business_id)
@@ -493,45 +493,48 @@ async def inline_instagram_query(query: types.InlineQuery):
         results = []
 
         if "/reel/" in url:
-            video_info = await DownloaderInstagram.fetch_instagram_post_data(url)
+            video_info = await instagram_service.fetch_post_data(url)
+
+            if not video_info:
+                await query.answer([], cache_time=1, is_personal=True)
+                return
 
             name = f"{video_info.id}_instagram_video.mp4"
-            video_file_path = os.path.join(OUTPUT_DIR, name)
+            download_path: Optional[str] = None
 
-            downloader = DownloaderInstagram(OUTPUT_DIR, video_file_path)
+            db_file_id = await db.get_file_id(url)
+            if db_file_id:
+                video_file_id = db_file_id
+                logging.info(
+                    "Serving cached Instagram inline video: url=%s file_id=%s",
+                    url,
+                    video_file_id,
+                )
+            else:
+                if not video_info.video_urls:
+                    logging.warning("Instagram inline reel has no video URLs: url=%s", url)
+                    await query.answer([], cache_time=1, is_personal=True)
+                    return
 
-            if video_info:
-                db_file_id = await db.get_file_id(url)
-                if db_file_id:
-                    video_file_id = db_file_id
-                    logging.info(
-                        "Serving cached Instagram inline video: url=%s file_id=%s",
-                        url,
-                        video_file_id,
-                    )
-                else:
-                    if not video_info.video_urls:
-                        logging.warning("Instagram inline reel has no video URLs: url=%s", url)
-                        await query.answer([], cache_time=1, is_personal=True)
-                        return
+                metrics = await instagram_service.download_video(video_info.video_urls[0], name)
+                if not metrics:
+                    logging.error("Instagram inline download failed: url=%s", url)
+                    await query.answer([], cache_time=1, is_personal=True)
+                    return
 
-                    success = await downloader.download_video_async(video_info.video_urls[0])
-                    if not success:
-                        logging.error("Instagram inline download failed: url=%s", url)
-                        await query.answer([], cache_time=1, is_personal=True)
-                        return
-                    sent_message = await bot.send_video(
-                        chat_id=CHANNEL_ID,
-                        video=FSInputFile(video_file_path),
-                        caption=f"🎥 Instagram Reel Video from {query.from_user.full_name}",
-                    )
-                    video_file_id = sent_message.video.file_id
-                    await db.add_file(url, video_file_id, "video")
-                    logging.info(
-                        "Instagram inline video cached: url=%s file_id=%s",
-                        url,
-                        video_file_id,
-                    )
+                download_path = metrics.path
+                sent_message = await bot.send_video(
+                    chat_id=CHANNEL_ID,
+                    video=FSInputFile(download_path),
+                    caption=f"🎥 Instagram Reel Video from {query.from_user.full_name}",
+                )
+                video_file_id = sent_message.video.file_id
+                await db.add_file(url, video_file_id, "video")
+                logging.info(
+                    "Instagram inline video cached: url=%s file_id=%s",
+                    url,
+                    video_file_id,
+                )
 
                 results.append(
                     InlineQueryResultVideo(
@@ -556,8 +559,8 @@ async def inline_instagram_query(query: types.InlineQuery):
 
             await query.answer(results, cache_time=10)
 
-            await asyncio.sleep(5)
-            await remove_file(video_file_path)
+            if download_path:
+                await remove_file(download_path)
 
             return
 

@@ -54,27 +54,31 @@ def test_extract_instagram_url_returns_original():
     assert instagram.extract_instagram_url(text) == text
 
 
-def test_downloader_download_video_success(monkeypatch, tmp_path):
+@pytest.mark.asyncio
+async def test_downloader_download_video_success(monkeypatch, tmp_path):
     target = tmp_path / "ig.mp4"
     monkeypatch.setattr(
         instagram.requests,
         "get",
         lambda url, **kwargs: DummyResponse(content=b"video"),
     )
-    downloader = instagram.DownloaderInstagram(output_dir=str(tmp_path), filename=str(target))
-    assert downloader.download_video("https://example.com/video.mp4") is True
+    service = instagram.InstagramService(output_dir=str(tmp_path))
+    metrics = await service.download_video("https://example.com/video.mp4", target.name)
+    assert metrics is not None
     assert target.exists()
     assert target.read_bytes() == b"video"
 
 
-def test_downloader_download_video_failure(monkeypatch, tmp_path):
+@pytest.mark.asyncio
+async def test_downloader_download_video_failure(monkeypatch, tmp_path):
     monkeypatch.setattr(
         instagram.requests,
         "get",
         lambda *args, **kwargs: DummyResponse(status_code=500),
     )
-    downloader = instagram.DownloaderInstagram(output_dir=str(tmp_path), filename=str(tmp_path / "fail.mp4"))
-    assert downloader.download_video("https://example.com/video.mp4") is False
+    service = instagram.InstagramService(output_dir=str(tmp_path))
+    metrics = await service.download_video("https://example.com/video.mp4", "fail.mp4")
+    assert metrics is None
 
 
 @pytest.mark.asyncio
@@ -104,8 +108,9 @@ async def test_fetch_instagram_post_data_success(monkeypatch):
 
     monkeypatch.setattr(instagram.requests, "get", fake_get)
     monkeypatch.setattr(instagram, "RAPID_API_KEYS", ["KEY1", "KEY2"])
+    service = instagram.InstagramService(output_dir=".")
 
-    result = await instagram.DownloaderInstagram.fetch_instagram_post_data("https://instagram.com/p/xyz")
+    result = await service.fetch_post_data("https://instagram.com/p/xyz")
     assert result is not None
     assert result.id == "1"
     assert result.video_urls == ["https://example.com/video.mp4"]
@@ -124,8 +129,9 @@ async def test_fetch_instagram_post_data_handles_failures(monkeypatch):
 
     monkeypatch.setattr(instagram.requests, "get", fake_get)
     monkeypatch.setattr(instagram, "RAPID_API_KEYS", ["KEY1"])
+    service = instagram.InstagramService(output_dir=".")
 
-    result = await instagram.DownloaderInstagram.fetch_instagram_post_data("https://instagram.com/p/fail")
+    result = await service.fetch_post_data("https://instagram.com/p/fail")
     assert result is None
     assert call_count["value"] == 1
 
@@ -148,8 +154,9 @@ async def test_fetch_instagram_user_data_success(monkeypatch):
 
     monkeypatch.setattr(instagram.requests, "get", fake_get)
     monkeypatch.setattr(instagram, "RAPID_API_KEYS", ["KEY1"])
+    service = instagram.InstagramService(output_dir=".")
 
-    result = await instagram.DownloaderInstagram.fetch_instagram_user_data("https://instagram.com/user")
+    result = await service.fetch_user_data("https://instagram.com/user")
     assert result is not None
     assert result.nickname == "user"
     assert result.followers == 1000
@@ -160,6 +167,7 @@ async def test_fetch_instagram_user_data_success(monkeypatch):
 async def test_fetch_instagram_user_data_handles_missing(monkeypatch):
     monkeypatch.setattr(instagram.requests, "get", lambda *args, **kwargs: DummyResponse(json_data={}))
     monkeypatch.setattr(instagram, "RAPID_API_KEYS", ["KEY1"])
+    service = instagram.InstagramService(output_dir=".")
 
-    result = await instagram.DownloaderInstagram.fetch_instagram_user_data("https://instagram.com/user")
+    result = await service.fetch_user_data("https://instagram.com/user")
     assert result is None

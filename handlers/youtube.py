@@ -44,22 +44,11 @@ YTDLP_SPEED_OPTS: dict[str, Any] = {
 router = Router()
 
 
-def custom_oauth_verifier(verification_url, user_code):
-    send_message_url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
-    params = {
-        "chat_id": admin_id,
-        "text": f"<b>OAuth Verification</b>\n\nOpen this URL in your browser:\n{verification_url}\n\nEnter this code:\n<code>{user_code}</code>",
-        "parse_mode": "HTML"
-    }
-    response = requests.get(send_message_url, params=params)
-    if response.status_code == 200:
-        logging.info("OAuth message sent successfully.")
-    else:
-        logging.error(f"OAuth message failed. Status code: {response.status_code}")
-    for i in range(30, 0, -5):
-        logging.info(f"{i} seconds remaining for verification")
-        time.sleep(5)
-
+def safe_int(value, default: int = 0) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
 
 async def download_media(url: str, filename: str, format_candidates: list[str]) -> bool:
     outtmpl = os.path.join(OUTPUT_DIR, filename)
@@ -74,7 +63,6 @@ async def download_media(url: str, filename: str, format_candidates: list[str]) 
                 'outtmpl': outtmpl,
                 'merge_output_format': 'mp4',
                 'oauth': True,
-                'oauth_verifier': custom_oauth_verifier,
             }
             logging.debug(
                 "Attempting download: url=%s filename=%s format=%s",
@@ -215,8 +203,8 @@ async def download_video(message: types.Message):
             await message.reply(bm.nothing_found())
             return
 
-        views = int(yt.get('view_count', 0))
-        likes = int(yt.get('like_count', 0))
+        views = safe_int(yt.get('view_count'), None)
+        likes = safe_int(yt.get('like_count'), None)
 
         size = video.get('filesize_approx', 0) // 1024  # Convert to KB
         if size >= MAX_FILE_SIZE:
@@ -253,7 +241,8 @@ async def download_video(message: types.Message):
         video_file_path = os.path.join(OUTPUT_DIR, name)
 
         format_candidates = [
-            "best",
+            # Prefer H.264 MP4 for better mobile compatibility
+            "bv*[vcodec^=avc1][ext=mp4]+ba[ext=m4a]/b[ext=mp4]/best",
         ]
 
         if await download_media(yt['webpage_url'], name, format_candidates):
@@ -363,8 +352,8 @@ async def inline_youtube_query(query: types.InlineQuery):
         )
         yt = await asyncio.to_thread(get_youtube_video, url)
 
-        views = int(yt.get('view_count', 0))
-        likes = int(yt.get('like_count', 0))
+        views = safe_int(yt.get('view_count'), 0)
+        likes = safe_int(yt.get('like_count'), 0)
 
         await send_analytics(user_id=query.from_user.id, chat_type=query.chat_type, action_name="inline_youtube_shorts")
 
@@ -425,7 +414,8 @@ async def inline_youtube_query(query: types.InlineQuery):
         video_file_path = os.path.join(OUTPUT_DIR, name)
 
         format_candidates = [
-            "best",
+            # Prefer H.264 MP4 for better mobile compatibility
+            "bv*[vcodec^=avc1][ext=mp4]+ba[ext=m4a]/b[ext=mp4]/best",
         ]
 
         if await download_media(yt['webpage_url'], name, format_candidates):
