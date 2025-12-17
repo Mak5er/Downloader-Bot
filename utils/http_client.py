@@ -6,7 +6,9 @@ import aiohttp
 _session: Optional[aiohttp.ClientSession] = None
 _lock = asyncio.Lock()
 
+# Slightly higher limits to speed up bursty handler traffic while keeping sockets bounded
 _CLIENT_TIMEOUT = aiohttp.ClientTimeout(total=20, connect=5, sock_read=20)
+_CONNECTOR_LIMIT = 64
 
 
 async def get_http_session() -> aiohttp.ClientSession:
@@ -17,7 +19,7 @@ async def get_http_session() -> aiohttp.ClientSession:
 
     async with _lock:
         if _session is None or _session.closed:
-            connector = aiohttp.TCPConnector(limit=32)
+            connector = aiohttp.TCPConnector(limit=_CONNECTOR_LIMIT)
             _session = aiohttp.ClientSession(timeout=_CLIENT_TIMEOUT, connector=connector)
     return _session
 

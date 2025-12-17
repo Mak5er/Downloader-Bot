@@ -353,3 +353,20 @@ class ResilientDownloader:
             self._thread_local.session = session
         return session
 
+
+def log_download_metrics(source: str, metrics: DownloadMetrics) -> None:
+    """Log unified download stats for handlers."""
+    try:
+        size_mb = metrics.size / (1024 * 1024)
+        logging.info(
+            "Download metrics: source=%s url=%s path=%s size=%.2fMB elapsed=%.2fs multipart=%s resumed=%s",
+            source,
+            metrics.url,
+            metrics.path,
+            size_mb,
+            metrics.elapsed,
+            metrics.used_multipart,
+            metrics.resumed,
+        )
+    except Exception as exc:  # pragma: no cover - defensive logging
+        logging.debug("Failed to log metrics: source=%s error=%s", source, exc)

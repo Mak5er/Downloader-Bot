@@ -21,10 +21,26 @@ from handlers.utils import (
 )
 from log.logger import logger as logging
 from main import bot, db, send_analytics
+from utils.download_manager import (
+    DownloadConfig,
+    DownloadMetrics,
+    ResilientDownloader,
+    log_download_metrics,
+)
 
-MAX_FILE_SIZE = 500 * 1024 * 1024
+MAX_FILE_SIZE = int(1.5 * 1024 * 1024 * 1024)  # 1.5 GB
 
 router = Router()
+
+twitter_downloader = ResilientDownloader(
+    OUTPUT_DIR,
+    config=DownloadConfig(
+        chunk_size=1024 * 1024,
+        multipart_threshold=8 * 1024 * 1024,
+        max_workers=8,             # more workers for faster parallel fetch
+        stream_timeout=(5.0, 45.0),
+    ),
+)
 
 
 def extract_tweet_ids(text):
@@ -64,27 +80,12 @@ def scrape_media(tweet_id):
         raise
 
 
-async def download_media(media_url, file_path):
-    def _download():
-        response = requests.get(media_url, stream=True)
-        response.raise_for_status()
-        with open(file_path, 'wb') as file:
-            for chunk in response.iter_content(chunk_size=8192):
-                file.write(chunk)
-
-    try:
-        await asyncio.to_thread(_download)
-    except Exception as e:
-        logging.error("Failed to download media: url=%s error=%s", media_url, e)
-        raise
-
-
-async def _collect_media_files(tweet_id, tweet_media, tweet_dir):
+async def _collect_media_files(tweet_id, tweet_media):
     photos: list[str] = []
     videos: list[str] = []
 
     download_tasks = []
-    media_meta: list[tuple[str, str]] = []
+    media_meta: list[tuple[str, str, str]] = []
 
     for media in tweet_media.get('media_extended', []):
         media_url = media.get('url')
@@ -93,7 +94,7 @@ async def _collect_media_files(tweet_id, tweet_media, tweet_dir):
             logging.debug("Skipping malformed media entry: tweet_id=%s entry=%s", tweet_id, media)
             continue
 
-        file_name = os.path.join(tweet_dir, os.path.basename(urlsplit(media_url).path))
+        file_name = os.path.join(str(tweet_id), os.path.basename(urlsplit(media_url).path))
 
         logging.debug(
             "Queueing tweet media download: tweet_id=%s type=%s url=%s",
@@ -101,28 +102,43 @@ async def _collect_media_files(tweet_id, tweet_media, tweet_dir):
             media_type,
             media_url,
         )
-        download_tasks.append(download_media(media_url, file_name))
-        media_meta.append((media_type, file_name))
+        download_tasks.append(
+            twitter_downloader.download(media_url, file_name, skip_if_exists=True)
+        )
+        media_meta.append((media_type, file_name, media_url))
 
     if not download_tasks:
         logging.debug("No downloadable media found: tweet_id=%s", tweet_id)
         return photos, videos
 
     results = await asyncio.gather(*download_tasks, return_exceptions=True)
-    for (media_type, file_path), result in zip(media_meta, results):
+    for (media_type, file_path, media_url), result in zip(media_meta, results):
         if isinstance(result, Exception):
             logging.error(
-                "Failed to download tweet media chunk: tweet_id=%s path=%s error=%s",
+                "Failed to download tweet media chunk: tweet_id=%s path=%s type=%s error=%s",
                 tweet_id,
-                file_path,
+                os.path.join(OUTPUT_DIR, file_path),
+                media_type,
                 result,
             )
             continue
+        resolved_path = (
+            result.path if isinstance(result, DownloadMetrics) else os.path.join(OUTPUT_DIR, file_path)
+        )
+
+        log_download_metrics("twitter_media", result if isinstance(result, DownloadMetrics) else DownloadMetrics(
+            url=media_url,
+            path=resolved_path,
+            size=os.path.getsize(resolved_path) if os.path.exists(resolved_path) else 0,
+            elapsed=0.0,
+            used_multipart=isinstance(result, DownloadMetrics) and result.used_multipart,
+            resumed=isinstance(result, DownloadMetrics) and result.resumed,
+        ))
 
         if media_type == 'image':
-            photos.append(file_path)
+            photos.append(resolved_path)
         elif media_type in ('video', 'gif'):
-            videos.append(file_path)
+            videos.append(resolved_path)
 
     return photos, videos
 
@@ -196,7 +212,7 @@ async def reply_media(message, tweet_id, tweet_media, bot_url, business_id, user
     user_captions = user_settings["captions"]
 
     try:
-        photos, videos = await _collect_media_files(tweet_id, tweet_media, tweet_dir)
+        photos, videos = await _collect_media_files(tweet_id, tweet_media)
         logging.info(
             "Tweet media fetched: tweet_id=%s photos=%s videos=%s",
             tweet_id,

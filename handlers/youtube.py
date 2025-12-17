@@ -1,9 +1,8 @@
 import asyncio
 import os
 import time
-from typing import Tuple, Any
+from typing import Tuple, Any, Optional
 
-import requests
 from aiogram import types, Router, F
 from aiogram.types import FSInputFile, InlineQueryResultVideo, InlineQueryResultArticle
 from moviepy import VideoFileClip, AudioFileClip
@@ -24,24 +23,40 @@ from handlers.utils import (
 )
 from log.logger import logger as logging
 from main import bot, db, send_analytics
+from utils.download_manager import (
+    DownloadConfig,
+    DownloadMetrics,
+    ResilientDownloader,
+    log_download_metrics,
+)
 
-MAX_FILE_SIZE = 1 * 1024 * 1024
+MAX_FILE_SIZE = int(1.5 * 1024 * 1024 * 1024)  # 1.5 GB Telegram-safe limit
+YTDLP_FORMAT_720 = "bestvideo[height<=720][vcodec^=avc1]+bestaudio[ext=m4a]/best[height<=720][ext=mp4]/best"
 YTDLP_SPEED_OPTS: dict[str, Any] = {
-    'quiet': True,
-    'no_warnings': True,
-    'noprogress': True,
-    'continuedl': True,
-    'overwrites': True,
-    'noplaylist': True,
-    'cachedir': False,
-    'socket_timeout': 15,
-    'retries': 3,
-    'fragment_retries': 3,
-    'concurrent_fragment_downloads': 4,
-    'http_chunk_size': 1 << 19,  # 512 KiB chunks keep memory low while enabling concurrency
+    "quiet": True,
+    "no_warnings": True,
+    "noprogress": True,
+    "continuedl": True,
+    "overwrites": True,
+    "noplaylist": True,
+    "cachedir": False,
+    "socket_timeout": 15,
+    "retries": 2,
+    "fragment_retries": 2,
+    "concurrent_fragment_downloads": 4,
 }
 
 router = Router()
+
+youtube_downloader = ResilientDownloader(
+    OUTPUT_DIR,
+    config=DownloadConfig(
+        chunk_size=2 * 1024 * 1024,          # Larger chunks for higher throughput
+        multipart_threshold=8 * 1024 * 1024,  # Split earlier to parallelize medium files
+        max_workers=10,                      # More concurrent range requests
+        retry_backoff=0.6,                   # Slightly faster retry ramp-up
+    ),
+)
 
 
 def safe_int(value, default: int = 0) -> int:
@@ -50,51 +65,77 @@ def safe_int(value, default: int = 0) -> int:
     except (TypeError, ValueError):
         return default
 
-async def download_media(url: str, filename: str, format_candidates: list[str]) -> bool:
-    outtmpl = os.path.join(OUTPUT_DIR, filename)
-    os.makedirs(os.path.dirname(outtmpl) or OUTPUT_DIR, exist_ok=True)
-    last_error: Exception | None = None
 
-    for format_expression in format_candidates:
-        try:
-            ydl_opts = {
-                **YTDLP_SPEED_OPTS,
-                'format': format_expression,
-                'outtmpl': outtmpl,
-                'merge_output_format': 'mp4',
-                'oauth': True,
-            }
-            logging.debug(
-                "Attempting download: url=%s filename=%s format=%s",
-                url,
-                filename,
-                format_expression,
-            )
-            await asyncio.to_thread(lambda: YoutubeDL(ydl_opts).download([url]))
-            logging.info(
-                "Download succeeded: url=%s filename=%s format=%s",
-                url,
-                filename,
-                format_expression,
-            )
-            return True
-        except Exception as e:
-            last_error = e
-            logging.warning(
-                "Download attempt failed: url=%s format=%s error=%s",
-                url,
-                format_expression,
-                e,
-            )
+async def download_stream(stream: dict, filename: str, source: str) -> Optional[DownloadMetrics]:
+    url = stream.get("url")
+    if not url:
+        logging.error("Stream missing URL for %s", source)
+        return None
 
-    if last_error:
-        logging.error(
-            "Download failed after trying all formats: url=%s formats=%s error=%s",
-            url,
-            format_candidates,
-            last_error,
+    headers = stream.get("http_headers") or {}
+    try:
+        metrics = await youtube_downloader.download(url, filename, headers=headers)
+        log_download_metrics(source, metrics)
+        return metrics
+    except Exception as exc:
+        logging.error("Failed to download stream: source=%s url=%s error=%s", source, url, exc)
+        return None
+
+
+async def download_with_ytdlp(url: str, filename: str) -> Optional[str]:
+    """Fallback for cases when direct stream download produces invalid media."""
+    out_path = os.path.join(OUTPUT_DIR, filename)
+    os.makedirs(os.path.dirname(out_path) or OUTPUT_DIR, exist_ok=True)
+    ydl_opts = {
+        **YTDLP_SPEED_OPTS,
+        "format": YTDLP_FORMAT_720,
+        "outtmpl": out_path,
+        "merge_output_format": "mp4",
+    }
+    try:
+        await asyncio.to_thread(lambda: YoutubeDL(ydl_opts).download([url]))
+        logging.info("yt-dlp fallback succeeded: url=%s path=%s", url, out_path)
+        return out_path
+    except Exception as exc:  # pragma: no cover - defensive
+        logging.error("yt-dlp fallback failed: url=%s error=%s", url, exc)
+        return None
+
+
+async def download_with_ytdlp_metrics(url: str, filename: str, format_selector: str, source: str) -> Optional[DownloadMetrics]:
+    """Download via yt-dlp and return DownloadMetrics for unified logging."""
+    out_path = os.path.join(OUTPUT_DIR, filename)
+    os.makedirs(os.path.dirname(out_path) or OUTPUT_DIR, exist_ok=True)
+    ydl_opts = {
+        **YTDLP_SPEED_OPTS,
+        "format": format_selector,
+        "outtmpl": out_path,
+        "merge_output_format": "mp4",
+    }
+    start = time.monotonic()
+    try:
+        await asyncio.to_thread(lambda: YoutubeDL(ydl_opts).download([url]))
+        elapsed = time.monotonic() - start
+        metrics = DownloadMetrics(
+            url=url,
+            path=out_path,
+            size=os.path.getsize(out_path),
+            elapsed=elapsed,
+            used_multipart=False,
+            resumed=False,
         )
-    return False
+        log_download_metrics(source, metrics)
+        return metrics
+    except Exception as exc:
+        logging.error("yt-dlp download failed: source=%s url=%s error=%s", source, url, exc)
+        return None
+
+
+async def download_media(url: str, filename: str, format_candidates: list[str]) -> bool:
+    """
+    Backward-compatible wrapper kept for tests; downloads the provided URL with the shared downloader.
+    """
+    metrics = await download_stream({"url": url}, filename, "youtube_legacy")
+    return metrics is not None
 
 
 def get_youtube_video(url):
@@ -111,13 +152,14 @@ def get_youtube_video(url):
         return None
 
 
-def get_video_stream(yt: dict) -> dict | None:
+def get_video_stream(yt: dict, max_height: int = 720) -> dict | None:
     formats = yt.get("formats", [])
     progressive = [
         f for f in formats
         if f.get("vcodec") != "none"
            and f.get("acodec") != "none"
            and f.get("ext") == "mp4"
+           and int(f.get("height") or 0) <= max_height
     ]
     progressive.sort(key=lambda x: int(x.get("height", 0)), reverse=True)
     if progressive:
@@ -130,6 +172,7 @@ def get_video_stream(yt: dict) -> dict | None:
         if f.get("vcodec") != "none"
            and f.get("acodec") == "none"
            and f.get("ext") in ("mp4", "webm")
+           and int(f.get("height") or 0) <= max_height
     ]
     video_only.sort(key=lambda x: int(x.get("height", 0)), reverse=True)
     if video_only:
@@ -157,7 +200,7 @@ async def get_clip_dimensions(file_path: str) -> tuple[None, None] | Any:
     try:
         return await asyncio.to_thread(_get_dimensions, file_path)
     except Exception as e:
-        logging.error(f"Error getting video dimensions: {e}")
+        logging.warning("Unable to read video dimensions: path=%s error=%s", file_path, e)
         return None, None
 
 
@@ -177,6 +220,13 @@ async def get_audio_duration(file_path: str) -> float:
 def _get_audio_duration(file_path: str) -> float:
     with AudioFileClip(file_path) as clip:
         return clip.duration
+
+
+def _is_manifest_stream(stream: dict) -> bool:
+    """Return True if stream points to HLS/DASH manifest instead of direct media."""
+    protocol = (stream.get("protocol") or "").lower()
+    manifest_url = stream.get("manifest_url") or stream.get("url") or ""
+    return "m3u8" in protocol or "dash" in protocol or manifest_url.endswith(".m3u8")
 
 
 @router.message(F.text.regexp(r"(https?://(www\.)?(youtube|youtu|youtube-nocookie)\.(com|be)/(?!@)[\S]+)"))
@@ -206,11 +256,6 @@ async def download_video(message: types.Message):
         views = safe_int(yt.get('view_count'), None)
         likes = safe_int(yt.get('like_count'), None)
 
-        size = video.get('filesize_approx', 0) // 1024  # Convert to KB
-        if size >= MAX_FILE_SIZE:
-            await handle_video_too_large(message, skip_if_business=False)
-            return
-
         db_file_id = await db.get_file_id(yt['webpage_url'])
 
         if db_file_id:
@@ -238,45 +283,75 @@ async def download_video(message: types.Message):
             return
 
         name = f"{yt['id']}_youtube_video.mp4"
-        video_file_path = os.path.join(OUTPUT_DIR, name)
 
-        format_candidates = [
-            # Prefer H.264 MP4 for better mobile compatibility
-            "bv*[vcodec^=avc1][ext=mp4]+ba[ext=m4a]/b[ext=mp4]/best",
-        ]
-
-        if await download_media(yt['webpage_url'], name, format_candidates):
-            width, height = await get_clip_dimensions(video_file_path)
-
-            await bot.send_chat_action(message.chat.id, "upload_video")
-            sent_message = await message.answer_video(
-                video=FSInputFile(video_file_path),
-                width=width,
-                height=height,
-                caption=bm.captions(user_captions, yt['title'], bot_url),
-                reply_markup=kb.return_video_info_keyboard(
-                    views=views,
-                    likes=likes,
-                    comments=None,
-                    shares=None,
-                    music_play_url=None,
-                    video_url=yt['webpage_url'],
-                    user_settings=user_settings,
-                ),
-                parse_mode="HTML"
-            )
-            await maybe_delete_user_message(message, user_settings.get("delete_message"))
-            await db.add_file(yt['webpage_url'], sent_message.video.file_id, "video")
-            logging.info(
-                "YouTube video cached: url=%s file_id=%s",
+        # Prefer high-speed downloader when stream is direct media; fall back to yt-dlp for manifests/HLS.
+        if _is_manifest_stream(video):
+            metrics = await download_with_ytdlp_metrics(
                 yt['webpage_url'],
-                sent_message.video.file_id,
+                name,
+                YTDLP_FORMAT_720,
+                "youtube_video_ytdlp_manifest",
             )
-
-            await asyncio.sleep(5)
-            await remove_file(video_file_path)
         else:
+            metrics = await download_stream(video, name, "youtube_video")
+            if not metrics:
+                metrics = await download_with_ytdlp_metrics(
+                    yt['webpage_url'],
+                    name,
+                    YTDLP_FORMAT_720,
+                    "youtube_video_ytdlp",
+                )
+        if not metrics:
             await handle_download_error(message, skip_if_business=False)
+            return
+
+        if metrics.size >= MAX_FILE_SIZE:
+            await handle_video_too_large(message, skip_if_business=False)
+            await remove_file(metrics.path)
+            return
+
+        width, height = await get_clip_dimensions(metrics.path)
+        if width is None or height is None and metrics.url != yt['webpage_url']:
+            # If direct stream failed, try yt-dlp as a last resort
+            fallback = await download_with_ytdlp_metrics(
+                yt['webpage_url'],
+                name,
+                YTDLP_FORMAT_720,
+                "youtube_video_ytdlp_retry",
+            )
+            if not fallback:
+                await handle_download_error(message, skip_if_business=False)
+                return
+            metrics = fallback
+            width, height = await get_clip_dimensions(metrics.path)
+
+        await bot.send_chat_action(message.chat.id, "upload_video")
+        sent_message = await message.answer_video(
+            video=FSInputFile(metrics.path),
+            width=width,
+            height=height,
+            caption=bm.captions(user_captions, yt['title'], bot_url),
+            reply_markup=kb.return_video_info_keyboard(
+                views=views,
+                likes=likes,
+                comments=None,
+                shares=None,
+                music_play_url=None,
+                video_url=yt['webpage_url'],
+                user_settings=user_settings,
+            ),
+            parse_mode="HTML"
+        )
+        await maybe_delete_user_message(message, user_settings.get("delete_message"))
+        await db.add_file(yt['webpage_url'], sent_message.video.file_id, "video")
+        logging.info(
+            "YouTube video cached: url=%s file_id=%s",
+            yt['webpage_url'],
+            sent_message.video.file_id,
+        )
+
+        await asyncio.sleep(5)
+        await remove_file(metrics.path)
     except Exception as e:
         logging.error(f"Video download error: {e}")
         await handle_download_error(message, skip_if_business=False)
@@ -305,36 +380,38 @@ async def download_music(message: types.Message):
             await message.reply(bm.nothing_found())
             return
 
-        name = f"{yt['id']}_youtube_audio.mp3"
-        audio_file_path = os.path.join(OUTPUT_DIR, name)
+        audio_ext = audio.get("ext") or "m4a"
+        name = f"{yt['id']}_youtube_audio.{audio_ext}"
 
-        # Download audio asynchronously
-        format_candidates = [
+        metrics = await download_with_ytdlp_metrics(
+            yt['webpage_url'],
+            name,
             "bestaudio/best",
-            'best'
-        ]
-
-        if await download_media(yt['webpage_url'], name, format_candidates):
-            # Get audio duration asynchronously
-            audio_duration = await get_audio_duration(audio_file_path)
-
-            await bot.send_chat_action(message.chat.id, "upload_voice")
-
-            await message.answer_audio(
-                audio=FSInputFile(audio_file_path),
-                title=yt['title']
-                ,
-                duration=round(audio_duration),
-                caption=bm.captions(None, None, bot_url),
-                parse_mode="HTML"
-            )
-            await maybe_delete_user_message(message, user_settings.get("delete_message"))
-
-            # Clean up file asynchronously
-            await asyncio.sleep(5)
-            await remove_file(audio_file_path)
-        else:
+            "youtube_audio_ytdlp",
+        )
+        if not metrics:
+            metrics = await download_stream(audio, name, "youtube_audio")
+        if not metrics:
             await handle_download_error(message, skip_if_business=False)
+            return
+
+        # Get audio duration asynchronously
+        audio_duration = await get_audio_duration(metrics.path)
+
+        await bot.send_chat_action(message.chat.id, "upload_voice")
+
+        await message.answer_audio(
+            audio=FSInputFile(metrics.path),
+            title=yt['title'],
+            duration=round(audio_duration),
+            caption=bm.captions(None, None, bot_url),
+            parse_mode="HTML"
+        )
+        await maybe_delete_user_message(message, user_settings.get("delete_message"))
+
+        # Clean up file asynchronously
+        await asyncio.sleep(5)
+        await remove_file(metrics.path)
     except Exception as e:
         logging.error(f"Audio download error: {e}")
         await handle_download_error(message, skip_if_business=False)
@@ -411,55 +488,67 @@ async def inline_youtube_query(query: types.InlineQuery):
             return
 
         name = f"{yt['id']}_youtube_shorts.mp4"
-        video_file_path = os.path.join(OUTPUT_DIR, name)
 
-        format_candidates = [
-            # Prefer H.264 MP4 for better mobile compatibility
-            "bv*[vcodec^=avc1][ext=mp4]+ba[ext=m4a]/b[ext=mp4]/best",
+        if _is_manifest_stream(video):
+            metrics = await download_with_ytdlp_metrics(
+                yt['webpage_url'],
+                name,
+                YTDLP_FORMAT_720,
+                "youtube_inline_ytdlp_manifest",
+            )
+        else:
+            metrics = await download_stream(video, name, "youtube_inline")
+            if not metrics:
+                metrics = await download_with_ytdlp_metrics(
+                    yt['webpage_url'],
+                    name,
+                    YTDLP_FORMAT_720,
+                    "youtube_inline_ytdlp",
+                )
+        if not metrics:
+            await query.answer([], cache_time=1, is_personal=True)
+            return
+
+        video_file = FSInputFile(metrics.path)
+        sent_message = await bot.send_video(
+            chat_id=CHANNEL_ID,
+            video=video_file,
+            caption=f"?? YouTube Shorts from {query.from_user.full_name}"
+        )
+        video_file_id = sent_message.video.file_id
+        await db.add_file(yt['webpage_url'], video_file_id, "video")
+        logging.info(
+            "YouTube inline video cached: url=%s file_id=%s",
+            yt['webpage_url'],
+            video_file_id,
+        )
+
+        results = [
+            InlineQueryResultVideo(
+                id=f"shorts_{yt['id']}",
+                video_url=video_file_id,
+                thumbnail_url=yt['thumbnail'],
+                description=yt['title'],
+                title="?? YouTube Shorts",
+                mime_type="video/mp4",
+                caption=bm.captions(user_captions, yt['title'], bot_url),
+                reply_markup=kb.return_video_info_keyboard(
+                    views=views,
+                    likes=likes,
+                    comments=None,
+                    shares=None,
+                    music_play_url=None,
+                    video_url=yt['webpage_url'],
+                    user_settings=user_settings,
+                )
+            )
         ]
 
-        if await download_media(yt['webpage_url'], name, format_candidates):
-            video_file = FSInputFile(video_file_path)
-            sent_message = await bot.send_video(
-                chat_id=CHANNEL_ID,
-                video=video_file,
-                caption=f"🎬 YouTube Shorts from {query.from_user.full_name}"
-            )
-            video_file_id = sent_message.video.file_id
-            await db.add_file(yt['webpage_url'], video_file_id, "video")
-            logging.info(
-                "YouTube inline video cached: url=%s file_id=%s",
-                yt['webpage_url'],
-                video_file_id,
-            )
+        await query.answer(results, cache_time=10)
 
-            results = [
-                InlineQueryResultVideo(
-                    id=f"shorts_{yt['id']}",
-                    video_url=video_file_id,
-                    thumbnail_url=yt['thumbnail'],
-                    description=yt['title'],
-                    title="🎬 YouTube Shorts",
-                    mime_type="video/mp4",
-                    caption=bm.captions(user_captions, yt['title'], bot_url),
-                    reply_markup=kb.return_video_info_keyboard(
-                        views=views,
-                        likes=likes,
-                        comments=None,
-                        shares=None,
-                        music_play_url=None,
-                        video_url=yt['webpage_url'],
-                        user_settings=user_settings,
-                    )
-                )
-            ]
-
-            await query.answer(results, cache_time=10)
-
-            await asyncio.sleep(5)
-            await remove_file(video_file_path)
-        else:
-            await query.answer([], cache_time=1, is_personal=True)
+        await asyncio.sleep(5)
+        await remove_file(metrics.path)
+        return
 
     except Exception as e:
         logging.error(f"Error processing inline query: {e}")

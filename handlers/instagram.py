@@ -25,14 +25,15 @@ from handlers.utils import (
 )
 from log.logger import logger as logging
 from main import bot, db, send_analytics
-from services.download_manager import (
+from utils.download_manager import (
     DownloadConfig,
     DownloadError,
     DownloadMetrics,
     ResilientDownloader,
+    log_download_metrics,
 )
 
-MAX_FILE_SIZE = 500 * 1024 * 1024
+MAX_FILE_SIZE = int(1.5 * 1024 * 1024 * 1024)  # 1.5 GB
 
 router = Router()
 
@@ -337,6 +338,7 @@ async def process_instagram_video(message, video_info, bot_url, user_settings, b
             await handle_download_error(message, business_id=business_id)
             return
 
+        log_download_metrics("instagram_video", metrics)
         download_path = metrics.path
         file_size = metrics.size
         width, height = await get_video_dimensions(download_path)
@@ -522,6 +524,7 @@ async def inline_instagram_query(query: types.InlineQuery):
                     await query.answer([], cache_time=1, is_personal=True)
                     return
 
+                log_download_metrics("instagram_inline", metrics)
                 download_path = metrics.path
                 sent_message = await bot.send_video(
                     chat_id=CHANNEL_ID,
