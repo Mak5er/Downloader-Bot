@@ -30,15 +30,16 @@ from handlers.utils import (
 )
 from log.logger import logger as logging
 from main import bot, db, send_analytics
-from services.download_manager import (
+from utils.download_manager import (
     DownloadConfig,
     DownloadError,
     DownloadMetrics,
     ResilientDownloader,
+    log_download_metrics,
 )
-from services.http_client import get_http_session
+from utils.http_client import get_http_session
 
-MAX_FILE_SIZE = 500 * 1024 * 1024
+MAX_FILE_SIZE = int(1.5 * 1024 * 1024 * 1024)  # 1.5 GB
 TIKTOK_USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36"
@@ -388,6 +389,7 @@ async def process_tiktok_video(message: types.Message, data: dict, bot_url: str,
         await handle_download_error(message, business_id=business_id)
         return
 
+    log_download_metrics("tiktok_video", metrics)
     download_path = metrics.path
     file_size = metrics.size
 
@@ -552,6 +554,7 @@ async def inline_tiktok_query(query: types.InlineQuery):
             if not db_id:
                 metrics = await tiktok_service.download_video(info.id, name)
                 if metrics:
+                    log_download_metrics("tiktok_inline", metrics)
                     download_path = metrics.path
                     sent = await bot.send_video(
                         chat_id=CHANNEL_ID,

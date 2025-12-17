@@ -10,8 +10,8 @@ from aiogram.enums.parse_mode import ParseMode
 
 from config import BOT_TOKEN, BOT_COMMANDS, OUTPUT_DIR, custom_api_url, MEASUREMENT_ID, API_SECRET
 from log.logger import logger as logging
-from services.http_client import close_http_session
 from services.db import DataBase, AnalyticsEvent
+from utils.http_client import close_http_session
 
 custom_timeout = 600
 session = AiohttpSession(
