@@ -414,10 +414,12 @@ async def process_instagram_photos(message, video_info, bot_url, user_settings, 
         await send_chat_action_if_needed(bot, message.chat.id, "upload_photo", business_id)
 
         if len(images) > 1:
-            media_group = MediaGroupBuilder()
-            for img in images[:-1]:
-                media_group.add_photo(media=img, parse_mode="HTML")
-            await message.answer_media_group(media=media_group.build())
+            photos_for_album = images[:-1]
+            for i in range(0, len(photos_for_album), 10):
+                media_group = MediaGroupBuilder()
+                for img in photos_for_album[i:i + 10]:
+                    media_group.add_photo(media=img, parse_mode="HTML")
+                await message.answer_media_group(media=media_group.build())
 
         last_photo = images[-1]
         await message.answer_photo(
