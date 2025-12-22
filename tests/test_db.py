@@ -152,3 +152,41 @@ async def test_downloaded_files_count(database):
 
     assert sum(week_counts.values()) == 1
     assert sum(year_counts.values()) == 2
+
+
+@pytest.mark.asyncio
+async def test_downloaded_files_by_service(database):
+    today = datetime.now()
+    today_str = today.strftime("%Y-%m-%d")
+
+    async with database.SessionLocal() as session:
+        async with session.begin():
+            session.add(
+                db_module.AnalyticsEvent(
+                    user_id=1,
+                    chat_type="private",
+                    action_name="instagram_reel",
+                    created_at=today,
+                )
+            )
+            session.add(
+                db_module.AnalyticsEvent(
+                    user_id=1,
+                    chat_type="private",
+                    action_name="tiktok_video",
+                    created_at=today,
+                )
+            )
+            session.add(
+                db_module.AnalyticsEvent(
+                    user_id=1,
+                    chat_type="private",
+                    action_name="unknown_action",
+                    created_at=today,
+                )
+            )
+
+    by_service = await database.get_downloaded_files_by_service("Year")
+    assert by_service["Instagram"][today_str] == 1
+    assert by_service["TikTok"][today_str] == 1
+    assert by_service["Other"][today_str] == 1
