@@ -148,10 +148,12 @@ async def _send_photo_responses(message, photos, caption, keyboard):
         return
 
     if len(photos) > 1:
-        media_group = MediaGroupBuilder()
-        for file_path in photos[:-1]:
-            media_group.add_photo(media=FSInputFile(file_path))
-        await message.answer_media_group(media_group.build())
+        album_photos = photos[:-1]
+        for i in range(0, len(album_photos), 10):
+            media_group = MediaGroupBuilder()
+            for file_path in album_photos[i:i + 10]:
+                media_group.add_photo(media=FSInputFile(file_path))
+            await message.answer_media_group(media_group.build())
         photos = [photos[-1]]
 
     await message.answer_photo(
@@ -166,10 +168,12 @@ async def _send_video_responses(message, videos, caption, keyboard):
         return
 
     if len(videos) > 1:
-        media_group = MediaGroupBuilder()
-        for file_path in videos[:-1]:
-            media_group.add_video(media=FSInputFile(file_path))
-        await message.answer_media_group(media_group.build())
+        album_videos = videos[:-1]
+        for i in range(0, len(album_videos), 10):
+            media_group = MediaGroupBuilder()
+            for file_path in album_videos[i:i + 10]:
+                media_group.add_video(media=FSInputFile(file_path))
+            await message.answer_media_group(media_group.build())
         videos = [videos[-1]]
 
     await message.answer_video(
