@@ -213,6 +213,25 @@ def _prepare_series_for_period(data: dict[str, int], period: str) -> tuple[list[
     return dates, counts
 
 
+def _aggregate_monthly(data: dict[str, int]) -> dict[datetime.datetime, int]:
+    monthly: dict[datetime.datetime, int] = defaultdict(int)
+    for date_str, count in data.items():
+        dt = datetime.datetime.strptime(date_str, "%Y-%m-%d")
+        month_key = datetime.datetime(dt.year, dt.month, 1)
+        monthly[month_key] += count
+    return monthly
+
+
+def _decimate_dates(dates: list[datetime.datetime], max_points: int) -> list[datetime.datetime]:
+    if len(dates) <= max_points:
+        return dates
+    step = max(1, len(dates) // max_points)
+    sampled = dates[::step]
+    if sampled[-1] != dates[-1]:
+        sampled.append(dates[-1])
+    return sampled
+
+
 def create_and_save_chart(data: dict[str, int], period: str, per_service: Optional[Dict[str, Dict[str, int]]] = None):
     filename = datetime.datetime.now().strftime("%Y_%m_%d_%H_%M_%S") + "_chart.png"
     charts_dir = Path("downloads")
@@ -223,12 +242,21 @@ def create_and_save_chart(data: dict[str, int], period: str, per_service: Option
     fig, ax = plt.subplots(figsize=(10, 5), facecolor='#0E1117')
     ax.set_facecolor('#0E1117')
 
-    def _plot_series(dates: list[datetime.datetime], counts: list[int], color: str, label: str):
-        ax.plot(dates, counts, color=color, linewidth=2.5, label=label)
-        ax.fill_between(dates, counts, color=color, alpha=0.2)
-        ax.scatter(dates, counts, color=color, s=45, zorder=3)
-        if dates and counts:
-            ax.scatter(dates[-1], counts[-1], color='#FF9F43', s=80, zorder=4)
+    def _plot_series(
+            dates: list[datetime.datetime],
+            counts: list[int],
+            color: str,
+            label: str,
+            *,
+            annotate_last: bool,
+            marker_size: int = 36,
+            highlight_size: int = 60,
+    ):
+        ax.plot(dates, counts, color=color, linewidth=2.3, label=label)
+        ax.fill_between(dates, counts, color=color, alpha=0.18)
+        ax.scatter(dates, counts, color=color, s=marker_size, zorder=3)
+        if annotate_last and dates and counts:
+            ax.scatter(dates[-1], counts[-1], color='#FF9F43', s=highlight_size, zorder=4)
             ax.annotate(
                 f"{counts[-1]}",
                 (dates[-1], counts[-1]),
@@ -241,20 +269,57 @@ def create_and_save_chart(data: dict[str, int], period: str, per_service: Option
             )
 
     if per_service:
+        # Build a shared axis so services drop to zero instead of stopping early.
+        axis_dates: list[datetime.datetime] = []
+        if period == "Year":
+            total_map = _aggregate_monthly(data)
+            axis_dates = list(total_map.keys())
+            for service_data in per_service.values():
+                axis_dates.extend(_aggregate_monthly(service_data).keys())
+            axis_dates = sorted(set(axis_dates))
+            if len(axis_dates) > 12:
+                axis_dates = axis_dates[-12:]
+            axis_dates = _decimate_dates(axis_dates, 12)
+        else:
+            axis_dates = [datetime.datetime.strptime(k, "%Y-%m-%d") for k in data.keys()]
+            for service_data in per_service.values():
+                axis_dates.extend(datetime.datetime.strptime(k, "%Y-%m-%d") for k in service_data.keys())
+            axis_dates = sorted(set(axis_dates))
+            window = 7 if period == "Week" else 30
+            axis_dates = axis_dates[-window:] if axis_dates else [datetime.datetime.now()]
+            if period == "Month":
+                axis_dates = _decimate_dates(axis_dates, 12)
+
+        # Plot each service aligned to the shared axis with zeros for missing points.
         for idx, service in enumerate(SERVICE_ORDER):
-            service_data = per_service.get(service)
-            if not service_data:
+            raw_service = per_service.get(service)
+            if not raw_service:
                 continue
-            dates, counts = _prepare_series_for_period(service_data, period)
+            if period == "Year":
+                service_map = _aggregate_monthly(raw_service)
+            else:
+                service_map = {
+                    datetime.datetime.strptime(k, "%Y-%m-%d"): v for k, v in raw_service.items()
+                }
+            counts = [service_map.get(dt, 0) for dt in axis_dates]
             color = SERVICE_COLORS[idx % len(SERVICE_COLORS)]
-            _plot_series(dates, counts, color, service)
+            _plot_series(
+                axis_dates,
+                counts,
+                color,
+                service,
+                annotate_last=False,
+                marker_size=30,
+                highlight_size=40,
+            )
+
         if not ax.lines:
             dates, counts = _prepare_series_for_period(data, period)
-            _plot_series(dates, counts, "#6C5DD3", "Downloads")
+            _plot_series(dates, counts, "#6C5DD3", "Downloads", annotate_last=False, marker_size=30, highlight_size=40)
         ax.legend(facecolor='#0E1117', edgecolor='#2C3142', labelcolor='#F9FAFC')
     else:
         dates, counts = _prepare_series_for_period(data, period)
-        _plot_series(dates, counts, "#6C5DD3", "Downloads")
+        _plot_series(dates, counts, "#6C5DD3", "Downloads", annotate_last=True)
 
     ax.set_title('Downloads Overview', fontsize=18, color='#F9FAFC', pad=16)
     ax.set_xlabel('Date', fontsize=12, color='#A1A5B7')
