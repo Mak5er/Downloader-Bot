@@ -1,4 +1,5 @@
 from datetime import datetime, timedelta
+from collections import defaultdict
 import re
 
 from sqlalchemy import Column, Text, TIMESTAMP, func, select, delete, update, ForeignKey, BigInteger, text
@@ -335,3 +336,48 @@ class DataBase:
                 counts[normalized] = row[1]
 
             return counts
+
+    @staticmethod
+    def _map_action_to_service(action_name: str) -> str:
+        lower = (action_name or "").lower()
+        if "tiktok" in lower:
+            return "TikTok"
+        if "instagram" in lower:
+            return "Instagram"
+        if "youtube" in lower:
+            return "YouTube"
+        if "twitter" in lower or "x_" in lower:
+            return "Twitter"
+        return "Other"
+
+    async def get_downloaded_files_by_service(self, period: str) -> dict[str, dict[str, int]]:
+        async with self.SessionLocal() as session:
+            start_date = datetime.now()
+            if period == "Week":
+                start_date -= timedelta(weeks=1)
+            elif period == "Month":
+                start_date -= timedelta(days=30)
+            elif period == "Year":
+                start_date -= timedelta(days=365)
+
+            result = await session.execute(
+                select(func.date(AnalyticsEvent.created_at), AnalyticsEvent.action_name, func.count())
+                .where(
+                    AnalyticsEvent.created_at >= start_date,
+                    AnalyticsEvent.action_name.notin_(["start", "settings"])
+                )
+                .group_by(func.date(AnalyticsEvent.created_at), AnalyticsEvent.action_name)
+                .order_by(func.date(AnalyticsEvent.created_at))
+            )
+
+            by_service: dict[str, dict[str, int]] = defaultdict(dict)
+            for date_val, action_name, count in result.all():
+                if isinstance(date_val, str):
+                    normalized = datetime.strptime(date_val, "%Y-%m-%d").strftime("%Y-%m-%d")
+                else:
+                    normalized = date_val.strftime("%Y-%m-%d")
+
+                service = self._map_action_to_service(action_name)
+                by_service[service][normalized] = by_service[service].get(normalized, 0) + count
+
+            return dict(by_service)

@@ -187,13 +187,22 @@ def return_video_info_keyboard(views, likes, comments, shares, music_play_url, v
     return builder.as_markup()
 
 
-def stats_keyboard():
+def stats_keyboard(current_period: str = "Week", mode: str = "total"):
+    periods = ["Week", "Month", "Year"]
+    period_buttons = [
+        InlineKeyboardButton(
+            text=f"{'· ' if period == current_period else ''}{period}",
+            callback_data=f"stats:{period}:{mode}",
+        )
+        for period in periods
+    ]
+
+    toggle_target = "split" if mode == "total" else "total"
+    toggle_label = f"Split view: {'On' if mode == 'split' else 'Off'}"
+
     buttons = [
-        [
-            InlineKeyboardButton(text="Week", callback_data="date_Week"),
-            InlineKeyboardButton(text="Month", callback_data="date_Month"),
-            InlineKeyboardButton(text="Year", callback_data="date_Year"),
-        ]
+        period_buttons,
+        [InlineKeyboardButton(text=toggle_label, callback_data=f"stats:{current_period}:{toggle_target}")],
     ]
 
     return InlineKeyboardMarkup(inline_keyboard=buttons)
