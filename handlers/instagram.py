@@ -12,10 +12,17 @@ from moviepy import VideoFileClip
 
 import keyboards as kb
 import messages as bm
-from config import OUTPUT_DIR, INSTAGRAM_RAPID_API_KEY1, INSTAGRAM_RAPID_API_KEY2, CHANNEL_ID, INSTAGRAM_RAPID_API_HOST
+from config import (
+    OUTPUT_DIR,
+    INSTAGRAM_RAPID_API_KEY1,
+    INSTAGRAM_RAPID_API_KEY2,
+    CHANNEL_ID,
+    INSTAGRAM_RAPID_API_HOST,
+)
 from handlers.user import update_info
 from handlers.utils import (
     get_bot_url,
+    get_message_text,
     handle_download_error,
     handle_video_too_large,
     maybe_delete_user_message,
@@ -218,7 +225,6 @@ class InstagramService:
 
 instagram_service = InstagramService(OUTPUT_DIR)
 
-
 def _read_video_dimensions(path: str) -> tuple[int, int]:
     with VideoFileClip(path) as clip:
         return clip.size
@@ -232,26 +238,33 @@ async def get_video_dimensions(path: str) -> tuple[int | None, int | None]:
         return None, None
 
 
-@router.message(F.text.regexp(r"(https?://(www\.)?instagram\.com/\S+)"))
-@router.business_message(F.text.regexp(r"(https?://(www\.)?instagram\.com/\S+)"))
+@router.message(
+    F.text.regexp(r"(https?://(www\.)?instagram\.com/\S+)")
+    | F.caption.regexp(r"(https?://(www\.)?instagram\.com/\S+)")
+)
+@router.business_message(
+    F.text.regexp(r"(https?://(www\.)?instagram\.com/\S+)")
+    | F.caption.regexp(r"(https?://(www\.)?instagram\.com/\S+)")
+)
 async def process_instagram_url(message: types.Message):
     try:
         bot_url = await get_bot_url(bot)
         user_settings = await db.user_settings(message.from_user.id)
         user_captions = user_settings["captions"]
         business_id = message.business_connection_id
+        text = get_message_text(message)
 
         logging.info(
             "Instagram request received: user_id=%s username=%s business_id=%s text=%s",
             message.from_user.id,
             message.from_user.username,
             business_id,
-            message.text,
+            text,
         )
 
-        url = extract_instagram_url(message.text)
+        url = extract_instagram_url(text)
 
-        await react_to_message(message, "👾", business_id=business_id)
+        await react_to_message(message, "??'?", business_id=business_id)
 
         video_info = await instagram_service.fetch_post_data(url)
 
@@ -281,14 +294,13 @@ async def process_instagram_url(message: types.Message):
         logging.exception(
             "Error processing Instagram URL: user_id=%s text=%s error=%s",
             message.from_user.id,
-            message.text,
+            get_message_text(message),
             e,
         )
         await handle_download_error(
             message,
             business_id=message.business_connection_id,
         )
-
 
 def extract_instagram_url(text: str) -> str:
     match = re.match(r"(https?://(www\.)?instagram\.com/\S+)", text)
@@ -531,7 +543,7 @@ async def inline_instagram_query(query: types.InlineQuery):
                 sent_message = await bot.send_video(
                     chat_id=CHANNEL_ID,
                     video=FSInputFile(download_path),
-                    caption=f"🎥 Instagram Reel Video from {query.from_user.full_name}",
+                    caption=f"Instagram Reel Video from {query.from_user.full_name}",
                 )
                 video_file_id = sent_message.video.file_id
                 await db.add_file(url, video_file_id, "video")
@@ -541,26 +553,26 @@ async def inline_instagram_query(query: types.InlineQuery):
                     video_file_id,
                 )
 
-                results.append(
-                    InlineQueryResultVideo(
-                        id=f"video_{video_info.id}",
-                        video_url=video_file_id,
-                        thumbnail_url="https://freepnglogo.com/images/all_img/1715965947instagram-logo-png%20(1).png",
-                        description=video_info.description,
-                        title="🎥 Instagram Reel",
-                        mime_type="video/mp4",
-                        caption=bm.captions(user_captions, video_info.description, bot_url),
-                        reply_markup=kb.return_video_info_keyboard(
-                            video_info.views,
-                            video_info.likes,
-                            video_info.comments,
-                            video_info.shares,
-                            None,
-                            url,
-                            user_settings
-                        )
+            results.append(
+                InlineQueryResultVideo(
+                    id=f"video_{video_info.id}",
+                    video_url=video_file_id,
+                    thumbnail_url="https://freepnglogo.com/images/all_img/1715965947instagram-logo-png%20(1).png",
+                    description=video_info.description,
+                    title="Instagram Reel",
+                    mime_type="video/mp4",
+                    caption=bm.captions(user_captions, video_info.description, bot_url),
+                    reply_markup=kb.return_video_info_keyboard(
+                        video_info.views,
+                        video_info.likes,
+                        video_info.comments,
+                        video_info.shares,
+                        None,
+                        url,
+                        user_settings
                     )
                 )
+            )
 
             await query.answer(results, cache_time=10)
 
@@ -573,10 +585,10 @@ async def inline_instagram_query(query: types.InlineQuery):
             results.append(
                 types.InlineQueryResultArticle(
                     id="unsupported_instagram_photos",
-                    title="📷 Instagram Photos",
-                    description="⚠️ Instagram photos are not supported in inline mode.",
+                    title="Instagram Photos",
+                    description="Instagram photos are not supported in inline mode.",
                     input_message_content=types.InputTextMessageContent(
-                        message_text="⚠️ Instagram photos are not supported in inline mode."
+                        message_text="Instagram photos are not supported in inline mode."
                     )
                 )
             )
@@ -593,7 +605,6 @@ async def inline_instagram_query(query: types.InlineQuery):
         logging.exception("Error processing inline Instagram query: user_id=%s query=%s", query.from_user.id,
                           query.query)
         await query.answer([], cache_time=1, is_personal=True)
-
 
 async def handle_large_file(message, business_id):
     try:

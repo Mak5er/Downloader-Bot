@@ -13,6 +13,11 @@ DELETE_WARNING_TEXT = (
 )
 
 
+def get_message_text(message: types.Message) -> str:
+    """Return the message text or caption, falling back to empty string."""
+    return message.text or message.caption or ""
+
+
 async def react_to_message(
         message: types.Message,
         emoji: str,
