@@ -21,6 +21,7 @@ from config import OUTPUT_DIR, CHANNEL_ID
 from handlers.user import update_info
 from handlers.utils import (
     get_bot_url,
+    get_message_text,
     handle_download_error,
     handle_video_too_large,
     maybe_delete_user_message,
@@ -291,27 +292,34 @@ class TikTokService:
 tiktok_service = TikTokService(OUTPUT_DIR)
 
 
-@router.message(F.text.regexp(r"(https?://(www\.|vm\.|vt\.|vn\.)?tiktok\.com/\S+)"))
-@router.business_message(F.text.regexp(r"(https?://(www\.|vm\.|vt\.|vn\.)?tiktok\.com/\S+)"))
+@router.message(
+    F.text.regexp(r"(https?://(www\.|vm\.|vt\.|vn\.)?tiktok\.com/\S+)")
+    | F.caption.regexp(r"(https?://(www\.|vm\.|vt\.|vn\.)?tiktok\.com/\S+)")
+)
+@router.business_message(
+    F.text.regexp(r"(https?://(www\.|vm\.|vt\.|vn\.)?tiktok\.com/\S+)")
+    | F.caption.regexp(r"(https?://(www\.|vm\.|vt\.|vn\.)?tiktok\.com/\S+)")
+)
 async def process_tiktok(message: types.Message):
     try:
         bot_url = await get_bot_url(bot)
         business_id = message.business_connection_id
+        text = get_message_text(message)
 
         logging.info(
             "TikTok request received: user_id=%s username=%s business_id=%s text=%s",
             message.from_user.id,
             message.from_user.username,
             business_id,
-            message.text,
+            text,
         )
 
-        url_match = re.match(r"(https?://(www\.|vm\.|vt\.|vn\.)?tiktok\.com/\S+)", message.text)
+        url_match = re.match(r"(https?://(www\.|vm\.|vt\.|vn\.)?tiktok\.com/\S+)", text)
 
         if url_match:
             url = url_match.group(0)
         else:
-            url = message.text
+            url = text
 
         data = await fetch_tiktok_data(url)
         images = data.get("data", {}).get("images", [])
@@ -323,15 +331,15 @@ async def process_tiktok(message: types.Message):
         logging.debug(
             "TikTok content classification: has_images=%s is_profile=%s",
             bool(images),
-            "@" in message.text,
+            "@" in text,
         )
 
         if not images:
             await process_tiktok_video(message, data, bot_url, user_settings, business_id)
         elif images:
             await process_tiktok_photos(message, data, bot_url, user_settings, business_id, images)
-        elif "@" in message.text:
-            await process_tiktok_profile(message, message.text, bot_url, user_settings)
+        elif "@" in text:
+            await process_tiktok_profile(message, text, bot_url, user_settings)
         else:
             await handle_download_error(message, business_id=business_id)
 
@@ -339,7 +347,7 @@ async def process_tiktok(message: types.Message):
         logging.exception(
             "Error processing TikTok message: user_id=%s text=%s error=%s",
             message.from_user.id,
-            message.text,
+            get_message_text(message),
             e,
         )
         await handle_download_error(message)

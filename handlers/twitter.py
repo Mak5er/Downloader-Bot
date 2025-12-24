@@ -14,6 +14,7 @@ import messages as bm
 from config import OUTPUT_DIR
 from handlers.utils import (
     get_bot_url,
+    get_message_text,
     maybe_delete_user_message,
     react_to_message,
     remove_file,
@@ -249,17 +250,24 @@ async def reply_media(message, tweet_id, tweet_media, bot_url, business_id, user
         asyncio.create_task(_cleanup_tweet_dir(tweet_dir))
 
 
-@router.message(F.text.regexp(r"(https?://(www\.)?(twitter|x)\.com/\S+|https?://t\.co/\S+)"))
-@router.business_message(F.text.regexp(r"(https?://(www\.)?(twitter|x)\.com/\S+|https?://t\.co/\S+)"))
+@router.message(
+    F.text.regexp(r"(https?://(www\.)?(twitter|x)\.com/\S+|https?://t\.co/\S+)")
+    | F.caption.regexp(r"(https?://(www\.)?(twitter|x)\.com/\S+|https?://t\.co/\S+)")
+)
+@router.business_message(
+    F.text.regexp(r"(https?://(www\.)?(twitter|x)\.com/\S+|https?://t\.co/\S+)")
+    | F.caption.regexp(r"(https?://(www\.)?(twitter|x)\.com/\S+|https?://t\.co/\S+)")
+)
 async def handle_tweet_links(message):
     business_id = message.business_connection_id
+    text = get_message_text(message)
 
     logging.info(
         "Twitter request received: user_id=%s username=%s business_id=%s text=%s",
         message.from_user.id,
         message.from_user.username,
         business_id,
-        message.text,
+        text,
     )
 
     await react_to_message(message, "👾", business_id=business_id)
@@ -268,7 +276,7 @@ async def handle_tweet_links(message):
     user_settings = await db.user_settings(message.from_user.id)
 
     try:
-        tweet_ids = await asyncio.to_thread(extract_tweet_ids, message.text)
+        tweet_ids = await asyncio.to_thread(extract_tweet_ids, text)
         if tweet_ids:
             logging.info("Twitter links parsed: user_id=%s count=%s", message.from_user.id, len(tweet_ids))
             await send_chat_action_if_needed(bot, message.chat.id, "typing", business_id)

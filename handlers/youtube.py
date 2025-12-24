@@ -15,6 +15,7 @@ from config import OUTPUT_DIR, BOT_TOKEN, admin_id, CHANNEL_ID
 from handlers.user import update_info
 from handlers.utils import (
     get_bot_url,
+    get_message_text,
     handle_download_error,
     handle_video_too_large,
     maybe_delete_user_message,
@@ -229,9 +230,16 @@ def _is_manifest_stream(stream: dict) -> bool:
     return "m3u8" in protocol or "dash" in protocol or manifest_url.endswith(".m3u8")
 
 
-@router.message(F.text.regexp(r"(https?://(www\.)?(youtube|youtu|youtube-nocookie)\.(com|be)/(?!@)[\S]+)"))
+@router.message(
+    F.text.regexp(r"(https?://(www\.)?(youtube|youtu|youtube-nocookie)\.(com|be)/(?!@)[\S]+)")
+    | F.caption.regexp(r"(https?://(www\.)?(youtube|youtu|youtube-nocookie)\.(com|be)/(?!@)[\S]+)")
+)
+@router.business_message(
+    F.text.regexp(r"(https?://(www\.)?(youtube|youtu|youtube-nocookie)\.(com|be)/(?!@)[\S]+)")
+    | F.caption.regexp(r"(https?://(www\.)?(youtube|youtu|youtube-nocookie)\.(com|be)/(?!@)[\S]+)")
+)
 async def download_video(message: types.Message):
-    url = message.text
+    url = get_message_text(message)
     logging.info(
         "Downloading YouTube video : user_id=%s username=%s url=%s",
         message.from_user.id,
@@ -358,9 +366,16 @@ async def download_video(message: types.Message):
     await update_info(message)
 
 
-@router.message(F.text.regexp(r'(https?://)?(music\.)?(youtube|youtu|youtube-nocookie)\.(com|be)/.+'))
+@router.message(
+    F.text.regexp(r'(https?://)?(music\.)?(youtube|youtu|youtube-nocookie)\.(com|be)/.+')
+    | F.caption.regexp(r'(https?://)?(music\.)?(youtube|youtu|youtube-nocookie)\.(com|be)/.+')
+)
+@router.business_message(
+    F.text.regexp(r'(https?://)?(music\.)?(youtube|youtu|youtube-nocookie)\.(com|be)/.+')
+    | F.caption.regexp(r'(https?://)?(music\.)?(youtube|youtu|youtube-nocookie)\.(com|be)/.+')
+)
 async def download_music(message: types.Message):
-    url = message.text
+    url = get_message_text(message)
     logging.info(
         "Downloading YouTube audio: user_id=%s username=%s url=%s",
         message.from_user.id,
