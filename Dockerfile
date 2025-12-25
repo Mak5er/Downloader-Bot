@@ -8,6 +8,9 @@ RUN ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && echo $TZ > /etc/timezone
 # Set the working directory in the container
 WORKDIR /app
 
+RUN sed -i 's|deb.debian.org|ftp.de.debian.org|g' \
+    /etc/apt/sources.list.d/debian.sources
+
 # Install ffmpeg and other required system packages
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
@@ -21,6 +24,10 @@ RUN apt-get update && \
 
 # Copy the requirements.txt file into the container
 COPY requirements.txt .
+
+# Set pip mirror before install
+RUN pip config set global.index-url https://pypi.tuna.tsinghua.edu.cn/simple/ && \
+    pip config set global.trusted-host pypi.tuna.tsinghua.edu.cn
 
 # Upgrade pip and setuptools to avoid potential issues with older versions
 RUN pip install --upgrade pip setuptools
