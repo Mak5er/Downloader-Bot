@@ -3,6 +3,7 @@ from collections import defaultdict
 import re
 
 from sqlalchemy import Column, Text, TIMESTAMP, func, select, delete, update, ForeignKey, BigInteger, text
+from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
 from sqlalchemy.orm import declarative_base, relationship
 
@@ -86,7 +87,13 @@ class DataBase:
         # Follow Neon example: swap driver to asyncpg directly
         self.async_url = re.sub(r"^postgresql:", "postgresql+asyncpg:", self.database_url)
 
-        self.engine = create_async_engine(self.async_url, echo=False, future=True)
+        self.engine = create_async_engine(
+            self.async_url,
+            echo=False,
+            future=True,
+            pool_pre_ping=True,
+            pool_recycle=1800,
+        )
         self.SessionLocal = async_sessionmaker(bind=self.engine, expire_on_commit=False, class_=AsyncSession)
 
     async def init_db(self):
@@ -288,9 +295,12 @@ class DataBase:
     async def add_file(self, url, file_id, file_type):
         async with self.SessionLocal() as session:
             try:
-                async with session.begin():
-                    file = DownloadedFile(url=url, file_id=file_id, file_type=file_type)
-                    session.add(file)
+                stmt = (
+                    insert(DownloadedFile)
+                    .values(url=url, file_id=file_id, file_type=file_type)
+                    .on_conflict_do_nothing(index_elements=[DownloadedFile.url])
+                )
+                await session.execute(stmt)
                 await session.commit()
             except Exception as e:
                 logging.error(f"Error in add_file: {e}")
