@@ -16,6 +16,7 @@ from handlers.user import update_info
 from handlers.utils import (
     get_bot_url,
     get_message_text,
+    get_username_display,
     handle_download_error,
     handle_video_too_large,
     maybe_delete_user_message,
@@ -273,9 +274,10 @@ async def download_video(message: types.Message):
                 db_file_id,
             )
             await bot.send_chat_action(message.chat.id, "upload_video")
+            username = get_username_display(message)
             await message.answer_video(
                 video=db_file_id,
-                caption=bm.captions(user_captions, yt['title'], bot_url),
+                caption=bm.captions(user_captions, yt['title'], bot_url, username),
                 reply_markup=kb.return_video_info_keyboard(
                     views=views,
                     likes=likes,
@@ -334,11 +336,12 @@ async def download_video(message: types.Message):
             width, height = await get_clip_dimensions(metrics.path)
 
         await bot.send_chat_action(message.chat.id, "upload_video")
+        username = get_username_display(message)
         sent_message = await message.answer_video(
             video=FSInputFile(metrics.path),
             width=width,
             height=height,
-            caption=bm.captions(user_captions, yt['title'], bot_url),
+            caption=bm.captions(user_captions, yt['title'], bot_url, username),
             reply_markup=kb.return_video_info_keyboard(
                 views=views,
                 likes=likes,

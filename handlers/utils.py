@@ -18,6 +18,31 @@ def get_message_text(message: types.Message) -> str:
     return message.text or message.caption or ""
 
 
+def get_username_display(message: types.Message) -> Optional[str]:
+    """Get a display name for the user from the message.
+    Returns @username if available, otherwise first_name, or None if neither is available."""
+    if not message or not hasattr(message, 'from_user') or not message.from_user:
+        return None
+    
+    # Prefer username if available (even if empty string, check for truthy)
+    username = getattr(message.from_user, 'username', None)
+    if username:
+        return f"@{username}"
+    
+    # Fall back to first_name
+    first_name = getattr(message.from_user, 'first_name', None)
+    if first_name:
+        return first_name
+    
+    # Try full_name if available (some aiogram versions have this)
+    if hasattr(message.from_user, 'full_name'):
+        full_name = message.from_user.full_name
+        if full_name:
+            return full_name
+    
+    return None
+
+
 async def react_to_message(
         message: types.Message,
         emoji: str,

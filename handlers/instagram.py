@@ -23,6 +23,7 @@ from handlers.user import update_info
 from handlers.utils import (
     get_bot_url,
     get_message_text,
+    get_username_display,
     handle_download_error,
     handle_video_too_large,
     maybe_delete_user_message,
@@ -325,9 +326,10 @@ async def process_instagram_video(message, video_info, bot_url, user_settings, b
                 db_file_id,
             )
             await send_chat_action_if_needed(bot, message.chat.id, "upload_video", business_id)
+            username = get_username_display(message)
             await message.answer_video(
                 video=db_file_id,
-                caption=bm.captions(user_captions, video_info.description, bot_url),
+                caption=bm.captions(user_captions, video_info.description, bot_url, username),
                 reply_markup=kb.return_video_info_keyboard(
                     video_info.views,
                     video_info.likes,
@@ -361,10 +363,11 @@ async def process_instagram_video(message, video_info, bot_url, user_settings, b
 
         if file_size < MAX_FILE_SIZE:
             await send_chat_action_if_needed(bot, message.chat.id, "upload_video", business_id)
+            username = get_username_display(message)
 
             sent_message = await message.reply_video(
                 video=FSInputFile(download_path),
-                caption=bm.captions(user_captions, video_info.description, bot_url),
+                caption=bm.captions(user_captions, video_info.description, bot_url, username),
                 reply_markup=kb.return_video_info_keyboard(
                     video_info.views,
                     video_info.likes,
