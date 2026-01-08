@@ -22,6 +22,7 @@ from handlers.user import update_info
 from handlers.utils import (
     get_bot_url,
     get_message_text,
+    get_username_display,
     handle_download_error,
     handle_video_too_large,
     maybe_delete_user_message,
@@ -380,9 +381,10 @@ async def process_tiktok_video(message: types.Message, data: dict, bot_url: str,
             db_file_id,
         )
         await send_chat_action_if_needed(bot, message.chat.id, "upload_video", business_id)
+        username = get_username_display(message)
         await message.answer_video(
             video=db_file_id,
-            caption=bm.captions(user_settings["captions"], info.description, bot_url),
+            caption=bm.captions(user_settings["captions"], info.description, bot_url, username),
             reply_markup=kb.return_video_info_keyboard(
                 info.views, info.likes, info.comments,
                 info.shares, info.music_play_url, db_video_url, user_settings
@@ -413,9 +415,10 @@ async def process_tiktok_video(message: types.Message, data: dict, bot_url: str,
 
         width, height = await tiktok_service.video_dimensions(download_path)
         await send_chat_action_if_needed(bot, message.chat.id, "upload_video", business_id)
+        username = get_username_display(message)
         sent = await message.reply_video(
             video=FSInputFile(download_path), width=width, height=height,
-            caption=bm.captions(user_settings["captions"], info.description, bot_url),
+            caption=bm.captions(user_settings["captions"], info.description, bot_url, username),
             reply_markup=kb.return_video_info_keyboard(
                 info.views, info.likes, info.comments,
                 info.shares, info.music_play_url, db_video_url, user_settings

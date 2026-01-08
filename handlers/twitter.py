@@ -15,6 +15,7 @@ from config import OUTPUT_DIR
 from handlers.utils import (
     get_bot_url,
     get_message_text,
+    get_username_display,
     maybe_delete_user_message,
     react_to_message,
     remove_file,
@@ -225,7 +226,8 @@ async def reply_media(message, tweet_id, tweet_media, bot_url, business_id, user
             len(videos),
         )
 
-        caption = bm.captions(user_captions, post_caption, bot_url)
+        username = get_username_display(message)
+        caption = bm.captions(user_captions, post_caption, bot_url, username)
         keyboard = kb.return_video_info_keyboard(None, likes, comments, retweets, None, post_url, user_settings)
 
         await _send_photo_responses(message, photos, caption, keyboard)

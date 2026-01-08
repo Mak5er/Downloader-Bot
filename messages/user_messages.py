@@ -3,7 +3,7 @@ def cancel():
 
 
 def welcome_message():
-    return "Welcome to MaxLoad Downloader! Send me a link to download the video."
+    return "Welcome to Socials Downloader! Send me a link to download the video."
 
 
 def settings():
@@ -45,11 +45,19 @@ def get_field_text(field: str):
     return texts.get(field, "<b>Settings</b>\nNo description available for this option.")
 
 
-def captions(user_captions, post_caption, bot_url):
-    footer = '🚀 Powered by <a href="{bot_url}">MaxLoad</a>'.format(bot_url=bot_url)
+def captions(user_captions, post_caption, bot_url, username=None):
+    footer = '🚀 Powered by <a href="{bot_url}">Lviv</a>'.format(bot_url=bot_url)
+    username_line = ""
+    if username:
+        username_line = f"👤 From: {username}\n\n"
+    
     if user_captions == "on" and post_caption:
-        return "{post_caption}\n\n{footer}".format(post_caption=post_caption, footer=footer)
-    return footer
+        return "{username_line}{post_caption}\n\n{footer}".format(
+            username_line=username_line,
+            post_caption=post_caption,
+            footer=footer
+        )
+    return "{username_line}{footer}".format(username_line=username_line, footer=footer)
 
 
 def join_group(chat_title: str) -> str:
