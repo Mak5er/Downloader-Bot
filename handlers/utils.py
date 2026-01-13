@@ -5,6 +5,7 @@ from typing import Optional
 from pathlib import Path
 
 from aiogram import Bot, types
+from aiogram.enums import ChatType
 from aiogram.types import FSInputFile
 from aiogram.exceptions import TelegramAPIError
 
@@ -193,3 +194,10 @@ async def remove_file(path: Optional[str]) -> None:
 async def send_chat_action_if_needed(bot: Bot, chat_id: int, action: str, business_id: Optional[int]) -> None:
     if business_id is None:
         await bot.send_chat_action(chat_id, action)
+
+
+def resolve_settings_target_id(message: types.Message) -> int:
+    """Return chat id for group/supergroup, otherwise sender id."""
+    if message.chat and message.chat.type != ChatType.PRIVATE:
+        return message.chat.id
+    return message.from_user.id

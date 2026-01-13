@@ -29,6 +29,7 @@ from handlers.utils import (
     react_to_message,
     remove_file,
     send_chat_action_if_needed,
+    resolve_settings_target_id,
 )
 from log.logger import logger as logging
 from main import bot, db, send_analytics
@@ -249,7 +250,7 @@ async def get_video_dimensions(path: str) -> tuple[int | None, int | None]:
 async def process_instagram_url(message: types.Message):
     try:
         bot_url = await get_bot_url(bot)
-        user_settings = await db.user_settings(message.from_user.id)
+        user_settings = await db.user_settings(resolve_settings_target_id(message))
         user_captions = user_settings["captions"]
         business_id = message.business_connection_id
         text = get_message_text(message)

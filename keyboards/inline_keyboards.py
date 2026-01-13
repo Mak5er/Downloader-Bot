@@ -31,10 +31,10 @@ def return_field_keyboard(field: str, value: str | None):
 def return_settings_keyboard():
     settings_fields = [
         ("📝 Descriptions", "captions"),
-        ("🗑️ Delete Messages", "delete_message"),
         ("ℹ️ Info Buttons", "info_buttons"),
-        ("🔗 URL Button", "url_button"),
         ("🎧 MP3 Button", "audio_button"),
+        ("🔗 URL Button", "url_button"),
+        ("🗑️ Delete Messages", "delete_message"),
     ]
 
     buttons = [
@@ -95,6 +95,12 @@ def return_back_to_admin_keyboard():
         [InlineKeyboardButton(text="⬅️ Back", callback_data="back_to_admin")]
     ]
     return InlineKeyboardMarkup(inline_keyboard=back_button)
+
+
+def start_private_chat_keyboard(bot_username: str):
+    url = f"https://t.me/{bot_username}?start=from_group"
+    button = [[InlineKeyboardButton(text="💬 Open bot chat", url=url)]]
+    return InlineKeyboardMarkup(inline_keyboard=button)
 
 
 def return_audio_download_keyboard(platform, url):

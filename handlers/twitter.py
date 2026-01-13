@@ -19,6 +19,7 @@ from handlers.utils import (
     react_to_message,
     remove_file,
     send_chat_action_if_needed,
+    resolve_settings_target_id,
 )
 from log.logger import logger as logging
 from main import bot, db, send_analytics
@@ -273,7 +274,7 @@ async def handle_tweet_links(message):
     await react_to_message(message, "👾", business_id=business_id)
 
     bot_url = await get_bot_url(bot)
-    user_settings = await db.user_settings(message.from_user.id)
+    user_settings = await db.user_settings(resolve_settings_target_id(message))
 
     try:
         tweet_ids = await asyncio.to_thread(extract_tweet_ids, text)
