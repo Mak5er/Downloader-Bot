@@ -41,6 +41,10 @@ def get_field_text(field: str):
             "<b>🔗 URL Button</b>\n"
             "Enable or disable a button with the direct URL to the downloaded content."
         ),
+        "audio_button": (
+            "<b>🎧 MP3 Button</b>\n"
+            "Show or hide the Download MP3 button under videos with audio."
+        ),
     }
     return texts.get(field, "<b>Settings</b>\nNo description available for this option.")
 
@@ -50,6 +54,10 @@ def captions(user_captions, post_caption, bot_url):
     if user_captions == "on" and post_caption:
         return "{post_caption}\n\n{footer}".format(post_caption=post_caption, footer=footer)
     return footer
+
+
+def downloading_audio_status():
+    return "🎧 Downloading audio, please wait..."
 
 
 def join_group(chat_title: str) -> str:

@@ -21,6 +21,7 @@ from config import OUTPUT_DIR, CHANNEL_ID
 from handlers.user import update_info
 from handlers.utils import (
     get_bot_url,
+    get_bot_avatar_thumbnail,
     get_message_text,
     handle_download_error,
     handle_video_too_large,
@@ -223,6 +224,18 @@ class TikTokService:
             logging.error("Error downloading TikTok video: video_id=%s error=%s", video_id, exc)
             return None
 
+    async def download_audio(self, audio_url: str, filename: str) -> Optional[DownloadMetrics]:
+        """Download TikTok audio to the configured output directory."""
+        headers = {
+            "User-Agent": _get_user_agent(),
+            "Referer": "https://www.tiktok.com/",
+        }
+        try:
+            return await self._downloader.download(audio_url, filename, headers=headers)
+        except DownloadError as exc:
+            logging.error("Error downloading TikTok audio: url=%s error=%s", audio_url, exc)
+            return None
+
     async def video_dimensions(self, path: str) -> tuple[int, int]:
         """Return the width/height of a downloaded video."""
         return await asyncio.to_thread(self._video_dimensions_sync, path)
@@ -368,6 +381,10 @@ async def process_tiktok_video(message: types.Message, data: dict, bot_url: str,
         await handle_download_error(message, business_id=business_id)
         return
 
+    audio_callback_data = None
+    if info.author and info.id:
+        audio_callback_data = f"audio:tiktok:{info.author}:{info.id}"
+
     timestamp = datetime.datetime.now().strftime("%Y%m%d%H%M%S")
     download_name = f"{info.id}_{timestamp}_tiktok_video.mp4"
     db_video_url = f'https://tiktok.com/@{info.author}/video/{info.id}'
@@ -385,7 +402,8 @@ async def process_tiktok_video(message: types.Message, data: dict, bot_url: str,
             caption=bm.captions(user_settings["captions"], info.description, bot_url),
             reply_markup=kb.return_video_info_keyboard(
                 info.views, info.likes, info.comments,
-                info.shares, info.music_play_url, db_video_url, user_settings
+                info.shares, info.music_play_url, db_video_url, user_settings,
+                audio_callback_data=audio_callback_data,
             ),
             parse_mode="HTML"
         )
@@ -418,7 +436,8 @@ async def process_tiktok_video(message: types.Message, data: dict, bot_url: str,
             caption=bm.captions(user_settings["captions"], info.description, bot_url),
             reply_markup=kb.return_video_info_keyboard(
                 info.views, info.likes, info.comments,
-                info.shares, info.music_play_url, db_video_url, user_settings
+                info.shares, info.music_play_url, db_video_url, user_settings,
+                audio_callback_data=audio_callback_data,
             ),
             parse_mode="HTML"
         )
@@ -449,6 +468,9 @@ async def process_tiktok_photos(message: types.Message, data: dict, bot_url: str
                                 business_id: Optional[int], images: list):
     await send_analytics(user_id=message.from_user.id, chat_type=message.chat.type, action_name="tiktok_photos")
     info = await video_info(data)
+    audio_callback_data = None
+    if info and info.author and info.id:
+        audio_callback_data = f"audio:tiktok:{info.author}:{info.id}"
     video_url = f'https://tiktok.com/@{info.author}/video/{info.id}'
     if not images:
         logging.warning(
@@ -480,7 +502,8 @@ async def process_tiktok_photos(message: types.Message, data: dict, bot_url: str
         caption=bm.captions(user_settings['captions'], info.description, bot_url),
         reply_markup=kb.return_video_info_keyboard(
             info.views, info.likes, info.comments,
-            info.shares, info.music_play_url, video_url, user_settings
+            info.shares, info.music_play_url, video_url, user_settings,
+            audio_callback_data=audio_callback_data,
         )
     )
     await maybe_delete_user_message(message, user_settings["delete_message"])
@@ -523,6 +546,100 @@ async def handle_large_file(message, business_id):
         message.chat.id,
     )
     await handle_video_too_large(message, business_id=business_id)
+
+
+@router.callback_query(F.data.startswith("audio:tiktok:"))
+async def download_tiktok_mp3_callback(call: types.CallbackQuery):
+    if not call.message:
+        await call.answer("Open the bot to download MP3", show_alert=True)
+        return
+
+    await call.answer()
+    status_message = await call.message.answer(bm.downloading_audio_status())
+    parts = call.data.split(":", 3)
+    if len(parts) != 4:
+        await handle_download_error(call.message)
+        return
+
+    _, _, author, video_id = parts
+    video_url = f"https://www.tiktok.com/@{author}/video/{video_id}"
+    logging.info(
+        "Downloading TikTok MP3 via button: user_id=%s url=%s",
+        call.from_user.id,
+        video_url,
+    )
+
+    try:
+        bot_url = await get_bot_url(bot)
+        bot_avatar = await get_bot_avatar_thumbnail(bot)
+        cache_key = f"{video_url}#audio"
+        db_file_id = await db.get_file_id(cache_key)
+        if db_file_id:
+            await send_chat_action_if_needed(
+                bot,
+                call.message.chat.id,
+                "upload_audio",
+                call.message.business_connection_id,
+            )
+            try:
+                await status_message.delete()
+                status_message = None
+            except Exception:
+                pass
+            await call.message.answer_audio(
+                audio=db_file_id,
+                caption=bm.captions(None, None, bot_url),
+                thumbnail=bot_avatar,
+                parse_mode="HTML",
+            )
+            return
+
+        data = await fetch_tiktok_data(video_url)
+        info = await video_info(data)
+        if not info or not info.music_play_url:
+            await handle_download_error(call.message)
+            return
+
+        timestamp = datetime.datetime.now().strftime("%Y%m%d%H%M%S")
+        download_name = f"{info.id}_{timestamp}_tiktok_audio.mp3"
+        metrics = await tiktok_service.download_audio(info.music_play_url, download_name)
+        if not metrics:
+            await handle_download_error(call.message)
+            return
+
+        if metrics.size >= MAX_FILE_SIZE:
+            await call.message.reply(bm.audio_too_large())
+            await remove_file(metrics.path)
+            return
+
+        await send_chat_action_if_needed(
+            bot,
+            call.message.chat.id,
+            "upload_audio",
+            call.message.business_connection_id,
+        )
+        try:
+            await status_message.delete()
+            status_message = None
+        except Exception:
+            pass
+        sent_message = await call.message.answer_audio(
+            audio=FSInputFile(metrics.path),
+            title=info.description or "TikTok audio",
+            caption=bm.captions(None, None, bot_url),
+            thumbnail=bot_avatar,
+            parse_mode="HTML",
+        )
+        await db.add_file(cache_key, sent_message.audio.file_id, "audio")
+
+        await asyncio.sleep(5)
+        await remove_file(metrics.path)
+    finally:
+        if status_message:
+            try:
+                await status_message.delete()
+            except Exception:
+                pass
 
 
 @router.inline_query(F.query.regexp(r"(https?://(www\.|vm\.|vt\.|vn\.)?tiktok\.com/\S+)"))

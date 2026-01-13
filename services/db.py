@@ -55,6 +55,7 @@ class Settings(Base):
     delete_message = Column(Text, default="off", nullable=False)
     info_buttons = Column(Text, default="off", nullable=False)
     url_button = Column(Text, default="off", nullable=False)
+    audio_button = Column(Text, default="off", nullable=False)
 
     user = relationship("User", back_populates="settings")
 
@@ -230,12 +231,14 @@ class DataBase:
                     "delete_message": settings.delete_message or "off",
                     "info_buttons": settings.info_buttons or "off",
                     "url_button": settings.url_button or "off",
+                    "audio_button": settings.audio_button or "off",
                 }
             return {
                 "captions": "off",
                 "delete_message": "off",
                 "info_buttons": "off",
                 "url_button": "off",
+                "audio_button": "off",
             }
 
     async def set_user_setting(self, user_id, field, value):

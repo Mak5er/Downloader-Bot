@@ -1,4 +1,5 @@
 import asyncio
+import glob
 import os
 import time
 from typing import Tuple, Any, Optional
@@ -15,6 +16,7 @@ from config import OUTPUT_DIR, BOT_TOKEN, admin_id, CHANNEL_ID
 from handlers.user import update_info
 from handlers.utils import (
     get_bot_url,
+    get_bot_avatar_thumbnail,
     get_message_text,
     handle_download_error,
     handle_video_too_large,
@@ -128,6 +130,48 @@ async def download_with_ytdlp_metrics(url: str, filename: str, format_selector: 
         return metrics
     except Exception as exc:
         logging.error("yt-dlp download failed: source=%s url=%s error=%s", source, url, exc)
+        return None
+
+
+async def download_mp3_with_ytdlp_metrics(url: str, base_name: str, source: str) -> Optional[DownloadMetrics]:
+    """Download audio via yt-dlp and return MP3 metrics."""
+    base_path = os.path.join(OUTPUT_DIR, base_name)
+    out_template = f"{base_path}.%(ext)s"
+    final_path = f"{base_path}.mp3"
+    ydl_opts = {
+        **YTDLP_SPEED_OPTS,
+        "format": "bestaudio/best",
+        "outtmpl": out_template,
+        "postprocessors": [{
+            "key": "FFmpegExtractAudio",
+            "preferredcodec": "mp3",
+            "preferredquality": "192",
+        }],
+        "merge_output_format": "mp3",
+    }
+    start = time.monotonic()
+    try:
+        await asyncio.to_thread(lambda: YoutubeDL(ydl_opts).download([url]))
+        elapsed = time.monotonic() - start
+        resolved_path = final_path if os.path.exists(final_path) else None
+        if not resolved_path:
+            matches = glob.glob(f"{base_path}.*")
+            resolved_path = matches[0] if matches else None
+        if not resolved_path or not os.path.exists(resolved_path):
+            logging.error("yt-dlp mp3 output missing: url=%s base=%s", url, base_path)
+            return None
+        metrics = DownloadMetrics(
+            url=url,
+            path=resolved_path,
+            size=os.path.getsize(resolved_path),
+            elapsed=elapsed,
+            used_multipart=False,
+            resumed=False,
+        )
+        log_download_metrics(source, metrics)
+        return metrics
+    except Exception as exc:
+        logging.error("yt-dlp mp3 download failed: source=%s url=%s error=%s", source, url, exc)
         return None
 
 
@@ -261,6 +305,8 @@ async def download_video(message: types.Message):
             await message.reply(bm.nothing_found())
             return
 
+        audio_callback_data = f"audio:youtube:{yt['id']}" if yt and yt.get("id") else None
+
         views = safe_int(yt.get('view_count'), None)
         likes = safe_int(yt.get('like_count'), None)
 
@@ -284,6 +330,7 @@ async def download_video(message: types.Message):
                     music_play_url=None,
                     video_url=yt['webpage_url'],
                     user_settings=user_settings,
+                    audio_callback_data=audio_callback_data,
                 ),
                 parse_mode="HTML"
             )
@@ -347,6 +394,7 @@ async def download_video(message: types.Message):
                 music_play_url=None,
                 video_url=yt['webpage_url'],
                 user_settings=user_settings,
+                audio_callback_data=audio_callback_data,
             ),
             parse_mode="HTML"
         )
@@ -386,6 +434,7 @@ async def download_music(message: types.Message):
         await react_to_message(message, "👾", skip_if_business=False)
         user_settings = await db.user_settings(message.from_user.id)
         bot_url = await get_bot_url(bot)
+        bot_avatar = await get_bot_avatar_thumbnail(bot)
 
         # Get YouTube audio object - run in thread pool
         yt = await asyncio.to_thread(get_youtube_video, url)
@@ -420,6 +469,7 @@ async def download_music(message: types.Message):
             title=yt['title'],
             duration=round(audio_duration),
             caption=bm.captions(None, None, bot_url),
+            thumbnail=bot_avatar,
             parse_mode="HTML"
         )
         await maybe_delete_user_message(message, user_settings.get("delete_message"))
@@ -431,6 +481,92 @@ async def download_music(message: types.Message):
         logging.error(f"Audio download error: {e}")
         await handle_download_error(message, skip_if_business=False)
     await update_info(message)
+
+
+@router.callback_query(F.data.startswith("audio:youtube:"))
+async def download_youtube_mp3_callback(call: types.CallbackQuery):
+    if not call.message:
+        await call.answer("Open the bot to download MP3", show_alert=True)
+        return
+
+    await call.answer()
+    status_message = await call.message.answer(bm.downloading_audio_status())
+    video_id = call.data.split(":", 2)[2]
+    url = f"https://www.youtube.com/watch?v={video_id}"
+    logging.info(
+        "Downloading YouTube MP3 via button: user_id=%s url=%s",
+        call.from_user.id,
+        url,
+    )
+
+    try:
+        user_settings = await db.user_settings(call.from_user.id)
+        bot_url = await get_bot_url(bot)
+        bot_avatar = await get_bot_avatar_thumbnail(bot)
+
+        yt = await asyncio.to_thread(get_youtube_video, url)
+        if not yt:
+            await handle_download_error(call.message, skip_if_business=False)
+            return
+
+        cache_key = f"{yt['webpage_url']}#audio"
+        db_file_id = await db.get_file_id(cache_key)
+        if db_file_id:
+            await bot.send_chat_action(call.message.chat.id, "upload_audio")
+            try:
+                await status_message.delete()
+                status_message = None
+            except Exception:
+                pass
+            await call.message.answer_audio(
+                audio=db_file_id,
+                title=yt.get("title"),
+                caption=bm.captions(None, None, bot_url),
+                thumbnail=bot_avatar,
+                parse_mode="HTML",
+            )
+            return
+
+        base_name = f"{yt['id']}_youtube_audio"
+        metrics = await download_mp3_with_ytdlp_metrics(
+            yt['webpage_url'],
+            base_name,
+            "youtube_audio_mp3",
+        )
+        if not metrics:
+            await handle_download_error(call.message, skip_if_business=False)
+            return
+
+        if metrics.size >= MAX_FILE_SIZE:
+            await call.message.reply(bm.audio_too_large())
+            await remove_file(metrics.path)
+            return
+
+        audio_duration = await get_audio_duration(metrics.path)
+        await bot.send_chat_action(call.message.chat.id, "upload_audio")
+        try:
+            await status_message.delete()
+            status_message = None
+        except Exception:
+            pass
+        sent_message = await call.message.answer_audio(
+            audio=FSInputFile(metrics.path),
+            title=yt.get("title"),
+            duration=round(audio_duration),
+            caption=bm.captions(None, None, bot_url),
+            thumbnail=bot_avatar,
+            parse_mode="HTML",
+        )
+        await db.add_file(cache_key, sent_message.audio.file_id, "audio")
+
+        await asyncio.sleep(5)
+        await remove_file(metrics.path)
+    finally:
+        if status_message:
+            try:
+                await status_message.delete()
+            except Exception:
+                pass
 
 
 @router.inline_query(F.query.regexp(r"(https?://(www\.)?(youtube|youtu|youtube-nocookie)\.(com|be)/(?!@)[\S]+)"))

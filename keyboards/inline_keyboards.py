@@ -34,6 +34,7 @@ def return_settings_keyboard():
         ("🗑️ Delete Messages", "delete_message"),
         ("ℹ️ Info Buttons", "info_buttons"),
         ("🔗 URL Button", "url_button"),
+        ("🎧 MP3 Button", "audio_button"),
     ]
 
     buttons = [
@@ -137,7 +138,8 @@ def return_user_info_keyboard(nickname, followers, videos, likes, url):
     return builder.as_markup()
 
 
-def return_video_info_keyboard(views, likes, comments, shares, music_play_url, video_url, user_settings):
+def return_video_info_keyboard(views, likes, comments, shares, music_play_url, video_url, user_settings,
+                               audio_callback_data: str | None = None):
     builder = InlineKeyboardBuilder()
 
     if user_settings["info_buttons"] == "on":
@@ -178,8 +180,8 @@ def return_video_info_keyboard(views, likes, comments, shares, music_play_url, v
         if row1:
             builder.row(*row1)
 
-        if music_play_url:
-            builder.row(InlineKeyboardButton(text="🎧 Download MP3", url=music_play_url))
+    if user_settings.get("audio_button") == "on" and audio_callback_data:
+        builder.row(InlineKeyboardButton(text="🎧 Download MP3", callback_data=audio_callback_data))
 
     if user_settings["url_button"] == "on" and video_url:
         builder.row(InlineKeyboardButton(text="🔗 URL", url=video_url))
