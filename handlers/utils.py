@@ -2,7 +2,10 @@ import asyncio
 import os
 from typing import Optional
 
+from pathlib import Path
+
 from aiogram import Bot, types
+from aiogram.types import FSInputFile
 from aiogram.exceptions import TelegramAPIError
 
 import messages as bm
@@ -11,6 +14,9 @@ from log.logger import logger as logging
 DELETE_WARNING_TEXT = (
     "I can't delete the link in this chat because I don't have enough permissions."
 )
+
+_bot_avatar_file_id: Optional[str] = None
+_bot_avatar_path: Optional[str] = None
 
 
 def get_message_text(message: types.Message) -> str:
@@ -126,6 +132,47 @@ async def maybe_delete_user_message(message: types.Message, delete_flag) -> bool
 async def get_bot_url(bot: Bot) -> str:
     bot_data = await bot.get_me()
     return f"t.me/{bot_data.username}"
+
+
+async def get_bot_avatar_file_id(bot: Bot) -> Optional[str]:
+    """Return cached bot avatar file_id if available."""
+    global _bot_avatar_file_id
+    if _bot_avatar_file_id:
+        return _bot_avatar_file_id
+
+    try:
+        bot_data = await bot.get_me()
+        photos = await bot.get_user_profile_photos(bot_data.id, limit=1)
+        if photos.total_count and photos.photos:
+            _bot_avatar_file_id = photos.photos[0][-1].file_id
+            return _bot_avatar_file_id
+    except Exception as exc:
+        logging.debug("Failed to fetch bot avatar: error=%s", exc)
+    return None
+
+
+async def get_bot_avatar_thumbnail(bot: Bot) -> Optional[FSInputFile]:
+    """Return bot avatar as InputFile for thumbnail uploads."""
+    global _bot_avatar_path
+    if _bot_avatar_path and Path(_bot_avatar_path).exists():
+        return FSInputFile(_bot_avatar_path)
+
+    try:
+        bot_data = await bot.get_me()
+        photos = await bot.get_user_profile_photos(bot_data.id, limit=1)
+        if not photos.total_count or not photos.photos:
+            return None
+
+        avatar_dir = Path("downloads")
+        avatar_dir.mkdir(parents=True, exist_ok=True)
+        avatar_path = avatar_dir / "bot_avatar.jpg"
+        file_id = photos.photos[0][-1].file_id
+        await bot.download(file_id, destination=avatar_path)
+        _bot_avatar_path = str(avatar_path)
+        return FSInputFile(_bot_avatar_path)
+    except Exception as exc:
+        logging.debug("Failed to fetch bot avatar thumbnail: error=%s", exc)
+        return None
 
 
 async def remove_file(path: Optional[str]) -> None:

@@ -214,8 +214,6 @@ async def reply_media(message, tweet_id, tweet_media, bot_url, business_id, user
     likes = tweet_media['likes']
     comments = tweet_media['replies']
     retweets = tweet_media['retweets']
-    user_captions = user_settings["captions"]
-
     try:
         photos, videos = await _collect_media_files(tweet_id, tweet_media)
         logging.info(
@@ -225,11 +223,13 @@ async def reply_media(message, tweet_id, tweet_media, bot_url, business_id, user
             len(videos),
         )
 
-        caption = bm.captions(user_captions, post_caption, bot_url)
+        caption = bm.captions("on", post_caption, bot_url)
         keyboard = kb.return_video_info_keyboard(None, likes, comments, retweets, None, post_url, user_settings)
 
         await _send_photo_responses(message, photos, caption, keyboard)
         await _send_video_responses(message, videos, caption, keyboard)
+        if not photos and not videos:
+            await message.answer(caption, reply_markup=keyboard, parse_mode="HTML")
 
         logging.info(
             "Tweet media delivered: user_id=%s tweet_id=%s",
