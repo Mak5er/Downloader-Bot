@@ -1,4 +1,5 @@
 import datetime
+import re
 from collections import defaultdict
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
@@ -12,9 +13,10 @@ from matplotlib.ticker import MaxNLocator
 
 import keyboards as kb
 import messages as bm
-from handlers.utils import remove_file
+from handlers.utils import get_message_text, remove_file
 from log.logger import logger as logging
 from main import db, send_analytics, bot
+from services.pending_requests import pop_pending
 
 router = Router()
 
@@ -27,6 +29,25 @@ SERVICE_EMOJI = {
     "Twitter": "🐦",
     "Other": "📦",
 }
+
+
+def _admin_statuses() -> set[ChatMemberStatus]:
+    statuses = {ChatMemberStatus.ADMINISTRATOR}
+    owner = getattr(ChatMemberStatus, "OWNER", None)
+    creator = getattr(ChatMemberStatus, "CREATOR", None)
+    if owner:
+        statuses.add(owner)
+    if creator:
+        statuses.add(creator)
+    return statuses
+
+
+async def _is_group_admin(chat_id: int, user_id: int) -> bool:
+    try:
+        member = await bot.get_chat_member(chat_id, user_id)
+    except Exception:
+        return False
+    return member.status in _admin_statuses()
 
 
 async def update_info(message: types.Message):
@@ -47,6 +68,15 @@ async def send_welcome(message: types.Message):
 
     await message.reply(bm.welcome_message())
     await update_info(message)
+
+    if message.chat.type == ChatType.PRIVATE:
+        pending = pop_pending(message.from_user.id)
+        if pending:
+            try:
+                await bot.delete_message(pending.notice_chat_id, pending.notice_message_id)
+            except Exception:
+                pass
+            await _process_pending_message(pending.message)
 
 
 @router.my_chat_member()
@@ -75,19 +105,20 @@ async def handle_bot_membership(update: ChatMemberUpdated):
         became_member = old_status not in {ChatMemberStatus.MEMBER, ChatMemberStatus.ADMINISTRATOR}
         became_admin = new_status == ChatMemberStatus.ADMINISTRATOR and old_status != ChatMemberStatus.ADMINISTRATOR
 
-        if became_member:
-            await bot.send_message(
-                chat_id=chat_id,
-                text=bm.join_group(chat_title),
-                parse_mode="HTML",
-            )
+        if chat.type != ChatType.PRIVATE:
+            if became_member:
+                await bot.send_message(
+                    chat_id=chat_id,
+                    text=bm.join_group(chat_title),
+                    parse_mode="HTML",
+                )
 
-        if became_admin:
-            await bot.send_message(
-                chat_id=chat_id,
-                text=bm.admin_rights_granted(chat_title),
-                parse_mode="HTML",
-            )
+            if became_admin:
+                await bot.send_message(
+                    chat_id=chat_id,
+                    text=bm.admin_rights_granted(chat_title),
+                    parse_mode="HTML",
+                )
 
     elif new_status in {ChatMemberStatus.KICKED, ChatMemberStatus.LEFT, ChatMemberStatus.RESTRICTED}:
         await db.set_inactive(update.chat.id)
@@ -98,14 +129,41 @@ async def remove_reply_keyboard(message: types.Message):
     await message.reply(text=bm.keyboard_removed(), reply_markup=types.ReplyKeyboardRemove())
 
 
+async def _process_pending_message(message: types.Message) -> None:
+    text = get_message_text(message)
+    if not text:
+        return
+
+    if re.search(r"(https?://(www\.|vm\.|vt\.|vn\.)?tiktok\.com/\S+)", text, re.IGNORECASE):
+        from handlers import tiktok
+        await tiktok.process_tiktok(message)
+        return
+
+    if re.search(r"(https?://(www\.)?instagram\.com/\S+)", text, re.IGNORECASE):
+        from handlers import instagram
+        await instagram.process_instagram_url(message)
+        return
+
+    if re.search(r"(https?://(www\.)?(youtube|youtu|youtube-nocookie)\.(com|be)/\S+)", text, re.IGNORECASE):
+        from handlers import youtube
+        await youtube.download_video(message)
+        return
+
+    if re.search(r"(https?://(www\.)?(twitter|x)\.com/\S+|https?://t\.co/\S+)", text, re.IGNORECASE):
+        from handlers import twitter
+        await twitter.handle_tweet_links(message)
+
+
 @router.message(Command("settings"))
 async def settings_menu(message: types.Message):
     await send_analytics(user_id=message.from_user.id,
                          chat_type=message.chat.type,
                          action_name='settings')
     if message.chat.type != "private":
-        await message.reply(bm.settings_private_only())
-        return
+        is_admin = await _is_group_admin(message.chat.id, message.from_user.id)
+        if not is_admin:
+            await message.reply(bm.settings_admin_only())
+            return
     await message.reply(
         text=bm.settings(),
         reply_markup=kb.return_settings_keyboard(),
@@ -126,7 +184,16 @@ async def back_to_settings(call: types.CallbackQuery):
 @router.callback_query(F.data.startswith("settings:"))
 async def open_setting(call: types.CallbackQuery):
     _, field = call.data.split(":")
-    current_value = await db.get_user_setting(user_id=call.from_user.id, field=field)
+    if call.message and call.message.chat.type != "private":
+        is_admin = await _is_group_admin(call.message.chat.id, call.from_user.id)
+        if not is_admin:
+            await call.answer(bm.settings_admin_only(), show_alert=True)
+            return
+        target_id = call.message.chat.id
+    else:
+        target_id = call.from_user.id
+
+    current_value = await db.get_user_setting(user_id=target_id, field=field)
 
     keyboard = kb.return_field_keyboard(field, current_value)
 
@@ -141,9 +208,18 @@ async def open_setting(call: types.CallbackQuery):
 @router.callback_query(F.data.startswith("setting:"))
 async def change_setting(call: types.CallbackQuery):
     _, field, value = call.data.split(":")
-    await db.set_user_setting(user_id=call.from_user.id, field=field, value=value)
+    if call.message and call.message.chat.type != "private":
+        is_admin = await _is_group_admin(call.message.chat.id, call.from_user.id)
+        if not is_admin:
+            await call.answer(bm.settings_admin_only(), show_alert=True)
+            return
+        target_id = call.message.chat.id
+    else:
+        target_id = call.from_user.id
 
-    current_value = await db.get_user_setting(user_id=call.from_user.id, field=field)
+    await db.set_user_setting(user_id=target_id, field=field, value=value)
+
+    current_value = await db.get_user_setting(user_id=target_id, field=field)
     keyboard = kb.return_field_keyboard(field, current_value)
 
     await call.message.edit_reply_markup(reply_markup=keyboard)

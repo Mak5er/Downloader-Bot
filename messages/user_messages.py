@@ -60,6 +60,14 @@ def downloading_audio_status():
     return "🎧 Downloading audio, please wait..."
 
 
+def dm_start_required():
+    return "🔒 Please open the bot in private chat and press Start so I can process your link."
+
+
+def settings_admin_only():
+    return "Only group admins can use /settings in group chats."
+
+
 def join_group(chat_title: str) -> str:
     return (
         "👋 Hi! Thanks for adding me to <b>{chat_title}</b> 🌸\n"
@@ -92,3 +100,7 @@ def nothing_found():
 
 def keyboard_removed():
     return "Keyboard removed."
+
+
+def tiktok_live_not_supported():
+    return "TikTok LIVE streams are not supported yet."

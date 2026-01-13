@@ -29,6 +29,7 @@ from handlers.utils import (
     react_to_message,
     remove_file,
     send_chat_action_if_needed,
+    resolve_settings_target_id,
 )
 from log.logger import logger as logging
 from main import bot, db, send_analytics
@@ -103,8 +104,8 @@ def get_video_id_from_url(url: str) -> str:
     return url.split('/')[-1].split('?')[0]
 
 
-async def get_user_settings(user_id):
-    return await db.user_settings(user_id)
+async def get_user_settings(message: types.Message):
+    return await db.user_settings(resolve_settings_target_id(message))
 
 
 @dataclass
@@ -334,10 +335,15 @@ async def process_tiktok(message: types.Message):
         else:
             url = text
 
+        parsed_url = urlparse(url)
+        if "/live" in (parsed_url.path or "").lower():
+            await message.reply(bm.tiktok_live_not_supported())
+            return
+
         data = await fetch_tiktok_data(url)
         images = data.get("data", {}).get("images", [])
 
-        user_settings = await get_user_settings(message.from_user.id)
+        user_settings = await get_user_settings(message)
 
         await react_to_message(message, "👾", business_id=business_id)
 

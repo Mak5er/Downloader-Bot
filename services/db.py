@@ -198,6 +198,7 @@ class DataBase:
             )
             return result.scalar()
 
+
     async def all_users(self):
         async with self.SessionLocal() as session:
             result = await session.execute(select(User.user_id))

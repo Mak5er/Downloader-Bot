@@ -23,6 +23,7 @@ from handlers.utils import (
     maybe_delete_user_message,
     react_to_message,
     remove_file,
+    resolve_settings_target_id,
 )
 from log.logger import logger as logging
 from main import bot, db, send_analytics
@@ -294,7 +295,7 @@ async def download_video(message: types.Message):
     try:
         await react_to_message(message, "👾", skip_if_business=False)
 
-        user_settings = await db.user_settings(message.from_user.id)
+        user_settings = await db.user_settings(resolve_settings_target_id(message))
         user_captions = user_settings["captions"]
         bot_url = await get_bot_url(bot)
 
@@ -432,7 +433,7 @@ async def download_music(message: types.Message):
     )
     try:
         await react_to_message(message, "👾", skip_if_business=False)
-        user_settings = await db.user_settings(message.from_user.id)
+        user_settings = await db.user_settings(resolve_settings_target_id(message))
         bot_url = await get_bot_url(bot)
         bot_avatar = await get_bot_avatar_thumbnail(bot)
 
@@ -500,7 +501,6 @@ async def download_youtube_mp3_callback(call: types.CallbackQuery):
     )
 
     try:
-        user_settings = await db.user_settings(call.from_user.id)
         bot_url = await get_bot_url(bot)
         bot_avatar = await get_bot_avatar_thumbnail(bot)
 
