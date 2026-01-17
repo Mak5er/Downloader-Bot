@@ -34,11 +34,7 @@ Example  `.env`  file:
     BOT_TOKEN = TELEGRAM_BOT_TOKEN
     admin_id = BOT_ADMIN_ID
     custom_api_url = YOUR_CUSTOM_TELEGRAM_API_URL
-    INSTAGRAM_RAPID_API_HOST = INSTAGRAM_RAPID_API_HOST
-    INSTAGRAM_RAPID_API_KEY = INSTAGRAM_RAPID_API_KEY
     CHANNEL_ID = Channel_For_Inline_Query_Vitedos 
-
-Api keys can be obtained from [RapidAPI](https://rapidapi.com/social-api1-instagram/api/Instagram%20Scraper%20API).
 
 Run the script using Python:
 
