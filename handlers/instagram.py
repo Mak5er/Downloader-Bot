@@ -6,7 +6,7 @@ from typing import List, Optional
 
 import requests
 from aiogram import Router, F, types
-from aiogram.types import FSInputFile, InlineQueryResultVideo
+from aiogram.types import FSInputFile, InlineQueryResultVideo, InlineQueryResultArticle, InputTextMessageContent
 from aiogram.utils.media_group import MediaGroupBuilder
 from moviepy import VideoFileClip
 
@@ -14,10 +14,8 @@ import keyboards as kb
 import messages as bm
 from config import (
     OUTPUT_DIR,
-    INSTAGRAM_RAPID_API_KEY1,
-    INSTAGRAM_RAPID_API_KEY2,
     CHANNEL_ID,
-    INSTAGRAM_RAPID_API_HOST,
+    # COBALT_API_URL, 
 )
 from handlers.user import update_info
 from handlers.utils import (
@@ -41,11 +39,15 @@ from utils.download_manager import (
     log_download_metrics,
 )
 
+# Якщо змінної немає в конфігу, використовуємо дефолтну
+try:
+    from config import COBALT_API_URL
+except ImportError:
+    COBALT_API_URL = "https://api.cobalt.tools"
+
 MAX_FILE_SIZE = int(1.5 * 1024 * 1024 * 1024)  # 1.5 GB
 
 router = Router()
-
-RAPID_API_KEYS = [INSTAGRAM_RAPID_API_KEY1, INSTAGRAM_RAPID_API_KEY2]
 
 
 @dataclass
@@ -65,18 +67,12 @@ class InstagramVideo:
     is_video: bool
 
 
-@dataclass
-class UserData:
-    id: str
-    nickname: str
-    followers: int
-    videos: int
-    profile_pic: str
-    description: str
-
+TOR_PROXY_HOST = "192.168.50.158"
+TOR_PROXY_PORT = "9050"
+TOR_PROXY_URL = f"socks5://{TOR_PROXY_HOST}:{TOR_PROXY_PORT}"
 
 class InstagramService:
-    """High-level helper that encapsulates API access and media downloads."""
+    """High-level helper that encapsulates API access (Cobalt) and media downloads."""
 
     def __init__(self, output_dir: str) -> None:
         config = DownloadConfig(
@@ -93,7 +89,7 @@ class InstagramService:
         except DownloadError as exc:
             logging.error("Error downloading Instagram video: url=%s error=%s", video_url, exc)
             return None
-        except Exception as exc:  # pragma: no cover - defensive
+        except Exception as exc:
             logging.error("Unexpected Instagram download error: url=%s error=%s", video_url, exc)
             return None
 
@@ -101,128 +97,111 @@ class InstagramService:
         return await asyncio.to_thread(self._fetch_post_data_sync, url)
 
     def _fetch_post_data_sync(self, url: str) -> Optional[InstagramVideo]:
-        try:
-            api_url = f"https://{INSTAGRAM_RAPID_API_HOST}/v1/post_info"
-            querystring = {
-                "code_or_id_or_url": url,
-                "include_insights": "true",
-            }
+        """Fetches media data using Cobalt API with fallback to Tor proxy."""
+        
+        api_url = f"{COBALT_API_URL}/api/json"
+        
+        headers = {
+            "Accept": "application/json",
+            "Content-Type": "application/json"
+        }
+        
+        payload = {
+            "url": url,
+            "filenamePattern": "basic"
+        }
 
-            video_data = None
+        attempts = [
+            (None, 15, "Direct connection"),
+            ({
+                "http": TOR_PROXY_URL,
+                "https": TOR_PROXY_URL
+            }, 30, f"Tor Proxy ({TOR_PROXY_URL})") 
+        ]
 
-            for api_key in RAPID_API_KEYS:
-                headers = {
-                    "x-rapidapi-key": api_key,
-                    "x-rapidapi-host": INSTAGRAM_RAPID_API_HOST,
-                }
+        last_exception = None
 
-                try:
-                    response = requests.get(api_url, headers=headers, params=querystring, timeout=10)
-                    response.raise_for_status()
-                    video_data = response.json()
-                    if isinstance(video_data, dict) and "data" in video_data:
-                        break
-                except requests.exceptions.RequestException as exc:
-                    logging.error("Instagram API error with key: key=%s error=%s", api_key, exc)
+        for proxies, timeout, attempt_name in attempts:
+            try:
+                logging.debug(f"Attempting to fetch Instagram data via {attempt_name}...")
+                
+                response = requests.post(
+                    api_url, 
+                    json=payload, 
+                    headers=headers, 
+                    proxies=proxies, 
+                    timeout=timeout
+                )
+                response.raise_for_status()
+                data = response.json()
 
-            data = video_data.get("data") if isinstance(video_data, dict) else None
-            if not isinstance(data, dict):
-                return None
+                if not data or "status" not in data:
+                    logging.warning(f"Invalid response format from Cobalt via {attempt_name}")
+                    continue 
+                status = data.get("status")
 
-            image_urls: list[str] = []
-            video_urls: list[str] = []
+                if status == "error":
+                    logging.warning(f"Cobalt returned error via {attempt_name}: {data.get('text')}")
+                    continue 
 
-            if isinstance(data.get("carousel_media"), list):
-                for item in data["carousel_media"]:
-                    if item.get("is_video"):
-                        video_url = item.get("video_url")
-                        if video_url:
-                            video_urls.append(video_url)
-                    else:
-                        image_url = item.get("thumbnail_url")
-                        if image_url:
-                            image_urls.append(image_url)
+                
+                image_urls: list[str] = []
+                video_urls: list[str] = []
+                is_video = False
 
-            if not video_urls and not image_urls and not data.get("is_video"):
-                image_url = data.get("thumbnail_url")
-                if image_url:
-                    image_urls.append(image_url)
+                if status == "picker":
+                    for item in data.get("picker", []):
+                        item_url = item.get("url")
+                        if item.get("type") == "video":
+                            video_urls.append(item_url)
+                            is_video = True
+                        else:
+                            image_urls.append(item_url)
+                
+                elif status == "stream" or status == "success" or status == "redirect":
+                    media_url = data.get("url")
+                    if media_url:
+                        filename = data.get("filename", "")
+                        if ".mp4" in filename or ".webm" in filename or status == "stream":
+                             video_urls.append(media_url)
+                             is_video = True
+                        else:
+                            image_urls.append(media_url)
 
-            if not video_urls and data.get("is_video"):
-                video_url = data.get("video_url")
-                if video_url:
-                    video_urls.append(video_url)
+                if not video_urls and not image_urls:
+                    logging.warning(f"No media found in Cobalt response via {attempt_name}")
+                    continue
 
-            caption = data.get("caption") or {}
-            metrics = data.get("metrics") or {}
+                code_match = re.search(r"/(?:p|reel|tv)/([^/?#&]+)", url)
+                code = code_match.group(1) if code_match else "unknown"
 
-            return InstagramVideo(
-                id=data.get("id", ""),
-                code=data.get("code", ""),
-                video_urls=video_urls,
-                image_urls=image_urls,
-                description=caption.get("text"),
-                cover=data.get("thumbnail_url", ""),
-                views=metrics.get("play_count", 0),
-                likes=metrics.get("like_count", 0),
-                comments=metrics.get("comment_count", 0),
-                shares=metrics.get("share_count", 0),
-                height=data.get("original_height", 0),
-                width=data.get("original_width", 0),
-                is_video=data.get("is_video", False),
-            )
+                logging.info(f"Successfully fetched Instagram data via {attempt_name}")
 
-        except Exception as exc:  # pragma: no cover - defensive
-            logging.exception("Error fetching Instagram post data: url=%s error=%s", url, exc)
-            return None
+                return InstagramVideo(
+                    id=code,
+                    code=code,
+                    video_urls=video_urls,
+                    image_urls=image_urls,
+                    description="",
+                    cover="",
+                    views=0,
+                    likes=0,
+                    comments=0,
+                    shares=0,
+                    height=0,
+                    width=0,
+                    is_video=is_video,
+                )
 
-    async def fetch_user_data(self, url: str) -> Optional[UserData]:
-        return await asyncio.to_thread(self._fetch_user_data_sync, url)
+            except requests.exceptions.RequestException as exc:
+                logging.error(f"Cobalt API error via {attempt_name}: {exc}")
+                last_exception = exc
+            except Exception as exc:
+                logging.exception(f"Unexpected error via {attempt_name}: {exc}")
+                last_exception = exc
 
-    def _fetch_user_data_sync(self, url: str) -> Optional[UserData]:
-        try:
-            api_url = f"https://{INSTAGRAM_RAPID_API_HOST}/v1/info"
-            querystring = {
-                "username_or_id_or_url": url,
-            }
-
-            user_data = None
-
-            for api_key in RAPID_API_KEYS:
-                headers = {
-                    "x-rapidapi-key": api_key,
-                    "x-rapidapi-host": INSTAGRAM_RAPID_API_HOST,
-                }
-
-                try:
-                    response = requests.get(api_url, headers=headers, params=querystring, timeout=10)
-                    response.raise_for_status()
-                    user_data = response.json()
-                    if user_data:
-                        break
-                except requests.exceptions.RequestException as exc:
-                    logging.error("Instagram user API error with key: key=%s error=%s", api_key, exc)
-
-            if not isinstance(user_data, dict):
-                return None
-
-            data = user_data.get("data", {})
-            if not isinstance(data, dict) or not data:
-                return None
-
-            return UserData(
-                id=data.get("id", 0),
-                nickname=data.get("page_name", "No nickname found"),
-                followers=data.get("follower_count", 0),
-                videos=data.get("media_count", 0),
-                profile_pic=data.get("hd_profile_pic_url_info", {}).get("url", ""),
-                description=data.get("biography", ""),
-            )
-
-        except Exception as exc:  # pragma: no cover - defensive
-            logging.exception("Error fetching Instagram user data: url=%s error=%s", url, exc)
-            return None
-
+        logging.error("All attempts to fetch Instagram data failed.")
+        return None
 
 instagram_service = InstagramService(OUTPUT_DIR)
 
@@ -251,7 +230,7 @@ async def process_instagram_url(message: types.Message):
     try:
         bot_url = await get_bot_url(bot)
         user_settings = await db.user_settings(resolve_settings_target_id(message))
-        user_captions = user_settings["captions"]
+        # user_captions = user_settings["captions"] # Використовується пізніше
         business_id = message.business_connection_id
         text = get_message_text(message)
 
@@ -265,15 +244,11 @@ async def process_instagram_url(message: types.Message):
 
         url = extract_instagram_url(text)
 
-        await react_to_message(message, "??'?", business_id=business_id)
+        await react_to_message(message, "👀", business_id=business_id)
 
+        # Cobalt не підтримує отримання інфо про юзера, тому пропускаємо логіку профілю
+        # і одразу намагаємось отримати медіа
         video_info = await instagram_service.fetch_post_data(url)
-
-        if video_info is None and ("/p/" not in url and "/reel/" not in url):
-            user_info = await instagram_service.fetch_user_data(url)
-            if user_info:
-                await process_instagram_profile(message, user_info, bot_url, user_settings, business_id, url)
-                return
 
         logging.debug(
             "Instagram content detected: has_video=%s has_images=%s",
@@ -313,8 +288,8 @@ async def process_instagram_video(message, video_info, bot_url, user_settings, b
         user_captions = user_settings["captions"]
         await send_analytics(user_id=message.from_user.id, chat_type=message.chat.type, action_name="instagram_reel")
         video_urls = video_info.video_urls
-        video_id = video_info.id
-        name = f"{video_id}_instagram_video.mp4"
+        # Генеруємо унікальне ім'я на основі code, бо ID може бути порожнім
+        name = f"{video_info.code}_instagram_video.mp4"
         download_path: Optional[str] = None
         post_url = f"https://www.instagram.com/reel/{video_info.code}"
 
@@ -426,6 +401,10 @@ async def process_instagram_photos(message, video_info, bot_url, user_settings, 
 
         await send_chat_action_if_needed(bot, message.chat.id, "upload_photo", business_id)
 
+        # Cobalt дає прямі посилання, їх можна передати безпосередньо в Telegram,
+        # але краще скачувати, якщо посилання тимчасові. 
+        # В цьому коді ми передаємо URL зображень безпосередньо, як це було в оригіналі для фото.
+        
         if len(images) > 1:
             photos_for_album = images[:-1]
             for i in range(0, len(photos_for_album), 10):
@@ -459,32 +438,6 @@ async def process_instagram_photos(message, video_info, bot_url, user_settings, 
         await handle_download_error(message, business_id=business_id)
 
 
-async def process_instagram_profile(message, user_info, bot_url, user_settings, business_id, url):
-    try:
-        user_captions = user_settings["captions"]
-        await send_analytics(user_id=message.from_user.id, chat_type=message.chat.type, action_name="instagram_profile")
-
-        await send_chat_action_if_needed(bot, message.chat.id, "upload_photo", business_id)
-
-        username = url.split('/')[3] if len(url.split('/')) > 3 else ""
-        display_name = user_info.nickname.strip() if user_info.nickname else username
-
-        logging.info(
-            "Sending Instagram profile response: user_id=%s target=%s",
-            message.from_user.id,
-            username,
-        )
-        await message.reply_photo(
-            photo=user_info.profile_pic,
-            caption=bm.captions(user_captions, user_info.description, bot_url),
-            reply_markup=kb.return_user_info_keyboard(display_name, user_info.followers, user_info.videos, None, url)
-        )
-        await maybe_delete_user_message(message, user_settings.get("delete_message"))
-    except Exception as e:
-        logging.exception("Error in process_instagram_profile: url=%s", url)
-        await handle_download_error(message, business_id=business_id)
-
-
 @router.inline_query(F.query.regexp(r"(https?://(www\.)?instagram\.com/\S+)"))
 async def inline_instagram_query(query: types.InlineQuery):
     try:
@@ -509,14 +462,31 @@ async def inline_instagram_query(query: types.InlineQuery):
 
         results = []
 
-        if "/reel/" in url:
+        # Cobalt однаково обробляє і Reel і Post (якщо це відео)
+        # Але зазвичай в inline запитують рілси
+        if "/reel/" in url or "/p/" in url:
             video_info = await instagram_service.fetch_post_data(url)
 
-            if not video_info:
+            if not video_info or not video_info.is_video:
+                 # Якщо це фото пост, повертаємо повідомлення про непідтримку
+                if video_info and video_info.image_urls:
+                    results.append(
+                        InlineQueryResultArticle(
+                            id="unsupported_instagram_photos",
+                            title="Instagram Photos",
+                            description="Instagram photos are not supported in inline mode.",
+                            input_message_content=InputTextMessageContent(
+                                message_text="Instagram photos are not supported in inline mode."
+                            )
+                        )
+                    )
+                    await query.answer(results, cache_time=10)
+                    return
+                
                 await query.answer([], cache_time=1, is_personal=True)
                 return
 
-            name = f"{video_info.id}_instagram_video.mp4"
+            name = f"{video_info.code}_instagram_video.mp4"
             download_path: Optional[str] = None
 
             db_file_id = await db.get_file_id(url)
@@ -541,25 +511,32 @@ async def inline_instagram_query(query: types.InlineQuery):
 
                 log_download_metrics("instagram_inline", metrics)
                 download_path = metrics.path
-                sent_message = await bot.send_video(
-                    chat_id=CHANNEL_ID,
-                    video=FSInputFile(download_path),
-                    caption=f"Instagram Reel Video from {query.from_user.full_name}",
-                )
-                video_file_id = sent_message.video.file_id
-                await db.add_file(url, video_file_id, "video")
-                logging.info(
-                    "Instagram inline video cached: url=%s file_id=%s",
-                    url,
-                    video_file_id,
-                )
+                
+                # Відправка в канал для отримання file_id
+                try:
+                    sent_message = await bot.send_video(
+                        chat_id=CHANNEL_ID,
+                        video=FSInputFile(download_path),
+                        caption=f"Instagram Reel Video from {query.from_user.full_name}",
+                    )
+                    video_file_id = sent_message.video.file_id
+                    await db.add_file(url, video_file_id, "video")
+                    logging.info(
+                        "Instagram inline video cached: url=%s file_id=%s",
+                        url,
+                        video_file_id,
+                    )
+                except Exception as e:
+                     logging.error("Failed to cache inline video to channel: %s", e)
+                     await remove_file(download_path)
+                     return
 
             results.append(
                 InlineQueryResultVideo(
-                    id=f"video_{video_info.id}",
-                    video_url=video_file_id,
+                    id=f"video_{video_info.code}",
+                    video_url=video_file_id, # Використовуємо file_id як url для Telegram
                     thumbnail_url="https://freepnglogo.com/images/all_img/1715965947instagram-logo-png%20(1).png",
-                    description=video_info.description,
+                    description="Instagram Reel",
                     title="Instagram Reel",
                     mime_type="video/mp4",
                     caption=bm.captions(user_captions, video_info.description, bot_url),
@@ -580,25 +557,6 @@ async def inline_instagram_query(query: types.InlineQuery):
             if download_path:
                 await remove_file(download_path)
 
-            return
-
-        elif "/p/" in url:
-            results.append(
-                types.InlineQueryResultArticle(
-                    id="unsupported_instagram_photos",
-                    title="Instagram Photos",
-                    description="Instagram photos are not supported in inline mode.",
-                    input_message_content=types.InputTextMessageContent(
-                        message_text="Instagram photos are not supported in inline mode."
-                    )
-                )
-            )
-            logging.info(
-                "Inline Instagram photos requested but unsupported: user_id=%s query=%s",
-                query.from_user.id,
-                query.query,
-            )
-            await query.answer(results, cache_time=10)
             return
 
         await query.answer([], cache_time=1, is_personal=True)
