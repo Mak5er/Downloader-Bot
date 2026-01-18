@@ -12,6 +12,7 @@ MEASUREMENT_ID = str(os.getenv("MEASUREMENT_ID"))
 API_SECRET = str(os.getenv("API_SECRET"))
 CHANNEL_ID = str(os.getenv("CHANNEL_ID"))
 OUTPUT_DIR = "downloads"
+COBALT_API_URL = "http://192.168.50.158:9000"
 
 BOT_COMMANDS = [
     {'command': 'start', 'description': '🚀Початок роботи / Get started🔥'},

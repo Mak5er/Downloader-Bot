@@ -35,7 +35,10 @@ Example  `.env`  file:
     admin_id = BOT_ADMIN_ID
     DATABASE_URL = Pgsql connection uri
     custom_api_url = YOUR_CUSTOM_TELEGRAM_API_URL
-    CHANNEL_ID = Channel_For_Inline_Query_Vitedos 
+    CHANNEL_ID = YOUR_CHANNEL_ID_FOR_INLINE_QUERY_VIDEOS
+    COBALT_API_URL = YOUR_COBALT_NODE_URL
+
+You can check how to run your own cobalt instance [HERE](https://github.com/imputnet/cobalt/blob/main/docs/run-an-instance.md) 
 
 Run the script using Python:
 
