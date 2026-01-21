@@ -199,8 +199,6 @@ async def video_info(data: dict) -> Optional[TikTokVideo]:
 
 
 class TikTokService:
-    """Facade around the shared downloader for TikTok specific needs."""
-
     DOWNLOAD_URL_TEMPLATE = "https://tikwm.com/video/media/play/{video_id}.mp4"
 
     def __init__(self, output_dir: str) -> None:
@@ -335,6 +333,8 @@ async def process_tiktok(message: types.Message):
         else:
             url = text
 
+        await react_to_message(message, "👾", business_id=business_id)
+
         parsed_url = urlparse(url)
         if "/live" in (parsed_url.path or "").lower():
             await message.reply(bm.tiktok_live_not_supported())
@@ -344,8 +344,6 @@ async def process_tiktok(message: types.Message):
         images = data.get("data", {}).get("images", [])
 
         user_settings = await get_user_settings(message)
-
-        await react_to_message(message, "👾", business_id=business_id)
 
         logging.debug(
             "TikTok content classification: has_images=%s is_profile=%s",
