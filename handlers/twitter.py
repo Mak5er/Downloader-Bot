@@ -40,6 +40,7 @@ twitter_downloader = ResilientDownloader(
         chunk_size=1024 * 1024,
         multipart_threshold=8 * 1024 * 1024,
         max_workers=8,             # more workers for faster parallel fetch
+        max_concurrent_downloads=2,
         stream_timeout=(5.0, 45.0),
     ),
 )
@@ -224,13 +225,14 @@ async def reply_media(message, tweet_id, tweet_media, bot_url, business_id, user
             len(videos),
         )
 
-        caption = bm.captions("on", post_caption, bot_url)
+        caption_media = bm.captions("on", post_caption, bot_url)
+        caption_text = bm.captions("on", post_caption, bot_url, limit=4096)
         keyboard = kb.return_video_info_keyboard(None, likes, comments, retweets, None, post_url, user_settings)
 
-        await _send_photo_responses(message, photos, caption, keyboard)
-        await _send_video_responses(message, videos, caption, keyboard)
+        await _send_photo_responses(message, photos, caption_media, keyboard)
+        await _send_video_responses(message, videos, caption_media, keyboard)
         if not photos and not videos:
-            await message.answer(caption, reply_markup=keyboard, parse_mode="HTML")
+            await message.answer(caption_text, reply_markup=keyboard, parse_mode="HTML")
 
         logging.info(
             "Tweet media delivered: user_id=%s tweet_id=%s",

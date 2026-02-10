@@ -4,6 +4,7 @@ import os
 import re
 import time
 from dataclasses import dataclass
+import functools
 from typing import Optional
 from urllib.parse import urlparse, urlunparse
 
@@ -28,6 +29,8 @@ from handlers.utils import (
     maybe_delete_user_message,
     react_to_message,
     remove_file,
+    safe_delete_message,
+    safe_edit_text,
     send_chat_action_if_needed,
     resolve_settings_target_id,
 )
@@ -73,20 +76,43 @@ def _get_user_agent() -> str:
 router = Router()
 
 
+_SHORT_HOSTS = {"vm.tiktok.com", "vt.tiktok.com", "vn.tiktok.com"}
+_URL_EXPAND_TIMEOUT = 4  # seconds
+
+
+@functools.lru_cache(maxsize=2048)
+def _expand_tiktok_url_cached(url: str) -> str:
+    headers = {"User-Agent": _get_user_agent()}
+    response = requests.head(
+        url,
+        allow_redirects=True,
+        headers=headers,
+        timeout=_URL_EXPAND_TIMEOUT,
+    )
+    return response.url or url
+
+
+def strip_tiktok_tracking(url: str) -> str:
+    try:
+        parsed = urlparse(url)
+    except Exception:
+        return url
+    return urlunparse((parsed.scheme, parsed.netloc, parsed.path, parsed.params, "", ""))
+
+
 def process_tiktok_url(text: str) -> str:
     def strip_tracking(url: str) -> str:
-        try:
-            parsed = urlparse(url)
-        except Exception:
-            return url
-        return urlunparse((parsed.scheme, parsed.netloc, parsed.path, parsed.params, "", ""))
+        return strip_tiktok_tracking(url)
 
     def expand_tiktok_url(short_url: str) -> str:
-        headers = {'User-Agent': _get_user_agent()}
         try:
-            response = requests.head(short_url, allow_redirects=True, headers=headers)
-            logging.debug("TikTok short URL expanded: raw=%s expanded=%s", short_url, response.url)
-            return strip_tracking(response.url or short_url)
+            parsed = urlparse(short_url)
+            host = (parsed.netloc or "").lower()
+            if host in _SHORT_HOSTS:
+                expanded = _expand_tiktok_url_cached(short_url)
+                logging.debug("TikTok short URL expanded: raw=%s expanded=%s", short_url, expanded)
+                return strip_tracking(expanded)
+            return strip_tracking(short_url)
         except requests.RequestException as e:
             logging.error("Error expanding TikTok URL: url=%s error=%s", short_url, e)
             return strip_tracking(short_url)
@@ -95,9 +121,9 @@ def process_tiktok_url(text: str) -> str:
         match = re.search(r"(https?://(?:www\.|vm\.|vt\.|vn\.)?tiktok\.com/\S+)", input_text)
         return match.group(0) if match else input_text
 
-    url = extract_tiktok_url(text)
+    url = strip_tracking(extract_tiktok_url(text))
     logging.debug("TikTok URL extracted: raw=%s extracted=%s", text, url)
-    return strip_tracking(expand_tiktok_url(url))
+    return expand_tiktok_url(url)
 
 
 def get_video_id_from_url(url: str) -> str:
@@ -138,37 +164,39 @@ _last_call_time = 0.0
 async def fetch_tiktok_data(video_url: str) -> dict:
     global _last_call_time
 
+    # Rate-limit request starts without serialising the whole network request behind the lock.
     async with _lock:
         now = time.monotonic()
-        elapsed = now - _last_call_time
-        if elapsed < 1.0:
-            await asyncio.sleep(1.0 - elapsed)
+        wait_for = max(0.0, 1.0 - (now - _last_call_time))
+        _last_call_time = now + wait_for
 
-        user_agent = _get_user_agent()
-        params = {"url": video_url, "count": 12, "cursor": 0, "web": 1, "hd": 1}
-        logging.debug("Fetching TikTok data: url=%s params=%s", video_url, params)
-        session = await get_http_session()
-        try:
-            async with session.get(
-                    "https://tikwm.com/api/",
-                    params=params,
-                    timeout=TIKTOK_API_TIMEOUT,
-                    headers={"User-Agent": user_agent},
-            ) as resp:
-                resp.raise_for_status()
-                data = await resp.json(content_type=None)
-        except (aiohttp.ClientError, aiohttp.ContentTypeError, asyncio.TimeoutError) as exc:
-            logging.error("TikTok API request failed: url=%s error=%s", video_url, exc)
-            raise
+    if wait_for:
+        await asyncio.sleep(wait_for)
 
-        _last_call_time = time.monotonic()
-        logging.debug(
-            "Fetched TikTok data: url=%s has_error=%s keys=%s",
-            video_url,
-            data.get("error"),
-            list(data.keys()),
-        )
-        return data
+    user_agent = _get_user_agent()
+    params = {"url": video_url, "count": 12, "cursor": 0, "web": 1, "hd": 1}
+    logging.debug("Fetching TikTok data: url=%s params=%s", video_url, params)
+    session = await get_http_session()
+    try:
+        async with session.get(
+                "https://tikwm.com/api/",
+                params=params,
+                timeout=TIKTOK_API_TIMEOUT,
+                headers={"User-Agent": user_agent},
+        ) as resp:
+            resp.raise_for_status()
+            data = await resp.json(content_type=None)
+    except (aiohttp.ClientError, aiohttp.ContentTypeError, asyncio.TimeoutError) as exc:
+        logging.error("TikTok API request failed: url=%s error=%s", video_url, exc)
+        raise
+
+    logging.debug(
+        "Fetched TikTok data: url=%s has_error=%s keys=%s",
+        video_url,
+        data.get("error"),
+        list(data.keys()),
+    )
+    return data
 
 
 async def video_info(data: dict) -> Optional[TikTokVideo]:
@@ -206,6 +234,7 @@ class TikTokService:
             chunk_size=1024 * 1024,
             multipart_threshold=16 * 1024 * 1024,
             max_workers=8,
+            max_concurrent_downloads=2,
             retry_backoff=0.8,
         )
         self._downloader = ResilientDownloader(output_dir, config=config)
@@ -326,12 +355,20 @@ async def process_tiktok(message: types.Message):
             text,
         )
 
-        url_match = re.match(r"(https?://(www\.|vm\.|vt\.|vn\.)?tiktok\.com/\S+)", text)
+        stripped = (text or "").strip()
 
+        # Profile lookup: allow messages like "@username" without a URL.
+        if re.fullmatch(r"@[\w.]{1,32}", stripped):
+            await react_to_message(message, "рџ‘ѕ", business_id=business_id)
+            settings = await get_user_settings(message)
+            await process_tiktok_profile(message, stripped, bot_url, settings["captions"])
+            return
+
+        url_match = re.search(r"(https?://(www\.|vm\.|vt\.|vn\.)?tiktok\.com/\S+)", stripped)
         if url_match:
             url = url_match.group(0)
         else:
-            url = text
+            url = stripped
 
         await react_to_message(message, "👾", business_id=business_id)
 
@@ -340,7 +377,13 @@ async def process_tiktok(message: types.Message):
             await message.reply(bm.tiktok_live_not_supported())
             return
 
-        data = await fetch_tiktok_data(url)
+        # Fast path: most APIs accept the original URL. Expand only if needed.
+        base_url = strip_tiktok_tracking(url)
+        data = await fetch_tiktok_data(base_url)
+        if (data.get("error") or data.get("code") not in (0, None)) and urlparse(base_url).netloc.lower() in _SHORT_HOSTS:
+            resolved_url = await asyncio.wait_for(asyncio.to_thread(process_tiktok_url, base_url), timeout=6.0)
+            if resolved_url != base_url:
+                data = await fetch_tiktok_data(resolved_url)
         images = data.get("data", {}).get("images", [])
 
         user_settings = await get_user_settings(message)
@@ -351,14 +394,11 @@ async def process_tiktok(message: types.Message):
             "@" in text,
         )
 
-        if not images:
-            await process_tiktok_video(message, data, bot_url, user_settings, business_id)
-        elif images:
+        if images:
             await process_tiktok_photos(message, data, bot_url, user_settings, business_id, images)
-        elif "@" in text:
-            await process_tiktok_profile(message, text, bot_url, user_settings)
-        else:
-            await handle_download_error(message, business_id=business_id)
+            return
+
+        await process_tiktok_video(message, data, bot_url, user_settings, business_id)
 
     except Exception as e:
         logging.exception(
@@ -372,7 +412,7 @@ async def process_tiktok(message: types.Message):
         await update_info(message)
 
 
-async def process_tiktok_video(message: types.Message, data: dict, bot_url: str, user_settings: list,
+async def process_tiktok_video(message: types.Message, data: dict, bot_url: str, user_settings: dict,
                                business_id: Optional[int]):
     await send_analytics(user_id=message.from_user.id, chat_type=message.chat.type, action_name="tiktok_video")
     info = await video_info(data)
@@ -414,29 +454,31 @@ async def process_tiktok_video(message: types.Message, data: dict, bot_url: str,
         await maybe_delete_user_message(message, user_settings["delete_message"])
         return
 
-    metrics = await tiktok_service.download_video(info.id, download_name)
-    if not metrics:
-        await handle_download_error(message, business_id=business_id)
-        return
-
-    log_download_metrics("tiktok_video", metrics)
-    download_path = metrics.path
-    file_size = metrics.size
+    status_message = await message.answer(bm.downloading_video_status())
+    download_path: Optional[str] = None
 
     try:
+        metrics = await asyncio.wait_for(
+            tiktok_service.download_video(info.id, download_name),
+            timeout=420.0,
+        )
+        if not metrics:
+            await handle_download_error(message, business_id=business_id)
+            return
+
+        log_download_metrics("tiktok_video", metrics)
+        download_path = metrics.path
+        file_size = metrics.size
+
         if file_size >= MAX_FILE_SIZE:
-            logging.warning(
-                "TikTok video too large: url=%s size=%s",
-                db_video_url,
-                file_size,
-            )
+            logging.warning("TikTok video too large: url=%s size=%s", db_video_url, file_size)
             await handle_large_file(message, business_id)
             return
 
-        width, height = await tiktok_service.video_dimensions(download_path)
+        await safe_edit_text(status_message, bm.uploading_status())
         await send_chat_action_if_needed(bot, message.chat.id, "upload_video", business_id)
         sent = await message.reply_video(
-            video=FSInputFile(download_path), width=width, height=height,
+            video=FSInputFile(download_path),
             caption=bm.captions(user_settings["captions"], info.description, bot_url),
             reply_markup=kb.return_video_info_keyboard(
                 info.views, info.likes, info.comments,
@@ -446,26 +488,24 @@ async def process_tiktok_video(message: types.Message, data: dict, bot_url: str,
             parse_mode="HTML"
         )
         await maybe_delete_user_message(message, user_settings["delete_message"])
+
         try:
             await db.add_file(db_video_url, sent.video.file_id, "video")
-            logging.info(
-                "Cached TikTok video: url=%s file_id=%s",
-                db_video_url,
-                sent.video.file_id,
-            )
+            logging.info("Cached TikTok video: url=%s file_id=%s", db_video_url, sent.video.file_id)
         except Exception as e:
             logging.error("Error caching TikTok video: url=%s error=%s", db_video_url, e)
 
-        except Exception as e:
-            logging.exception(
-                "Error processing TikTok video: url=%s error=%s",
-                db_video_url,
-                e,
-            )
-            await handle_download_error(message, business_id=business_id)
+    except asyncio.TimeoutError:
+        await safe_edit_text(status_message, bm.timeout_error())
+        await handle_download_error(message, business_id=business_id, text=bm.timeout_error())
+    except Exception as e:
+        logging.exception("Error processing TikTok video: url=%s error=%s", db_video_url, e)
+        await handle_download_error(message, business_id=business_id)
     finally:
-        await remove_file(download_path)
-        logging.debug("Removed temporary TikTok video file: path=%s", download_path)
+        if download_path:
+            await remove_file(download_path)
+            logging.debug("Removed temporary TikTok video file: path=%s", download_path)
+        await safe_delete_message(status_message)
 
 
 async def process_tiktok_photos(message: types.Message, data: dict, bot_url: str, user_settings: list,
@@ -636,7 +676,6 @@ async def download_tiktok_mp3_callback(call: types.CallbackQuery):
         )
         await db.add_file(cache_key, sent_message.audio.file_id, "audio")
 
-        await asyncio.sleep(5)
         await remove_file(metrics.path)
     finally:
         if status_message:

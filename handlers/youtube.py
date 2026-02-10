@@ -23,6 +23,8 @@ from handlers.utils import (
     maybe_delete_user_message,
     react_to_message,
     remove_file,
+    safe_delete_message,
+    safe_edit_text,
     resolve_settings_target_id,
 )
 from log.logger import logger as logging
@@ -58,6 +60,7 @@ youtube_downloader = ResilientDownloader(
         chunk_size=2 * 1024 * 1024,          # Larger chunks for higher throughput
         multipart_threshold=8 * 1024 * 1024,  # Split earlier to parallelize medium files
         max_workers=10,                      # More concurrent range requests
+        max_concurrent_downloads=2,          # Prevent thread explosion under multi-user load
         retry_backoff=0.6,                   # Slightly faster retry ramp-up
     ),
 )
@@ -292,17 +295,20 @@ async def download_video(message: types.Message):
         url,
     )
     await send_analytics(user_id=message.from_user.id, chat_type=message.chat.type, action_name="youtube_video")
+    status_message: Optional[types.Message] = None
     try:
         await react_to_message(message, "👾", skip_if_business=False)
+        status_message = await message.answer(bm.fetching_info_status())
 
         user_settings = await db.user_settings(resolve_settings_target_id(message))
         user_captions = user_settings["captions"]
         bot_url = await get_bot_url(bot)
 
-        yt = await asyncio.to_thread(get_youtube_video, url)
+        yt = await asyncio.wait_for(asyncio.to_thread(get_youtube_video, url), timeout=45.0)
         video = await asyncio.to_thread(get_video_stream, yt)
 
         if not video:
+            await safe_delete_message(status_message)
             await message.reply(bm.nothing_found())
             return
 
@@ -319,6 +325,7 @@ async def download_video(message: types.Message):
                 yt['webpage_url'],
                 db_file_id,
             )
+            await safe_delete_message(status_message)
             await bot.send_chat_action(message.chat.id, "upload_video")
             await message.answer_video(
                 video=db_file_id,
@@ -339,23 +346,30 @@ async def download_video(message: types.Message):
             return
 
         name = f"{yt['id']}_youtube_video.mp4"
+        await safe_edit_text(status_message, bm.downloading_video_status())
 
         # Prefer high-speed downloader when stream is direct media; fall back to yt-dlp for manifests/HLS.
         if _is_manifest_stream(video):
-            metrics = await download_with_ytdlp_metrics(
-                yt['webpage_url'],
-                name,
-                YTDLP_FORMAT_720,
-                "youtube_video_ytdlp_manifest",
-            )
-        else:
-            metrics = await download_stream(video, name, "youtube_video")
-            if not metrics:
-                metrics = await download_with_ytdlp_metrics(
+            metrics = await asyncio.wait_for(
+                download_with_ytdlp_metrics(
                     yt['webpage_url'],
                     name,
                     YTDLP_FORMAT_720,
-                    "youtube_video_ytdlp",
+                    "youtube_video_ytdlp_manifest",
+                ),
+                timeout=900.0,
+            )
+        else:
+            metrics = await asyncio.wait_for(download_stream(video, name, "youtube_video"), timeout=540.0)
+            if not metrics:
+                metrics = await asyncio.wait_for(
+                    download_with_ytdlp_metrics(
+                        yt['webpage_url'],
+                        name,
+                        YTDLP_FORMAT_720,
+                        "youtube_video_ytdlp",
+                    ),
+                    timeout=900.0,
                 )
         if not metrics:
             await handle_download_error(message, skip_if_business=False)
@@ -367,13 +381,16 @@ async def download_video(message: types.Message):
             return
 
         width, height = await get_clip_dimensions(metrics.path)
-        if width is None or height is None and metrics.url != yt['webpage_url']:
+        if (width is None or height is None) and metrics.url != yt['webpage_url']:
             # If direct stream failed, try yt-dlp as a last resort
-            fallback = await download_with_ytdlp_metrics(
-                yt['webpage_url'],
-                name,
-                YTDLP_FORMAT_720,
-                "youtube_video_ytdlp_retry",
+            fallback = await asyncio.wait_for(
+                download_with_ytdlp_metrics(
+                    yt['webpage_url'],
+                    name,
+                    YTDLP_FORMAT_720,
+                    "youtube_video_ytdlp_retry",
+                ),
+                timeout=900.0,
             )
             if not fallback:
                 await handle_download_error(message, skip_if_business=False)
@@ -381,6 +398,7 @@ async def download_video(message: types.Message):
             metrics = fallback
             width, height = await get_clip_dimensions(metrics.path)
 
+        await safe_edit_text(status_message, bm.uploading_status())
         await bot.send_chat_action(message.chat.id, "upload_video")
         sent_message = await message.answer_video(
             video=FSInputFile(metrics.path),
@@ -407,11 +425,15 @@ async def download_video(message: types.Message):
             sent_message.video.file_id,
         )
 
-        await asyncio.sleep(5)
         await remove_file(metrics.path)
+    except asyncio.TimeoutError:
+        await safe_edit_text(status_message, bm.timeout_error())
+        await handle_download_error(message, skip_if_business=False, text=bm.timeout_error())
     except Exception as e:
         logging.error(f"Video download error: {e}")
         await handle_download_error(message, skip_if_business=False)
+    finally:
+        await safe_delete_message(status_message)
     await update_info(message)
 
 
@@ -475,8 +497,6 @@ async def download_music(message: types.Message):
         )
         await maybe_delete_user_message(message, user_settings.get("delete_message"))
 
-        # Clean up file asynchronously
-        await asyncio.sleep(5)
         await remove_file(metrics.path)
     except Exception as e:
         logging.error(f"Audio download error: {e}")
@@ -559,7 +579,6 @@ async def download_youtube_mp3_callback(call: types.CallbackQuery):
         )
         await db.add_file(cache_key, sent_message.audio.file_id, "audio")
 
-        await asyncio.sleep(5)
         await remove_file(metrics.path)
     finally:
         if status_message:
@@ -697,7 +716,6 @@ async def inline_youtube_query(query: types.InlineQuery):
 
         await query.answer(results, cache_time=10)
 
-        await asyncio.sleep(5)
         await remove_file(metrics.path)
         return
 

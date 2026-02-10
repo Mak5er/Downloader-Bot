@@ -34,6 +34,7 @@ class DownloadConfig:
     chunk_size: int = 1024 * 1024  # 1 MiB chunks strike good throughput / memory balance
     multipart_threshold: int = 12 * 1024 * 1024  # Split downloads bigger than 12 MiB
     max_workers: int = 6  # Parallel range requests when supported
+    max_concurrent_downloads: int = 3  # Prevent runaway thread creation under load
     head_timeout: float = 8.0
     stream_timeout: tuple[float, float] = (5.0, 60.0)
     max_retries: int = 3
@@ -62,6 +63,8 @@ class ResilientDownloader:
         self.output_dir = output_dir
         self.config = config or DownloadConfig()
         self._default_headers: MutableMapping[str, str] = dict(default_headers or {})
+        # Limits the number of concurrent `asyncio.to_thread()` calls per downloader instance.
+        self._semaphore = asyncio.Semaphore(max(1, int(self.config.max_concurrent_downloads)))
 
     async def download(
         self,
@@ -76,13 +79,14 @@ class ResilientDownloader:
 
         Returns metrics describing the completed download.
         """
-        return await asyncio.to_thread(
-            self._download_sync,
-            url,
-            filename,
-            headers or {},
-            skip_if_exists,
-        )
+        async with self._semaphore:
+            return await asyncio.to_thread(
+                self._download_sync,
+                url,
+                filename,
+                headers or {},
+                skip_if_exists,
+            )
 
     # ----------------------------------------------------------------------------------
     # Core synchronous implementation that is run inside a thread to avoid blocking

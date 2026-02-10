@@ -33,6 +33,7 @@ from utils.download_manager import (
     ResilientDownloader,
     log_download_metrics,
 )
+from utils.http_client import get_http_session
 
 router = Router()
 
@@ -72,6 +73,7 @@ class InstagramService:
             chunk_size=1024 * 1024,
             multipart_threshold=16 * 1024 * 1024,
             max_workers=4,
+            max_concurrent_downloads=2,
             retry_backoff=0.8,
         )
         self._downloader = ResilientDownloader(output_dir, config=config)
@@ -89,30 +91,35 @@ class InstagramService:
         }
 
         try:
-            async with aiohttp.ClientSession() as session:
-                async with session.post(f"{COBALT_API_URL}/api/json", json=payload, headers=headers, timeout=15) as resp:
-                    if resp.status != 200:
-                        logging.error("Cobalt error: status %s", resp.status)
-                        return None
+            session = await get_http_session()
+            async with session.post(
+                f"{COBALT_API_URL}/api/json",
+                json=payload,
+                headers=headers,
+                timeout=15,
+            ) as resp:
+                if resp.status != 200:
+                    logging.error("Cobalt error: status %s", resp.status)
+                    return None
 
-                    data = await resp.json()
-                    media_list = []
+                data = await resp.json(content_type=None)
+                media_list = []
 
-                    if "url" in data:
-                        m_type = "audio" if audio_only else ("video" if "mp4" in data["url"] else "photo")
-                        media_list.append(InstagramMedia(url=data["url"], type=m_type))
+                if "url" in data:
+                    m_type = "audio" if audio_only else ("video" if "mp4" in data["url"] else "photo")
+                    media_list.append(InstagramMedia(url=data["url"], type=m_type))
 
-                    elif "picker" in data:
-                        for item in data["picker"]:
-                            m_type = "video" if item.get("type") == "video" else "photo"
-                            media_list.append(InstagramMedia(url=item["url"], type=m_type))
+                elif "picker" in data:
+                    for item in data["picker"]:
+                        m_type = "video" if item.get("type") == "video" else "photo"
+                        media_list.append(InstagramMedia(url=item["url"], type=m_type))
 
-                    return InstagramVideo(
-                        id=str(int(datetime.datetime.now().timestamp())),
-                        description="",
-                        author="instagram_user",
-                        media_list=media_list
-                    )
+                return InstagramVideo(
+                    id=str(int(datetime.datetime.now().timestamp())),
+                    description="",
+                    author="instagram_user",
+                    media_list=media_list
+                )
         except Exception as e:
             logging.error("Instagram fetch exception: %s", e)
             return None
@@ -434,7 +441,6 @@ async def download_instagram_audio_callback(call: types.CallbackQuery):
         except Exception as e:
             logging.error("Error caching Instagram audio: url=%s error=%s", original_url, e)
 
-        await asyncio.sleep(5)
         await remove_file(metrics.path)
         logging.debug("Removed temporary Instagram audio file: path=%s", metrics.path)
 

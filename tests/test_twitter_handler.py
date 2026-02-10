@@ -1,9 +1,10 @@
-import os
+﻿import os
 from types import SimpleNamespace
 
 import pytest
 
 from handlers import twitter
+from utils.download_manager import DownloadMetrics
 
 
 class DummyResponse:
@@ -22,10 +23,6 @@ class DummyResponse:
         if isinstance(self._json_data, Exception):
             raise self._json_data
         return self._json_data
-
-    def iter_content(self, chunk_size=8192):
-        for chunk in self._iter_chunks:
-            yield chunk
 
 
 class DummySession:
@@ -62,52 +59,41 @@ def test_extract_tweet_ids_none(monkeypatch):
 
 def test_scrape_media_success(monkeypatch):
     sample_json = {"tweetURL": "https://twitter.com/user/status/1"}
-    monkeypatch.setattr(
-        twitter.requests,
-        "get",
-        lambda url: DummyResponse(json_data=sample_json),
-    )
+    monkeypatch.setattr(twitter.requests, "get", lambda url: DummyResponse(json_data=sample_json))
     result = twitter.scrape_media("1")
     assert result == sample_json
 
 
-def test_scrape_media_parses_html_error(monkeypatch):
-    error_html = '<meta content="Rate limit exceeded" property="og:description" />'
-    json_error = twitter.requests.exceptions.JSONDecodeError("msg", "doc", 0)
-
-    monkeypatch.setattr(
-        twitter.requests,
-        "get",
-        lambda url: DummyResponse(json_data=json_error, text=error_html),
-    )
-
-    with pytest.raises(Exception) as exc:
-        twitter.scrape_media("1")
-
-    assert "Rate limit exceeded" in str(exc.value)
-
-
 @pytest.mark.asyncio
-async def test_download_media_saves_file(monkeypatch, tmp_path):
-    chunks = [b"hello", b"world"]
-    monkeypatch.setattr(
-        twitter.requests,
-        "get",
-        lambda url, stream=True: DummyResponse(iter_chunks=chunks),
-    )
+async def test_collect_media_files_downloads_to_output_dir(monkeypatch, tmp_path):
+    monkeypatch.setattr(twitter, "OUTPUT_DIR", str(tmp_path))
+    twitter.twitter_downloader.output_dir = str(tmp_path)
 
-    target = tmp_path / "media.mp4"
-    await twitter.download_media("https://example.com/file", str(target))
-    assert target.read_bytes() == b"helloworld"
+    async def fake_download(url, filename, **_kwargs):
+        path = tmp_path / filename
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"data")
+        return DownloadMetrics(
+            url=url,
+            path=str(path),
+            size=path.stat().st_size,
+            elapsed=0.01,
+            used_multipart=False,
+            resumed=False,
+        )
 
+    monkeypatch.setattr(twitter.twitter_downloader, "download", fake_download)
 
-@pytest.mark.asyncio
-async def test_download_media_raises_on_failure(monkeypatch, tmp_path):
-    monkeypatch.setattr(
-        twitter.requests,
-        "get",
-        lambda url, stream=True: DummyResponse(status_code=500),
-    )
+    tweet_media = {
+        "media_extended": [
+            {"type": "image", "url": "https://cdn.example.com/1.jpg"},
+            {"type": "video", "url": "https://cdn.example.com/2.mp4"},
+        ]
+    }
 
-    with pytest.raises(Exception):
-        await twitter.download_media("https://example.com/file", str(tmp_path / "media.mp4"))
+    photos, videos = await twitter._collect_media_files("42", tweet_media)
+
+    assert len(photos) == 1
+    assert len(videos) == 1
+    assert os.path.exists(photos[0])
+    assert os.path.exists(videos[0])

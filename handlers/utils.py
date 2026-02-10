@@ -201,3 +201,23 @@ def resolve_settings_target_id(message: types.Message) -> int:
     if message.chat and message.chat.type != ChatType.PRIVATE:
         return message.chat.id
     return message.from_user.id
+
+
+async def safe_edit_text(message: Optional[types.Message], text: str, **kwargs) -> None:
+    """Best-effort edit of a bot message (status/progress)."""
+    if not message:
+        return
+    try:
+        await message.edit_text(text, **kwargs)
+    except Exception:
+        return
+
+
+async def safe_delete_message(message: Optional[types.Message]) -> None:
+    """Best-effort delete of a bot message (status/progress)."""
+    if not message:
+        return
+    try:
+        await message.delete()
+    except Exception:
+        return
