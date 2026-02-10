@@ -9,6 +9,7 @@ from sqlalchemy.orm import declarative_base, relationship
 
 from config import DATABASE_URL
 from log.logger import logger as logging
+from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
 Base = declarative_base()
 
@@ -85,7 +86,7 @@ class DataBase:
         if not self.database_url:
             raise ValueError("DATABASE_URL is not set. Configure PostgreSQL connection string.")
 
-        # Follow Neon example: swap driver to asyncpg directly
+        # Swap driver to asyncpg directly and ensure SSL for hosted Postgres providers.
         self.async_url = re.sub(r"^postgresql:", "postgresql+asyncpg:", self.database_url)
 
         self.engine = create_async_engine(

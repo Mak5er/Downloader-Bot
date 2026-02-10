@@ -1,173 +1,118 @@
-import pytest
+﻿import pytest
 
 from handlers import instagram
+from utils.download_manager import DownloadMetrics
 
 
-class DummyResponse:
-    def __init__(self, status_code=200, json_data=None, content=b"data"):
-        self.status_code = status_code
-        self._json = json_data or {}
-        self.content = content
-        self._closed = False
-
-    def json(self):
-        return self._json
-
-    def raise_for_status(self):
-        if self.status_code >= 400:
-            raise instagram.requests.HTTPError(f"status {self.status_code}")
-
-    def iter_content(self, chunk_size=1):
-        yield self.content
-
-    def close(self):
-        self._closed = True
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, exc_type, exc, tb):
-        self.close()
-        return False
-
-
-class _DummyClip:
-    def __enter__(self):
-        return self
-
-    def __exit__(self, exc_type, exc, tb):
-        return False
-
-
-@pytest.fixture(autouse=True)
-def stub_video_clip(monkeypatch):
-    monkeypatch.setattr(instagram, "VideoFileClip", lambda *_: _DummyClip())
-
-
-def test_extract_instagram_url():
-    text = "https://www.instagram.com/reel/ABC123/ some caption"
-    assert instagram.extract_instagram_url(text) == "https://www.instagram.com/reel/ABC123/"
-
-
-def test_extract_instagram_url_returns_original():
-    text = "not a link"
-    assert instagram.extract_instagram_url(text) == text
+def test_strip_instagram_url_strips_tracking():
+    url = "https://www.instagram.com/reel/ABC123/?utm_source=ig_web_copy_link#frag"
+    assert instagram.strip_instagram_url(url) == "https://www.instagram.com/reel/ABC123/"
 
 
 @pytest.mark.asyncio
-async def test_downloader_download_video_success(monkeypatch, tmp_path):
-    target = tmp_path / "ig.mp4"
-    monkeypatch.setattr(
-        instagram.requests,
-        "get",
-        lambda url, **kwargs: DummyResponse(content=b"video"),
-    )
+async def test_instagram_service_download_media_success(monkeypatch, tmp_path):
     service = instagram.InstagramService(output_dir=str(tmp_path))
-    metrics = await service.download_video("https://example.com/video.mp4", target.name)
+
+    async def fake_download(url, filename, **_kwargs):
+        path = tmp_path / filename
+        path.write_bytes(b"data")
+        return DownloadMetrics(
+            url=url,
+            path=str(path),
+            size=path.stat().st_size,
+            elapsed=0.01,
+            used_multipart=False,
+            resumed=False,
+        )
+
+    monkeypatch.setattr(service._downloader, "download", fake_download)
+
+    metrics = await service.download_media("https://example.com/v.mp4", "ig.mp4")
+
     assert metrics is not None
-    assert target.exists()
-    assert target.read_bytes() == b"video"
+    assert (tmp_path / "ig.mp4").exists()
 
 
 @pytest.mark.asyncio
-async def test_downloader_download_video_failure(monkeypatch, tmp_path):
-    monkeypatch.setattr(
-        instagram.requests,
-        "get",
-        lambda *args, **kwargs: DummyResponse(status_code=500),
-    )
+async def test_instagram_service_download_media_handles_error(monkeypatch, tmp_path):
     service = instagram.InstagramService(output_dir=str(tmp_path))
-    metrics = await service.download_video("https://example.com/video.mp4", "fail.mp4")
-    assert metrics is None
+
+    async def fake_download(*_args, **_kwargs):
+        raise instagram.DownloadError("fail")
+
+    monkeypatch.setattr(service._downloader, "download", fake_download)
+
+    assert await service.download_media("https://example.com/v.mp4", "ig.mp4") is None
+
+
+class _DummyResponse:
+    def __init__(self, status, payload):
+        self.status = status
+        self._payload = payload
+
+    async def json(self, content_type=None):
+        return self._payload
+
+
+class _DummyRequestCtx:
+    def __init__(self, response):
+        self._response = response
+
+    async def __aenter__(self):
+        return self._response
+
+    async def __aexit__(self, exc_type, exc, tb):
+        return False
+
+
+class _DummySession:
+    def __init__(self, response):
+        self._response = response
+
+    def post(self, *_args, **_kwargs):
+        return _DummyRequestCtx(self._response)
 
 
 @pytest.mark.asyncio
-async def test_fetch_instagram_post_data_success(monkeypatch):
-    sample_data = {
-        "data": {
-            "id": "1",
-            "code": "CODE",
-            "caption": {"text": "Caption"},
-            "thumbnail_url": "https://example.com/thumb.jpg",
-            "metrics": {
-                "play_count": 123,
-                "like_count": 45,
-                "comment_count": 6,
-                "share_count": 7,
-            },
-            "original_height": 800,
-            "original_width": 600,
-            "is_video": True,
-            "video_url": "https://example.com/video.mp4",
-        }
+async def test_instagram_service_fetch_data_parses_single_url(monkeypatch, tmp_path):
+    payload = {"url": "https://cdn.example.com/video.mp4"}
+
+    async def fake_get_http_session():
+        return _DummySession(_DummyResponse(200, payload))
+
+    monkeypatch.setattr(instagram, "COBALT_API_URL", "https://cobalt.test")
+    monkeypatch.setattr(instagram, "get_http_session", fake_get_http_session)
+
+    service = instagram.InstagramService(output_dir=str(tmp_path))
+    data = await service.fetch_data("https://instagram.com/reel/xyz")
+
+    assert data is not None
+    assert len(data.media_list) == 1
+    assert data.media_list[0].url == "https://cdn.example.com/video.mp4"
+    assert data.media_list[0].type in {"video", "photo"}
+
+
+@pytest.mark.asyncio
+async def test_instagram_service_fetch_data_parses_picker(monkeypatch, tmp_path):
+    payload = {
+        "picker": [
+            {"type": "photo", "url": "https://cdn.example.com/1.jpg"},
+            {"type": "video", "url": "https://cdn.example.com/2.mp4"},
+        ]
     }
 
-    def fake_get(url, headers=None, params=None, timeout=None):
-        assert headers["x-rapidapi-key"] in {"KEY1", "KEY2"}
-        return DummyResponse(json_data=sample_data)
+    async def fake_get_http_session():
+        return _DummySession(_DummyResponse(200, payload))
 
-    monkeypatch.setattr(instagram.requests, "get", fake_get)
-    monkeypatch.setattr(instagram, "RAPID_API_KEYS", ["KEY1", "KEY2"])
-    service = instagram.InstagramService(output_dir=".")
+    monkeypatch.setattr(instagram, "COBALT_API_URL", "https://cobalt.test")
+    monkeypatch.setattr(instagram, "get_http_session", fake_get_http_session)
 
-    result = await service.fetch_post_data("https://instagram.com/p/xyz")
-    assert result is not None
-    assert result.id == "1"
-    assert result.video_urls == ["https://example.com/video.mp4"]
-    assert result.image_urls == []
-    assert result.description == "Caption"
-    assert result.is_video is True
+    service = instagram.InstagramService(output_dir=str(tmp_path))
+    data = await service.fetch_data("https://instagram.com/p/abc")
 
-
-@pytest.mark.asyncio
-async def test_fetch_instagram_post_data_handles_failures(monkeypatch):
-    call_count = {"value": 0}
-
-    def fake_get(url, headers=None, params=None, timeout=None):
-        call_count["value"] += 1
-        raise instagram.requests.RequestException("network error")
-
-    monkeypatch.setattr(instagram.requests, "get", fake_get)
-    monkeypatch.setattr(instagram, "RAPID_API_KEYS", ["KEY1"])
-    service = instagram.InstagramService(output_dir=".")
-
-    result = await service.fetch_post_data("https://instagram.com/p/fail")
-    assert result is None
-    assert call_count["value"] == 1
-
-
-@pytest.mark.asyncio
-async def test_fetch_instagram_user_data_success(monkeypatch):
-    sample_user = {
-        "data": {
-            "id": "u1",
-            "page_name": "user",
-            "follower_count": 1000,
-            "media_count": 12,
-            "hd_profile_pic_url_info": {"url": "https://example.com/pic.jpg"},
-            "biography": "bio",
-        }
-    }
-
-    def fake_get(url, headers=None, params=None, timeout=None):
-        return DummyResponse(json_data=sample_user)
-
-    monkeypatch.setattr(instagram.requests, "get", fake_get)
-    monkeypatch.setattr(instagram, "RAPID_API_KEYS", ["KEY1"])
-    service = instagram.InstagramService(output_dir=".")
-
-    result = await service.fetch_user_data("https://instagram.com/user")
-    assert result is not None
-    assert result.nickname == "user"
-    assert result.followers == 1000
-    assert result.profile_pic == "https://example.com/pic.jpg"
-
-
-@pytest.mark.asyncio
-async def test_fetch_instagram_user_data_handles_missing(monkeypatch):
-    monkeypatch.setattr(instagram.requests, "get", lambda *args, **kwargs: DummyResponse(json_data={}))
-    monkeypatch.setattr(instagram, "RAPID_API_KEYS", ["KEY1"])
-    service = instagram.InstagramService(output_dir=".")
-
-    result = await service.fetch_user_data("https://instagram.com/user")
-    assert result is None
+    assert data is not None
+    assert [m.type for m in data.media_list] == ["photo", "video"]
+    assert [m.url for m in data.media_list] == [
+        "https://cdn.example.com/1.jpg",
+        "https://cdn.example.com/2.mp4",
+    ]

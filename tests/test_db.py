@@ -9,6 +9,9 @@ from services import db as db_module
 
 @pytest_asyncio.fixture
 async def database(monkeypatch):
+    if os.getenv("RUN_DB_TESTS") not in {"1", "true", "TRUE", "yes", "YES"}:
+        pytest.skip("DB tests disabled. Set RUN_DB_TESTS=1 to enable.")
+
     db_url = os.getenv("DATABASE_URL")
     if not db_url:
         pytest.skip("DATABASE_URL env not set for tests.")
@@ -48,6 +51,7 @@ async def test_add_user_and_settings(database):
         "delete_message": "off",
         "info_buttons": "off",
         "url_button": "off",
+        "audio_button": "off",
     }
 
     await database.set_user_setting(1, "captions", "on")

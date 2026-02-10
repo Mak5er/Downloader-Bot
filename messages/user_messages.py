@@ -49,15 +49,59 @@ def get_field_text(field: str):
     return texts.get(field, "<b>Settings</b>\nNo description available for this option.")
 
 
-def captions(user_captions, post_caption, bot_url):
+def captions(user_captions, post_caption, bot_url, *, limit: int = 1024):
+    import html
+
+    def _truncate_escaped(value: str, max_len: int) -> str:
+        if max_len <= 0:
+            return ""
+        if len(value) <= max_len:
+            return value
+        cut = value[:max_len]
+        # Avoid ending in the middle of an HTML entity (e.g. "&amp").
+        amp = cut.rfind("&")
+        semi = cut.rfind(";")
+        if amp > semi:
+            cut = cut[:amp]
+        return cut
+
     footer = '🚀 Powered by <a href="{bot_url}">MaxLoad</a>'.format(bot_url=bot_url)
+
     if user_captions == "on" and post_caption:
-        return "{post_caption}\n\n{footer}".format(post_caption=post_caption, footer=footer)
-    return footer
+        body = html.escape(str(post_caption))
+        sep = "\n\n"
+        # Keep footer intact; only shrink the body.
+        budget = limit - len(sep) - len(footer)
+        if budget <= 0:
+            return _truncate_escaped(footer, limit)
+
+        if len(body) > budget:
+            suffix = "…"
+            body = _truncate_escaped(body, max(0, budget - len(suffix))).rstrip() + suffix
+
+        return f"{body}{sep}{footer}"
+
+    return _truncate_escaped(footer, limit)
 
 
 def downloading_audio_status():
     return "🎧 Downloading audio, please wait..."
+
+
+def downloading_video_status():
+    return "🎬 Downloading video, please wait..."
+
+
+def fetching_info_status():
+    return "🔎 Fetching info..."
+
+
+def uploading_status():
+    return "☁️ Uploading to Telegram..."
+
+
+def timeout_error():
+    return "⏱️ Timed out. Please try again later."
 
 
 def dm_start_required():
@@ -95,7 +139,7 @@ def audio_too_large():
 
 
 def nothing_found():
-    return None
+    return "Nothing found. Please check the link and try again."
 
 
 def keyboard_removed():
