@@ -9,7 +9,8 @@ def admin_panel(total_count, private_count, group_count, active_user_count, inac
 🚫 Inactive: <b>{inactive_user_count}</b>
 
 <b>Admin commands:</b>
-Coming soon...""").format(
+/perf - queue performance p50/p95
+/session - session downloads + traffic""").format(
         total_count=total_count,
         private_count=private_count,
         group_count=group_count,

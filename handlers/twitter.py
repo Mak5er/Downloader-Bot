@@ -2,6 +2,7 @@ import asyncio
 import html
 import os
 import re
+from typing import Optional
 from urllib.parse import urlsplit
 
 import requests
@@ -40,9 +41,10 @@ twitter_downloader = ResilientDownloader(
         chunk_size=1024 * 1024,
         multipart_threshold=8 * 1024 * 1024,
         max_workers=8,             # more workers for faster parallel fetch
-        max_concurrent_downloads=2,
+        max_concurrent_downloads=3,
         stream_timeout=(5.0, 45.0),
     ),
+    source="twitter",
 )
 
 
@@ -83,7 +85,7 @@ def scrape_media(tweet_id):
         raise
 
 
-async def _collect_media_files(tweet_id, tweet_media):
+async def _collect_media_files(tweet_id, tweet_media, *, user_id: Optional[int] = None):
     photos: list[str] = []
     videos: list[str] = []
 
@@ -106,7 +108,12 @@ async def _collect_media_files(tweet_id, tweet_media):
             media_url,
         )
         download_tasks.append(
-            twitter_downloader.download(media_url, file_name, skip_if_exists=True)
+            twitter_downloader.download(
+                media_url,
+                file_name,
+                skip_if_exists=True,
+                user_id=user_id,
+            )
         )
         media_meta.append((media_type, file_name, media_url))
 
@@ -217,7 +224,11 @@ async def reply_media(message, tweet_id, tweet_media, bot_url, business_id, user
     comments = tweet_media['replies']
     retweets = tweet_media['retweets']
     try:
-        photos, videos = await _collect_media_files(tweet_id, tweet_media)
+        photos, videos = await _collect_media_files(
+            tweet_id,
+            tweet_media,
+            user_id=message.from_user.id,
+        )
         logging.info(
             "Tweet media fetched: tweet_id=%s photos=%s videos=%s",
             tweet_id,

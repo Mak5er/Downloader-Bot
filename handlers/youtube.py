@@ -2,11 +2,10 @@ import asyncio
 import glob
 import os
 import time
-from typing import Tuple, Any, Optional
+from typing import Any, Optional
 
 from aiogram import types, Router, F
 from aiogram.types import FSInputFile, InlineQueryResultVideo, InlineQueryResultArticle
-from moviepy import VideoFileClip, AudioFileClip
 from yt_dlp import YoutubeDL
 from yt_dlp.utils import DownloadError
 
@@ -15,6 +14,9 @@ import messages as bm
 from config import OUTPUT_DIR, BOT_TOKEN, admin_id, CHANNEL_ID
 from handlers.user import update_info
 from handlers.utils import (
+    build_progress_status,
+    build_queue_busy_text,
+    build_rate_limit_text,
     get_bot_url,
     get_bot_avatar_thumbnail,
     get_message_text,
@@ -25,12 +27,17 @@ from handlers.utils import (
     remove_file,
     safe_delete_message,
     safe_edit_text,
+    retry_async_operation,
     resolve_settings_target_id,
 )
 from log.logger import logger as logging
 from main import bot, db, send_analytics
 from utils.download_manager import (
     DownloadConfig,
+    DownloadProgress,
+    DownloadQueueBusyError,
+    DownloadRateLimitError,
+    DownloadTooLargeError,
     DownloadMetrics,
     ResilientDownloader,
     log_download_metrics,
@@ -60,9 +67,10 @@ youtube_downloader = ResilientDownloader(
         chunk_size=2 * 1024 * 1024,          # Larger chunks for higher throughput
         multipart_threshold=8 * 1024 * 1024,  # Split earlier to parallelize medium files
         max_workers=10,                      # More concurrent range requests
-        max_concurrent_downloads=2,          # Prevent thread explosion under multi-user load
+        max_concurrent_downloads=3,          # Prevent thread explosion under multi-user load
         retry_backoff=0.6,                   # Slightly faster retry ramp-up
     ),
+    source="youtube",
 )
 
 
@@ -73,7 +81,18 @@ def safe_int(value, default: int = 0) -> int:
         return default
 
 
-async def download_stream(stream: dict, filename: str, source: str) -> Optional[DownloadMetrics]:
+async def download_stream(
+    stream: dict,
+    filename: str,
+    source: str,
+    *,
+    user_id: Optional[int] = None,
+    size_hint: Optional[int] = None,
+    max_size_bytes: Optional[int] = None,
+    on_queued=None,
+    on_progress=None,
+    on_retry=None,
+) -> Optional[DownloadMetrics]:
     url = stream.get("url")
     if not url:
         logging.error("Stream missing URL for %s", source)
@@ -81,9 +100,33 @@ async def download_stream(stream: dict, filename: str, source: str) -> Optional[
 
     headers = stream.get("http_headers") or {}
     try:
-        metrics = await youtube_downloader.download(url, filename, headers=headers)
-        log_download_metrics(source, metrics)
+        kwargs = {"headers": headers}
+        if user_id is not None:
+            kwargs["user_id"] = user_id
+        if size_hint is not None:
+            kwargs["size_hint"] = size_hint
+        if max_size_bytes is not None:
+            kwargs["max_size_bytes"] = max_size_bytes
+        if on_queued is not None:
+            kwargs["on_queued"] = on_queued
+        if on_progress is not None:
+            kwargs["on_progress"] = on_progress
+
+        async def _download_once():
+            return await youtube_downloader.download(url, filename, **kwargs)
+
+        metrics = await retry_async_operation(
+            _download_once,
+            attempts=3,
+            delay_seconds=2.0,
+            retry_on_exception=lambda exc: not isinstance(exc, (DownloadRateLimitError, DownloadQueueBusyError, DownloadTooLargeError)),
+            on_retry=on_retry,
+        )
+        if metrics:
+            log_download_metrics(source, metrics)
         return metrics
+    except (DownloadRateLimitError, DownloadQueueBusyError, DownloadTooLargeError):
+        raise
     except Exception as exc:
         logging.error("Failed to download stream: source=%s url=%s error=%s", source, url, exc)
         return None
@@ -108,7 +151,14 @@ async def download_with_ytdlp(url: str, filename: str) -> Optional[str]:
         return None
 
 
-async def download_with_ytdlp_metrics(url: str, filename: str, format_selector: str, source: str) -> Optional[DownloadMetrics]:
+async def download_with_ytdlp_metrics(
+    url: str,
+    filename: str,
+    format_selector: str,
+    source: str,
+    *,
+    max_filesize: Optional[int] = None,
+) -> Optional[DownloadMetrics]:
     """Download via yt-dlp and return DownloadMetrics for unified logging."""
     out_path = os.path.join(OUTPUT_DIR, filename)
     os.makedirs(os.path.dirname(out_path) or OUTPUT_DIR, exist_ok=True)
@@ -118,6 +168,8 @@ async def download_with_ytdlp_metrics(url: str, filename: str, format_selector: 
         "outtmpl": out_path,
         "merge_output_format": "mp4",
     }
+    if max_filesize is not None:
+        ydl_opts["max_filesize"] = int(max_filesize)
     start = time.monotonic()
     try:
         await asyncio.to_thread(lambda: YoutubeDL(ydl_opts).download([url]))
@@ -137,7 +189,13 @@ async def download_with_ytdlp_metrics(url: str, filename: str, format_selector: 
         return None
 
 
-async def download_mp3_with_ytdlp_metrics(url: str, base_name: str, source: str) -> Optional[DownloadMetrics]:
+async def download_mp3_with_ytdlp_metrics(
+    url: str,
+    base_name: str,
+    source: str,
+    *,
+    max_filesize: Optional[int] = None,
+) -> Optional[DownloadMetrics]:
     """Download audio via yt-dlp and return MP3 metrics."""
     base_path = os.path.join(OUTPUT_DIR, base_name)
     out_template = f"{base_path}.%(ext)s"
@@ -153,6 +211,8 @@ async def download_mp3_with_ytdlp_metrics(url: str, base_name: str, source: str)
         }],
         "merge_output_format": "mp3",
     }
+    if max_filesize is not None:
+        ydl_opts["max_filesize"] = int(max_filesize)
     start = time.monotonic()
     try:
         await asyncio.to_thread(lambda: YoutubeDL(ydl_opts).download([url]))
@@ -245,32 +305,6 @@ def get_audio_stream(yt: dict) -> dict | None:
     return best
 
 
-async def get_clip_dimensions(file_path: str) -> tuple[None, None] | Any:
-    try:
-        return await asyncio.to_thread(_get_dimensions, file_path)
-    except Exception as e:
-        logging.warning("Unable to read video dimensions: path=%s error=%s", file_path, e)
-        return None, None
-
-
-def _get_dimensions(file_path: str) -> Tuple[int, int]:
-    with VideoFileClip(file_path) as clip:
-        return clip.size
-
-
-async def get_audio_duration(file_path: str) -> float:
-    try:
-        return await asyncio.to_thread(_get_audio_duration, file_path)
-    except Exception as e:
-        logging.error(f"Error getting audio duration: {e}")
-        return 0
-
-
-def _get_audio_duration(file_path: str) -> float:
-    with AudioFileClip(file_path) as clip:
-        return clip.duration
-
-
 def _is_manifest_stream(stream: dict) -> bool:
     """Return True if stream points to HLS/DASH manifest instead of direct media."""
     protocol = (stream.get("protocol") or "").lower()
@@ -347,27 +381,73 @@ async def download_video(message: types.Message):
 
         name = f"{yt['id']}_youtube_video.mp4"
         await safe_edit_text(status_message, bm.downloading_video_status())
+        progress_state = {"last": 0.0}
+        size_hint_raw = video.get("filesize") or video.get("filesize_approx")
+        size_hint = safe_int(size_hint_raw, 0) or None
+        if size_hint and size_hint >= MAX_FILE_SIZE:
+            await handle_video_too_large(message, skip_if_business=False)
+            return
+
+        async def on_progress(progress: DownloadProgress):
+            now = time.monotonic()
+            if not progress.done and now - progress_state["last"] < 1.0:
+                return
+            progress_state["last"] = now
+            await safe_edit_text(status_message, build_progress_status("YouTube video", progress))
+
+        async def on_retry_download(failed_attempt: int, total_attempts: int, _error):
+            if failed_attempt >= 2:
+                await safe_edit_text(
+                    status_message,
+                    bm.retrying_again_status(failed_attempt + 1, total_attempts),
+                )
 
         # Prefer high-speed downloader when stream is direct media; fall back to yt-dlp for manifests/HLS.
         if _is_manifest_stream(video):
             metrics = await asyncio.wait_for(
-                download_with_ytdlp_metrics(
-                    yt['webpage_url'],
-                    name,
-                    YTDLP_FORMAT_720,
-                    "youtube_video_ytdlp_manifest",
+                retry_async_operation(
+                    lambda: download_with_ytdlp_metrics(
+                        yt['webpage_url'],
+                        name,
+                        YTDLP_FORMAT_720,
+                        "youtube_video_ytdlp_manifest",
+                        max_filesize=MAX_FILE_SIZE - 1,
+                    ),
+                    attempts=3,
+                    delay_seconds=2.0,
+                    should_retry_result=lambda result: result is None,
+                    on_retry=on_retry_download,
                 ),
                 timeout=900.0,
             )
         else:
-            metrics = await asyncio.wait_for(download_stream(video, name, "youtube_video"), timeout=540.0)
+            metrics = await asyncio.wait_for(
+                download_stream(
+                    video,
+                    name,
+                    "youtube_video",
+                    user_id=message.from_user.id,
+                    size_hint=size_hint,
+                    max_size_bytes=MAX_FILE_SIZE,
+                    on_progress=on_progress,
+                    on_retry=on_retry_download,
+                ),
+                timeout=540.0,
+            )
             if not metrics:
                 metrics = await asyncio.wait_for(
-                    download_with_ytdlp_metrics(
-                        yt['webpage_url'],
-                        name,
-                        YTDLP_FORMAT_720,
-                        "youtube_video_ytdlp",
+                    retry_async_operation(
+                        lambda: download_with_ytdlp_metrics(
+                            yt['webpage_url'],
+                            name,
+                            YTDLP_FORMAT_720,
+                            "youtube_video_ytdlp",
+                            max_filesize=MAX_FILE_SIZE - 1,
+                        ),
+                        attempts=3,
+                        delay_seconds=2.0,
+                        should_retry_result=lambda result: result is None,
+                        on_retry=on_retry_download,
                     ),
                     timeout=900.0,
                 )
@@ -380,30 +460,10 @@ async def download_video(message: types.Message):
             await remove_file(metrics.path)
             return
 
-        width, height = await get_clip_dimensions(metrics.path)
-        if (width is None or height is None) and metrics.url != yt['webpage_url']:
-            # If direct stream failed, try yt-dlp as a last resort
-            fallback = await asyncio.wait_for(
-                download_with_ytdlp_metrics(
-                    yt['webpage_url'],
-                    name,
-                    YTDLP_FORMAT_720,
-                    "youtube_video_ytdlp_retry",
-                ),
-                timeout=900.0,
-            )
-            if not fallback:
-                await handle_download_error(message, skip_if_business=False)
-                return
-            metrics = fallback
-            width, height = await get_clip_dimensions(metrics.path)
-
         await safe_edit_text(status_message, bm.uploading_status())
         await bot.send_chat_action(message.chat.id, "upload_video")
         sent_message = await message.answer_video(
             video=FSInputFile(metrics.path),
-            width=width,
-            height=height,
             caption=bm.captions(user_captions, yt['title'], bot_url),
             reply_markup=kb.return_video_info_keyboard(
                 views=views,
@@ -426,6 +486,12 @@ async def download_video(message: types.Message):
         )
 
         await remove_file(metrics.path)
+    except DownloadRateLimitError as e:
+        await message.reply(build_rate_limit_text(e.retry_after))
+    except DownloadQueueBusyError as e:
+        await message.reply(build_queue_busy_text(e.position))
+    except DownloadTooLargeError:
+        await handle_video_too_large(message, skip_if_business=False)
     except asyncio.TimeoutError:
         await safe_edit_text(status_message, bm.timeout_error())
         await handle_download_error(message, skip_if_business=False, text=bm.timeout_error())
@@ -453,11 +519,13 @@ async def download_music(message: types.Message):
         message.from_user.username,
         url,
     )
+    status_message: Optional[types.Message] = None
     try:
         await react_to_message(message, "👾", skip_if_business=False)
         user_settings = await db.user_settings(resolve_settings_target_id(message))
         bot_url = await get_bot_url(bot)
         bot_avatar = await get_bot_avatar_thumbnail(bot)
+        status_message = await message.answer(bm.downloading_audio_status())
 
         # Get YouTube audio object - run in thread pool
         yt = await asyncio.to_thread(get_youtube_video, url)
@@ -469,28 +537,52 @@ async def download_music(message: types.Message):
 
         audio_ext = audio.get("ext") or "m4a"
         name = f"{yt['id']}_youtube_audio.{audio_ext}"
+        size_hint_raw = audio.get("filesize") or audio.get("filesize_approx")
+        size_hint = safe_int(size_hint_raw, 0) or None
+        if size_hint and size_hint >= MAX_FILE_SIZE:
+            await message.reply(bm.audio_too_large())
+            return
 
-        metrics = await download_with_ytdlp_metrics(
-            yt['webpage_url'],
-            name,
-            "bestaudio/best",
-            "youtube_audio_ytdlp",
+        async def on_retry_download(failed_attempt: int, total_attempts: int, _error):
+            if failed_attempt >= 2:
+                await safe_edit_text(
+                    status_message,
+                    bm.retrying_again_status(failed_attempt + 1, total_attempts),
+                )
+
+        metrics = await retry_async_operation(
+            lambda: download_with_ytdlp_metrics(
+                yt['webpage_url'],
+                name,
+                "bestaudio/best",
+                "youtube_audio_ytdlp",
+                max_filesize=MAX_FILE_SIZE - 1,
+            ),
+            attempts=3,
+            delay_seconds=2.0,
+            should_retry_result=lambda result: result is None,
+            on_retry=on_retry_download,
         )
         if not metrics:
-            metrics = await download_stream(audio, name, "youtube_audio")
+            metrics = await download_stream(
+                audio,
+                name,
+                "youtube_audio",
+                user_id=message.from_user.id,
+                size_hint=size_hint,
+                max_size_bytes=MAX_FILE_SIZE,
+                on_retry=on_retry_download,
+            )
         if not metrics:
             await handle_download_error(message, skip_if_business=False)
             return
 
-        # Get audio duration asynchronously
-        audio_duration = await get_audio_duration(metrics.path)
-
+        await safe_edit_text(status_message, bm.uploading_status())
         await bot.send_chat_action(message.chat.id, "upload_voice")
 
         await message.answer_audio(
             audio=FSInputFile(metrics.path),
             title=yt['title'],
-            duration=round(audio_duration),
             caption=bm.captions(None, None, bot_url),
             thumbnail=bot_avatar,
             parse_mode="HTML"
@@ -498,9 +590,17 @@ async def download_music(message: types.Message):
         await maybe_delete_user_message(message, user_settings.get("delete_message"))
 
         await remove_file(metrics.path)
+    except DownloadRateLimitError as e:
+        await message.reply(build_rate_limit_text(e.retry_after))
+    except DownloadQueueBusyError as e:
+        await message.reply(build_queue_busy_text(e.position))
+    except DownloadTooLargeError:
+        await message.reply(bm.audio_too_large())
     except Exception as e:
         logging.error(f"Audio download error: {e}")
         await handle_download_error(message, skip_if_business=False)
+    finally:
+        await safe_delete_message(status_message)
     await update_info(message)
 
 
@@ -548,10 +648,24 @@ async def download_youtube_mp3_callback(call: types.CallbackQuery):
             return
 
         base_name = f"{yt['id']}_youtube_audio"
-        metrics = await download_mp3_with_ytdlp_metrics(
-            yt['webpage_url'],
-            base_name,
-            "youtube_audio_mp3",
+        async def on_retry_download(failed_attempt: int, total_attempts: int, _error):
+            if failed_attempt >= 2:
+                await safe_edit_text(
+                    status_message,
+                    bm.retrying_again_status(failed_attempt + 1, total_attempts),
+                )
+
+        metrics = await retry_async_operation(
+            lambda: download_mp3_with_ytdlp_metrics(
+                yt['webpage_url'],
+                base_name,
+                "youtube_audio_mp3",
+                max_filesize=MAX_FILE_SIZE - 1,
+            ),
+            attempts=3,
+            delay_seconds=2.0,
+            should_retry_result=lambda result: result is None,
+            on_retry=on_retry_download,
         )
         if not metrics:
             await handle_download_error(call.message, skip_if_business=False)
@@ -562,7 +676,6 @@ async def download_youtube_mp3_callback(call: types.CallbackQuery):
             await remove_file(metrics.path)
             return
 
-        audio_duration = await get_audio_duration(metrics.path)
         await bot.send_chat_action(call.message.chat.id, "upload_audio")
         try:
             await status_message.delete()
@@ -572,7 +685,6 @@ async def download_youtube_mp3_callback(call: types.CallbackQuery):
         sent_message = await call.message.answer_audio(
             audio=FSInputFile(metrics.path),
             title=yt.get("title"),
-            duration=round(audio_duration),
             caption=bm.captions(None, None, bot_url),
             thumbnail=bot_avatar,
             parse_mode="HTML",
@@ -658,6 +770,11 @@ async def inline_youtube_query(query: types.InlineQuery):
             return
 
         name = f"{yt['id']}_youtube_shorts.mp4"
+        inline_size_hint_raw = video.get("filesize") or video.get("filesize_approx")
+        inline_size_hint = safe_int(inline_size_hint_raw, 0) or None
+        if inline_size_hint and inline_size_hint >= MAX_FILE_SIZE:
+            await query.answer([], cache_time=1, is_personal=True)
+            return
 
         if _is_manifest_stream(video):
             metrics = await download_with_ytdlp_metrics(
@@ -665,15 +782,24 @@ async def inline_youtube_query(query: types.InlineQuery):
                 name,
                 YTDLP_FORMAT_720,
                 "youtube_inline_ytdlp_manifest",
+                max_filesize=MAX_FILE_SIZE - 1,
             )
         else:
-            metrics = await download_stream(video, name, "youtube_inline")
+            metrics = await download_stream(
+                video,
+                name,
+                "youtube_inline",
+                user_id=query.from_user.id,
+                size_hint=inline_size_hint,
+                max_size_bytes=MAX_FILE_SIZE,
+            )
             if not metrics:
                 metrics = await download_with_ytdlp_metrics(
                     yt['webpage_url'],
                     name,
                     YTDLP_FORMAT_720,
                     "youtube_inline_ytdlp",
+                    max_filesize=MAX_FILE_SIZE - 1,
                 )
         if not metrics:
             await query.answer([], cache_time=1, is_personal=True)

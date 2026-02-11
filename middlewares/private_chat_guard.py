@@ -19,6 +19,8 @@ SUPPORTED_LINK_RE = re.compile(
     re.IGNORECASE,
 )
 
+_bot_username: str | None = None
+
 
 class PrivateChatGuardMiddleware(BaseMiddleware):
     async def __call__(
@@ -55,10 +57,13 @@ class PrivateChatGuardMiddleware(BaseMiddleware):
                 except Exception:
                     pass
 
-            bot_info = await bot.get_me()
+            global _bot_username
+            if not _bot_username:
+                bot_info = await bot.get_me()
+                _bot_username = bot_info.username
             notice = await event.reply(
                 bm.dm_start_required(),
-                reply_markup=kb.start_private_chat_keyboard(bot_info.username),
+                reply_markup=kb.start_private_chat_keyboard(_bot_username),
             )
             set_pending(
                 event.from_user.id,

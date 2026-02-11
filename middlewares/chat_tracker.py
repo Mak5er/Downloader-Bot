@@ -1,4 +1,5 @@
 from typing import Any, Awaitable, Callable, Dict, Optional
+import time
 
 from aiogram import BaseMiddleware
 from aiogram.enums import ChatType
@@ -12,6 +13,9 @@ class ChatTrackerMiddleware(BaseMiddleware):
     def __init__(self, database: Optional[DataBase] = None):
         super().__init__()
         self._db = database or db
+        self._user_touch_cache: dict[int, tuple[float, tuple[str, Optional[str], str, Optional[str]]]] = {}
+        self._group_touch_cache: dict[int, tuple[float, tuple[str, Optional[str], Optional[str]]]] = {}
+        self._touch_ttl_seconds = 90.0
 
     async def __call__(
         self,
@@ -54,6 +58,12 @@ class ChatTrackerMiddleware(BaseMiddleware):
         full_name = user.full_name
         username = user.username
         language = getattr(user, "language_code", None)
+        signature = (full_name, username, chat_type_value, language)
+
+        now = time.monotonic()
+        cached = self._user_touch_cache.get(user_id)
+        if cached and now - cached[0] <= self._touch_ttl_seconds and cached[1] == signature:
+            return
 
         if await self._db.user_exist(user_id):
             await self._db.user_update_name(user_id, full_name, username)
@@ -68,6 +78,7 @@ class ChatTrackerMiddleware(BaseMiddleware):
             )
 
         await self._db.set_active(user_id)
+        self._user_touch_cache[user_id] = (now, signature)
 
     async def _ensure_group(self, chat: Chat) -> None:
         chat_id = chat.id
@@ -85,6 +96,12 @@ class ChatTrackerMiddleware(BaseMiddleware):
 
         username = getattr(chat, "username", None)
         language = getattr(chat, "language_code", None)
+        signature = (chat_name, username, language)
+
+        now = time.monotonic()
+        cached = self._group_touch_cache.get(chat_id)
+        if cached and now - cached[0] <= self._touch_ttl_seconds and cached[1] == signature:
+            return
 
         await self._db.upsert_chat(
             user_id=chat_id,
@@ -95,3 +112,4 @@ class ChatTrackerMiddleware(BaseMiddleware):
             status="active",
         )
         await self._db.set_active(chat_id)
+        self._group_touch_cache[chat_id] = (now, signature)

@@ -104,6 +104,10 @@ def timeout_error():
     return "⏱️ Timed out. Please try again later."
 
 
+def retrying_again_status(next_attempt: int, total_attempts: int):
+    return f"Error, trying again... ({next_attempt}/{total_attempts})"
+
+
 def dm_start_required():
     return "🔒 Please open the bot in private chat and press Start so I can process your link."
 
