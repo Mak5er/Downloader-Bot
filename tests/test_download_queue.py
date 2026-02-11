@@ -69,7 +69,7 @@ async def test_queue_rate_limit_per_user():
 
 
 @pytest.mark.asyncio
-async def test_queue_pending_cap_per_user():
+async def test_queue_pending_cap_waits_for_slot():
     queue = AdaptiveDownloadQueue(
         min_workers=1,
         max_workers=1,
@@ -85,11 +85,71 @@ async def test_queue_pending_cap_per_user():
     first = asyncio.create_task(queue.submit(hold, priority=20, source="test", user_id=5))
     await asyncio.sleep(0.01)
 
+    second = asyncio.create_task(queue.submit(hold, priority=20, source="test", user_id=5))
+    await asyncio.sleep(0.02)
+    assert not second.done()
+
+    blocker.set()
+    await asyncio.gather(first, second)
+    await queue.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_queue_pending_cap_timeout_raises_backpressure():
+    queue = AdaptiveDownloadQueue(
+        min_workers=1,
+        max_workers=1,
+        per_user_rate_limit=20,
+        per_user_max_pending=1,
+        per_user_pending_timeout_seconds=0.02,
+    )
+    blocker = asyncio.Event()
+
+    async def hold():
+        await blocker.wait()
+        return "ok"
+
+    first = asyncio.create_task(queue.submit(hold, priority=20, source="test", user_id=5))
+    await asyncio.sleep(0.01)
+
     with pytest.raises(QueueBackpressureError):
         await queue.submit(hold, priority=20, source="test", user_id=5)
 
     blocker.set()
     await first
+    await queue.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_queue_request_id_counts_as_single_user_submission():
+    queue = AdaptiveDownloadQueue(
+        min_workers=1,
+        max_workers=1,
+        per_user_rate_limit=1,
+        per_user_window_seconds=30.0,
+        per_user_max_pending=1,
+    )
+    blocker = asyncio.Event()
+
+    async def hold():
+        await blocker.wait()
+        return "ok"
+
+    first = asyncio.create_task(
+        queue.submit(hold, priority=20, source="test", user_id=55, request_id="req-1")
+    )
+    await asyncio.sleep(0.01)
+    second = asyncio.create_task(
+        queue.submit(hold, priority=20, source="test", user_id=55, request_id="req-1")
+    )
+    await asyncio.sleep(0.02)
+    assert not second.done()
+
+    with pytest.raises(QueueRateLimitError):
+        await queue.submit(hold, priority=20, source="test", user_id=55, request_id="req-2")
+
+    blocker.set()
+    await asyncio.gather(first, second)
     await queue.shutdown()
 
 
