@@ -44,6 +44,8 @@ async def test_maybe_delete_user_message_skips_when_flag_off():
 
 @pytest.mark.asyncio
 async def test_get_bot_url(monkeypatch):
+    monkeypatch.setattr(utils, "_bot_username", None)
+    monkeypatch.setattr(utils, "_bot_id", None)
     bot = SimpleNamespace(
         get_me=AsyncMock(return_value=SimpleNamespace(username="downloader_bot"))
     )

@@ -58,6 +58,8 @@ async def test_send_analytics_records_event(monkeypatch):
     dummy_client = DummyAnalyticsClient()
 
     monkeypatch.setattr(main, "db", dummy_db)
+    monkeypatch.setattr(main, "_analytics_queue", None)
+    monkeypatch.setattr(main, "_analytics_http_client", None)
     monkeypatch.setattr(main.httpx, "AsyncClient", lambda *args, **kwargs: dummy_client)
     monkeypatch.setattr(main, "MEASUREMENT_ID", "G-TEST")
     monkeypatch.setattr(main, "API_SECRET", "secret")

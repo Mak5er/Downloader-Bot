@@ -14,13 +14,15 @@ from aiogram import types, Router, F
 from aiogram.types import FSInputFile, InlineQueryResultVideo, InlineQueryResultArticle
 from aiogram.utils.media_group import MediaGroupBuilder
 from fake_useragent import UserAgent
-from moviepy import VideoFileClip
 
 import keyboards as kb
 import messages as bm
 from config import OUTPUT_DIR, CHANNEL_ID
 from handlers.user import update_info
 from handlers.utils import (
+    build_progress_status,
+    build_queue_busy_text,
+    build_rate_limit_text,
     get_bot_url,
     get_bot_avatar_thumbnail,
     get_message_text,
@@ -32,6 +34,7 @@ from handlers.utils import (
     safe_delete_message,
     safe_edit_text,
     send_chat_action_if_needed,
+    retry_async_operation,
     resolve_settings_target_id,
 )
 from log.logger import logger as logging
@@ -39,6 +42,9 @@ from main import bot, db, send_analytics
 from utils.download_manager import (
     DownloadConfig,
     DownloadError,
+    DownloadProgress,
+    DownloadQueueBusyError,
+    DownloadRateLimitError,
     DownloadMetrics,
     ResilientDownloader,
     log_download_metrics,
@@ -234,44 +240,93 @@ class TikTokService:
             chunk_size=1024 * 1024,
             multipart_threshold=16 * 1024 * 1024,
             max_workers=8,
-            max_concurrent_downloads=2,
+            max_concurrent_downloads=3,
             retry_backoff=0.8,
         )
-        self._downloader = ResilientDownloader(output_dir, config=config)
+        self._downloader = ResilientDownloader(output_dir, config=config, source="tiktok")
 
-    async def download_video(self, video_id: str, filename: str) -> Optional[DownloadMetrics]:
+    async def download_video(
+        self,
+        video_id: str,
+        filename: str,
+        *,
+        user_id: Optional[int] = None,
+        size_hint: Optional[int] = None,
+        on_queued=None,
+        on_progress=None,
+        on_retry=None,
+    ) -> Optional[DownloadMetrics]:
         """Download a TikTok video to the configured output directory."""
         headers = {
             "User-Agent": _get_user_agent(),
             "Referer": "https://www.tiktok.com/",
         }
         url = self.DOWNLOAD_URL_TEMPLATE.format(video_id=video_id)
+        async def _download_once():
+            return await self._downloader.download(
+                url,
+                filename,
+                headers=headers,
+                user_id=user_id,
+                size_hint=size_hint,
+                on_queued=on_queued,
+                on_progress=on_progress,
+            )
+
         try:
-            return await self._downloader.download(url, filename, headers=headers)
+            return await retry_async_operation(
+                _download_once,
+                attempts=3,
+                delay_seconds=2.0,
+                retry_on_exception=lambda exc: not isinstance(exc, (DownloadRateLimitError, DownloadQueueBusyError)),
+                on_retry=on_retry,
+            )
+        except (DownloadRateLimitError, DownloadQueueBusyError):
+            raise
         except DownloadError as exc:
             logging.error("Error downloading TikTok video: video_id=%s error=%s", video_id, exc)
             return None
 
-    async def download_audio(self, audio_url: str, filename: str) -> Optional[DownloadMetrics]:
+    async def download_audio(
+        self,
+        audio_url: str,
+        filename: str,
+        *,
+        user_id: Optional[int] = None,
+        size_hint: Optional[int] = None,
+        on_queued=None,
+        on_progress=None,
+        on_retry=None,
+    ) -> Optional[DownloadMetrics]:
         """Download TikTok audio to the configured output directory."""
         headers = {
             "User-Agent": _get_user_agent(),
             "Referer": "https://www.tiktok.com/",
         }
+        async def _download_once():
+            return await self._downloader.download(
+                audio_url,
+                filename,
+                headers=headers,
+                user_id=user_id,
+                size_hint=size_hint,
+                on_queued=on_queued,
+                on_progress=on_progress,
+            )
+
         try:
-            return await self._downloader.download(audio_url, filename, headers=headers)
+            return await retry_async_operation(
+                _download_once,
+                attempts=3,
+                delay_seconds=2.0,
+                retry_on_exception=lambda exc: not isinstance(exc, (DownloadRateLimitError, DownloadQueueBusyError)),
+                on_retry=on_retry,
+            )
+        except (DownloadRateLimitError, DownloadQueueBusyError):
+            raise
         except DownloadError as exc:
             logging.error("Error downloading TikTok audio: url=%s error=%s", audio_url, exc)
             return None
-
-    async def video_dimensions(self, path: str) -> tuple[int, int]:
-        """Return the width/height of a downloaded video."""
-        return await asyncio.to_thread(self._video_dimensions_sync, path)
-
-    @staticmethod
-    def _video_dimensions_sync(path: str) -> tuple[int, int]:
-        with VideoFileClip(path) as clip:
-            return clip.size
 
     async def fetch_user_info(self, username: str) -> Optional[TikTokUser]:
         """Return high level stats for a TikTok user."""
@@ -377,13 +432,36 @@ async def process_tiktok(message: types.Message):
             await message.reply(bm.tiktok_live_not_supported())
             return
 
+        retry_notice_sent = {"value": False}
+
+        def _invalid_tiktok_payload(payload: dict) -> bool:
+            if not isinstance(payload, dict):
+                return True
+            if payload.get("error"):
+                return True
+            return payload.get("code") not in (0, None)
+
+        async def _on_retry_fetch(failed_attempt: int, total_attempts: int, _error):
+            if failed_attempt >= 2 and not retry_notice_sent["value"]:
+                retry_notice_sent["value"] = True
+                await message.reply(bm.retrying_again_status(failed_attempt + 1, total_attempts))
+
+        async def _fetch_with_retry(target_url: str) -> dict:
+            return await retry_async_operation(
+                lambda: fetch_tiktok_data(target_url),
+                attempts=3,
+                delay_seconds=2.0,
+                should_retry_result=_invalid_tiktok_payload,
+                on_retry=_on_retry_fetch,
+            )
+
         # Fast path: most APIs accept the original URL. Expand only if needed.
         base_url = strip_tiktok_tracking(url)
-        data = await fetch_tiktok_data(base_url)
+        data = await _fetch_with_retry(base_url)
         if (data.get("error") or data.get("code") not in (0, None)) and urlparse(base_url).netloc.lower() in _SHORT_HOSTS:
             resolved_url = await asyncio.wait_for(asyncio.to_thread(process_tiktok_url, base_url), timeout=6.0)
             if resolved_url != base_url:
-                data = await fetch_tiktok_data(resolved_url)
+                data = await _fetch_with_retry(resolved_url)
         images = data.get("data", {}).get("images", [])
 
         user_settings = await get_user_settings(message)
@@ -456,10 +534,42 @@ async def process_tiktok_video(message: types.Message, data: dict, bot_url: str,
 
     status_message = await message.answer(bm.downloading_video_status())
     download_path: Optional[str] = None
+    progress_throttle_state = {"last": 0.0}
+    source_data = data.get("data", {}) if isinstance(data, dict) else {}
+    size_hint = None
+    for key in ("size_hd", "size", "wm_size"):
+        raw = source_data.get(key)
+        if isinstance(raw, (int, float)):
+            size_hint = int(raw)
+            break
+        if isinstance(raw, str) and raw.isdigit():
+            size_hint = int(raw)
+            break
 
     try:
+        async def on_progress(progress: DownloadProgress):
+            now = time.monotonic()
+            if not progress.done and now - progress_throttle_state["last"] < 1.0:
+                return
+            progress_throttle_state["last"] = now
+            await safe_edit_text(status_message, build_progress_status("TikTok video", progress))
+
+        async def _on_retry_download(failed_attempt: int, total_attempts: int, _error):
+            if failed_attempt >= 2:
+                await safe_edit_text(
+                    status_message,
+                    bm.retrying_again_status(failed_attempt + 1, total_attempts),
+                )
+
         metrics = await asyncio.wait_for(
-            tiktok_service.download_video(info.id, download_name),
+            tiktok_service.download_video(
+                info.id,
+                download_name,
+                user_id=message.from_user.id,
+                size_hint=size_hint,
+                on_progress=on_progress,
+                on_retry=_on_retry_download,
+            ),
             timeout=420.0,
         )
         if not metrics:
@@ -495,6 +605,10 @@ async def process_tiktok_video(message: types.Message, data: dict, bot_url: str,
         except Exception as e:
             logging.error("Error caching TikTok video: url=%s error=%s", db_video_url, e)
 
+    except DownloadRateLimitError as e:
+        await message.reply(build_rate_limit_text(e.retry_after))
+    except DownloadQueueBusyError as e:
+        await message.reply(build_queue_busy_text(e.position))
     except asyncio.TimeoutError:
         await safe_edit_text(status_message, bm.timeout_error())
         await handle_download_error(message, business_id=business_id, text=bm.timeout_error())
@@ -638,7 +752,27 @@ async def download_tiktok_mp3_callback(call: types.CallbackQuery):
             )
             return
 
-        data = await fetch_tiktok_data(video_url)
+        def _invalid_tiktok_payload(payload: dict) -> bool:
+            if not isinstance(payload, dict):
+                return True
+            if payload.get("error"):
+                return True
+            return payload.get("code") not in (0, None)
+
+        async def _on_retry_fetch(failed_attempt: int, total_attempts: int, _error):
+            if failed_attempt >= 2:
+                await safe_edit_text(
+                    status_message,
+                    bm.retrying_again_status(failed_attempt + 1, total_attempts),
+                )
+
+        data = await retry_async_operation(
+            lambda: fetch_tiktok_data(video_url),
+            attempts=3,
+            delay_seconds=2.0,
+            should_retry_result=_invalid_tiktok_payload,
+            on_retry=_on_retry_fetch,
+        )
         info = await video_info(data)
         if not info or not info.music_play_url:
             await handle_download_error(call.message)
@@ -646,7 +780,29 @@ async def download_tiktok_mp3_callback(call: types.CallbackQuery):
 
         timestamp = datetime.datetime.now().strftime("%Y%m%d%H%M%S")
         download_name = f"{info.id}_{timestamp}_tiktok_audio.mp3"
-        metrics = await tiktok_service.download_audio(info.music_play_url, download_name)
+        progress_state = {"last": 0.0}
+
+        async def on_progress(progress: DownloadProgress):
+            now = time.monotonic()
+            if not progress.done and now - progress_state["last"] < 1.0:
+                return
+            progress_state["last"] = now
+            await safe_edit_text(status_message, build_progress_status("TikTok audio", progress))
+
+        async def _on_retry_download(failed_attempt: int, total_attempts: int, _error):
+            if failed_attempt >= 2:
+                await safe_edit_text(
+                    status_message,
+                    bm.retrying_again_status(failed_attempt + 1, total_attempts),
+                )
+
+        metrics = await tiktok_service.download_audio(
+            info.music_play_url,
+            download_name,
+            user_id=call.from_user.id,
+            on_progress=on_progress,
+            on_retry=_on_retry_download,
+        )
         if not metrics:
             await handle_download_error(call.message)
             return
@@ -677,6 +833,10 @@ async def download_tiktok_mp3_callback(call: types.CallbackQuery):
         await db.add_file(cache_key, sent_message.audio.file_id, "audio")
 
         await remove_file(metrics.path)
+    except DownloadRateLimitError as e:
+        await call.message.reply(build_rate_limit_text(e.retry_after))
+    except DownloadQueueBusyError as e:
+        await call.message.reply(build_queue_busy_text(e.position))
     finally:
         if status_message:
             try:
@@ -701,7 +861,16 @@ async def inline_tiktok_query(query: types.InlineQuery):
             logging.debug("Inline TikTok query pattern not matched: query=%s", query.query)
             return await query.answer([], cache_time=1, is_personal=True)
 
-        data = await fetch_tiktok_data(query.query)
+        data = await retry_async_operation(
+            lambda: fetch_tiktok_data(query.query),
+            attempts=3,
+            delay_seconds=2.0,
+            should_retry_result=lambda payload: (
+                not isinstance(payload, dict)
+                or bool(payload.get("error"))
+                or payload.get("code") not in (0, None)
+            ),
+        )
         info = await video_info(data)
         images = data.get("data", {}).get("images", [])
 
@@ -720,7 +889,11 @@ async def inline_tiktok_query(query: types.InlineQuery):
             db_id = await db.get_file_id(db_video_url)
 
             if not db_id:
-                metrics = await tiktok_service.download_video(info.id, name)
+                metrics = await tiktok_service.download_video(
+                    info.id,
+                    name,
+                    user_id=query.from_user.id,
+                )
                 if metrics:
                     log_download_metrics("tiktok_inline", metrics)
                     download_path = metrics.path

@@ -1,5 +1,6 @@
 import asyncio
 import os
+from datetime import timedelta
 
 from aiogram import types, F, Router
 from aiogram.exceptions import (
@@ -20,6 +21,8 @@ from config import ADMINS_UID, OUTPUT_DIR
 from filters import IsBotAdmin
 from log.logger import logger as logging
 from main import bot, db
+from services.download_queue import get_download_queue
+from services.runtime_stats import get_runtime_snapshot
 
 router = Router()
 
@@ -62,6 +65,66 @@ async def admin(message: types.Message):
 
     else:
         await message.answer(bm.not_groups())
+
+
+@router.message(Command("perf"), IsBotAdmin())
+async def perf_metrics(message: types.Message):
+    queue = get_download_queue()
+    snapshot = await queue.metrics_snapshot()
+    if not snapshot:
+        await message.answer("No queue metrics collected yet.")
+        return
+
+    lines = ["<b>Queue performance (p50/p95)</b>"]
+    for source in sorted(snapshot.keys()):
+        item = snapshot[source]
+        lines.append(
+            (
+                f"\n<b>{source}</b>\n"
+                f"Jobs: {item.count}\n"
+                f"Queue wait: {item.queue_wait_p50_ms:.0f}/{item.queue_wait_p95_ms:.0f} ms\n"
+                f"Processing: {item.processing_p50_ms:.0f}/{item.processing_p95_ms:.0f} ms"
+            )
+        )
+
+    await message.answer("\n".join(lines), parse_mode="HTML")
+
+
+def _format_bytes(num_bytes: int) -> str:
+    units = ["B", "KB", "MB", "GB", "TB"]
+    value = float(max(0, num_bytes))
+    for unit in units:
+        if value < 1024.0 or unit == units[-1]:
+            if unit == "B":
+                return f"{int(value)} {unit}"
+            return f"{value:.2f} {unit}"
+        value /= 1024.0
+    return f"{value:.2f} TB"
+
+
+@router.message(Command("session"), IsBotAdmin())
+async def session_metrics(message: types.Message):
+    snapshot = get_runtime_snapshot()
+    uptime = str(timedelta(seconds=int(snapshot.uptime_seconds)))
+    lines = [
+        "<b>Runtime Session Stats</b>",
+        f"Uptime: <b>{uptime}</b>",
+        f"Total downloads: <b>{snapshot.total_downloads}</b>",
+        f"Videos: <b>{snapshot.total_videos}</b>",
+        f"Audio: <b>{snapshot.total_audio}</b>",
+        f"Other: <b>{snapshot.total_other}</b>",
+        f"Traffic: <b>{_format_bytes(snapshot.total_bytes)}</b>",
+    ]
+
+    if snapshot.by_source:
+        lines.append("")
+        lines.append("<b>By source:</b>")
+        for source, payload in sorted(snapshot.by_source.items()):
+            lines.append(
+                f"{source}: {payload.get('count', 0)} | {_format_bytes(int(payload.get('bytes', 0) or 0))}"
+            )
+
+    await message.answer("\n".join(lines), parse_mode="HTML")
 
 
 @router.callback_query(F.data == 'delete_log')

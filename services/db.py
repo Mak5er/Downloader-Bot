@@ -1,6 +1,8 @@
 from datetime import datetime, timedelta
 from collections import defaultdict
 import re
+import time
+from typing import Optional
 
 from sqlalchemy import Column, Text, TIMESTAMP, func, select, delete, update, ForeignKey, BigInteger, text
 from sqlalchemy.dialects.postgresql import insert
@@ -9,7 +11,6 @@ from sqlalchemy.orm import declarative_base, relationship
 
 from config import DATABASE_URL
 from log.logger import logger as logging
-from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
 Base = declarative_base()
 
@@ -97,6 +98,12 @@ class DataBase:
             pool_recycle=1800,
         )
         self.SessionLocal = async_sessionmaker(bind=self.engine, expire_on_commit=False, class_=AsyncSession)
+        self._settings_cache: dict[int, tuple[float, dict[str, str]]] = {}
+        self._file_cache: dict[str, tuple[float, Optional[str]]] = {}
+        self._status_cache: dict[int, tuple[float, Optional[str]]] = {}
+        self._settings_ttl_seconds = 120.0
+        self._file_ttl_seconds = 3600.0
+        self._status_ttl_seconds = 20.0
 
     async def init_db(self):
         async with self.engine.begin() as conn:
@@ -129,6 +136,7 @@ class DataBase:
                     chat_type=chat_type, language=language, status=status
                 )
                 session.add(user)
+        self._status_cache[int(user_id)] = (time.monotonic(), status)
 
     async def upsert_chat(self, user_id, user_name, user_username, chat_type, language=None, status="active"):
         async with self.SessionLocal() as session:
@@ -160,11 +168,15 @@ class DataBase:
                             status=status,
                         )
                     )
+        self._status_cache[int(user_id)] = (time.monotonic(), status)
 
     async def delete_user(self, user_id):
         async with self.SessionLocal() as session:
             async with session.begin():
                 await session.execute(delete(User).where(User.user_id == user_id))
+        user_id_int = int(user_id)
+        self._status_cache.pop(user_id_int, None)
+        self._settings_cache.pop(user_id_int, None)
 
     async def user_count(self):
         async with self.SessionLocal() as session:
@@ -217,58 +229,82 @@ class DataBase:
                                       .values(user_name=user_name, user_username=user_username))
 
     async def get_user_setting(self, user_id, field):
-        async with self.SessionLocal() as session:
-            result = await session.execute(
-                select(getattr(Settings, field)).where(Settings.user_id == user_id)
-            )
-            return result.scalar()
+        settings = await self.user_settings(user_id)
+        return settings.get(field)
 
     async def user_settings(self, user_id):
+        user_id_int = int(user_id)
+        now = time.monotonic()
+        cached = self._settings_cache.get(user_id_int)
+        if cached and now - cached[0] <= self._settings_ttl_seconds:
+            return dict(cached[1])
+
         async with self.SessionLocal() as session:
-            result = await session.execute(select(Settings).where(Settings.user_id == user_id))
+            result = await session.execute(select(Settings).where(Settings.user_id == user_id_int))
             settings = result.scalar_one_or_none()
             if settings:
-                return {
+                payload = {
                     "captions": settings.captions or "off",
                     "delete_message": settings.delete_message or "off",
                     "info_buttons": settings.info_buttons or "off",
                     "url_button": settings.url_button or "off",
                     "audio_button": settings.audio_button or "off",
                 }
-            return {
+                self._settings_cache[user_id_int] = (now, payload)
+                return dict(payload)
+
+            payload = {
                 "captions": "off",
                 "delete_message": "off",
                 "info_buttons": "off",
                 "url_button": "off",
                 "audio_button": "off",
             }
+            self._settings_cache[user_id_int] = (now, payload)
+            return dict(payload)
 
     async def set_user_setting(self, user_id, field, value):
+        user_id_int = int(user_id)
         async with self.SessionLocal() as session:
-            existing = await session.execute(select(Settings).where(Settings.user_id == user_id))
+            existing = await session.execute(select(Settings).where(Settings.user_id == user_id_int))
             setting = existing.scalar_one_or_none()
             if not setting:
-                setting = Settings(user_id=user_id)
+                setting = Settings(user_id=user_id_int)
                 session.add(setting)
             setattr(setting, field, value)
             await session.commit()
+        self._settings_cache.pop(user_id_int, None)
+        updated = await self.user_settings(user_id_int)
+        if field in updated:
+            updated[field] = value
+        self._settings_cache[user_id_int] = (time.monotonic(), updated)
 
     async def set_inactive(self, user_id):
         async with self.SessionLocal() as session:
             async with session.begin():
                 user_id_int = int(user_id)
                 await session.execute(update(User).where(User.user_id == user_id_int).values(status="inactive"))
+        self._status_cache[int(user_id)] = (time.monotonic(), "inactive")
 
     async def set_active(self, user_id):
         async with self.SessionLocal() as session:
             async with session.begin():
                 user_id_int = int(user_id)
                 await session.execute(update(User).where(User.user_id == user_id_int).values(status="active"))
+        self._status_cache[int(user_id)] = (time.monotonic(), "active")
 
     async def status(self, user_id):
+        user_id_int = int(user_id)
+        now = time.monotonic()
+        cached = self._status_cache.get(user_id_int)
+        if cached and now - cached[0] <= self._status_ttl_seconds:
+            return cached[1]
+
         async with self.SessionLocal() as session:
-            result = await session.execute(select(User.status).where(User.user_id == user_id))
-            return result.scalar()
+            result = await session.execute(select(User.status).where(User.user_id == user_id_int))
+            value = result.scalar()
+            self._status_cache[user_id_int] = (now, value)
+            return value
 
     async def get_user_info(self, user_id):
         async with self.SessionLocal() as session:
@@ -296,6 +332,7 @@ class DataBase:
             async with session.begin():
                 user_id_int = int(user_id)
                 await session.execute(update(User).where(User.user_id == user_id_int).values(status="ban"))
+        self._status_cache[int(user_id)] = (time.monotonic(), "ban")
 
     async def add_file(self, url, file_id, file_type):
         async with self.SessionLocal() as session:
@@ -307,15 +344,22 @@ class DataBase:
                 )
                 await session.execute(stmt)
                 await session.commit()
+                self._file_cache[url] = (time.monotonic(), file_id)
             except Exception as e:
                 logging.error(f"Error in add_file: {e}")
                 await session.rollback()
 
     async def get_file_id(self, url):
+        now = time.monotonic()
+        cached = self._file_cache.get(url)
+        if cached and now - cached[0] <= self._file_ttl_seconds:
+            return cached[1]
+
         async with self.SessionLocal() as session:
             try:
                 result = await session.execute(select(DownloadedFile.file_id).where(DownloadedFile.url == url))
                 file_id = result.scalar()
+                self._file_cache[url] = (now, file_id)
                 return file_id
             except Exception as e:
                 logging.error(f"Error in get_file_id: {e}")

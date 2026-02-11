@@ -1,6 +1,7 @@
 import asyncio
 import datetime
 import re
+import time
 from typing import Optional
 from dataclasses import dataclass
 from urllib.parse import urlparse, urlunparse
@@ -15,13 +16,19 @@ import messages as bm
 from config import OUTPUT_DIR, COBALT_API_URL
 from handlers.user import update_info
 from handlers.utils import (
+    build_progress_status,
+    build_queue_busy_text,
+    build_rate_limit_text,
     get_bot_url,
     get_message_text,
     handle_download_error,
     maybe_delete_user_message,
     react_to_message,
     remove_file,
+    safe_delete_message,
+    safe_edit_text,
     send_chat_action_if_needed,
+    retry_async_operation,
     resolve_settings_target_id,
 )
 from log.logger import logger as logging
@@ -29,6 +36,9 @@ from main import bot, db, send_analytics
 from utils.download_manager import (
     DownloadConfig,
     DownloadError,
+    DownloadProgress,
+    DownloadQueueBusyError,
+    DownloadRateLimitError,
     DownloadMetrics,
     ResilientDownloader,
     log_download_metrics,
@@ -72,11 +82,11 @@ class InstagramService:
         config = DownloadConfig(
             chunk_size=1024 * 1024,
             multipart_threshold=16 * 1024 * 1024,
-            max_workers=4,
-            max_concurrent_downloads=2,
+            max_workers=6,
+            max_concurrent_downloads=3,
             retry_backoff=0.8,
         )
-        self._downloader = ResilientDownloader(output_dir, config=config)
+        self._downloader = ResilientDownloader(output_dir, config=config, source="instagram")
 
     async def fetch_data(self, url: str, audio_only: bool = False) -> Optional[InstagramVideo]:
         payload = {
@@ -124,9 +134,37 @@ class InstagramService:
             logging.error("Instagram fetch exception: %s", e)
             return None
 
-    async def download_media(self, url: str, filename: str) -> Optional[DownloadMetrics]:
+    async def download_media(
+        self,
+        url: str,
+        filename: str,
+        *,
+        user_id: Optional[int] = None,
+        size_hint: Optional[int] = None,
+        on_queued=None,
+        on_progress=None,
+        on_retry=None,
+    ) -> Optional[DownloadMetrics]:
+        async def _download_once():
+            return await self._downloader.download(
+                url,
+                filename,
+                user_id=user_id,
+                size_hint=size_hint,
+                on_queued=on_queued,
+                on_progress=on_progress,
+            )
+
         try:
-            return await self._downloader.download(url, filename)
+            return await retry_async_operation(
+                _download_once,
+                attempts=3,
+                delay_seconds=2.0,
+                retry_on_exception=lambda exc: not isinstance(exc, (DownloadRateLimitError, DownloadQueueBusyError)),
+                on_retry=on_retry,
+            )
+        except (DownloadRateLimitError, DownloadQueueBusyError):
+            raise
         except DownloadError as exc:
             logging.error("Error downloading Instagram media: url=%s error=%s", url, exc)
             return None
@@ -185,6 +223,11 @@ async def process_instagram(message: types.Message):
         await update_info(message)
 
 
+async def process_instagram_url(message: types.Message):
+    """Backward-compatible entrypoint used by pending-request flow."""
+    await process_instagram(message)
+
+
 async def process_instagram_video(message: types.Message, data: InstagramVideo, original_url: str, bot_url: str,
                                   user_settings: dict, business_id: Optional[int]):
     await send_analytics(user_id=message.from_user.id, chat_type=message.chat.type, action_name="instagram_video")
@@ -220,16 +263,40 @@ async def process_instagram_video(message: types.Message, data: InstagramVideo, 
         await maybe_delete_user_message(message, user_settings["delete_message"])
         return
 
-    metrics = await inst_service.download_media(media.url, download_name)
-    if not metrics:
-        await handle_download_error(message, business_id=business_id)
-        return
-
-    log_download_metrics("instagram_video", metrics)
-    download_path = metrics.path
-    file_size = metrics.size
+    status_message = await message.answer(bm.downloading_video_status())
+    progress_state = {"last": 0.0}
+    download_path: Optional[str] = None
 
     try:
+        async def on_progress(progress: DownloadProgress):
+            now = time.monotonic()
+            if not progress.done and now - progress_state["last"] < 1.0:
+                return
+            progress_state["last"] = now
+            await safe_edit_text(status_message, build_progress_status("Instagram video", progress))
+
+        async def on_retry(failed_attempt: int, total_attempts: int, _error):
+            if failed_attempt >= 2:
+                await safe_edit_text(
+                    status_message,
+                    bm.retrying_again_status(failed_attempt + 1, total_attempts),
+                )
+
+        metrics = await inst_service.download_media(
+            media.url,
+            download_name,
+            user_id=message.from_user.id,
+            on_progress=on_progress,
+            on_retry=on_retry,
+        )
+        if not metrics:
+            await handle_download_error(message, business_id=business_id)
+            return
+
+        log_download_metrics("instagram_video", metrics)
+        download_path = metrics.path
+        file_size = metrics.size
+
         if file_size >= MAX_FILE_SIZE:
             logging.warning(
                 "Instagram video too large: url=%s size=%s",
@@ -239,6 +306,7 @@ async def process_instagram_video(message: types.Message, data: InstagramVideo, 
             await handle_download_error(message, business_id=business_id)
             return
 
+        await safe_edit_text(status_message, bm.uploading_status())
         await send_chat_action_if_needed(bot, message.chat.id, "upload_video", business_id)
         sent = await message.reply_video(
             video=FSInputFile(download_path),
@@ -261,6 +329,10 @@ async def process_instagram_video(message: types.Message, data: InstagramVideo, 
         except Exception as e:
             logging.error("Error caching Instagram video: url=%s error=%s", db_video_url, e)
 
+    except DownloadRateLimitError as e:
+        await message.reply(build_rate_limit_text(e.retry_after))
+    except DownloadQueueBusyError as e:
+        await message.reply(build_queue_busy_text(e.position))
     except Exception as e:
         logging.exception(
             "Error processing Instagram video: url=%s error=%s",
@@ -269,8 +341,10 @@ async def process_instagram_video(message: types.Message, data: InstagramVideo, 
         )
         await handle_download_error(message, business_id=business_id)
     finally:
-        await remove_file(download_path)
-        logging.debug("Removed temporary Instagram video file: path=%s", download_path)
+        if download_path:
+            await remove_file(download_path)
+            logging.debug("Removed temporary Instagram video file: path=%s", download_path)
+        await safe_delete_message(status_message)
 
 
 async def process_instagram_media_group(message: types.Message, data: InstagramVideo, original_url: str, bot_url: str,
@@ -289,18 +363,36 @@ async def process_instagram_media_group(message: types.Message, data: InstagramV
     media_items = []
     downloaded_paths = []
 
-    for i, item in enumerate(data.media_list[:10]):
+    async def _download_item(index: int, item: InstagramMedia):
         ext = "mp4" if item.type == "video" else "jpg"
-        filename = f"inst_{data.id}_{i}.{ext}"
+        filename = f"inst_{data.id}_{index}.{ext}"
+        metrics = await inst_service.download_media(
+            item.url,
+            filename,
+            user_id=message.from_user.id,
+        )
+        if not metrics:
+            return None
+        log_download_metrics("instagram_group", metrics)
+        return index, item.type, metrics.path
 
-        metrics = await inst_service.download_media(item.url, filename)
-        if metrics:
-            downloaded_paths.append(metrics.path)
-            media_items.append({
-                "path": metrics.path,
-                "type": item.type,
-            })
-            logging.debug("Downloaded Instagram media: type=%s index=%s", item.type, i)
+    tasks = [
+        asyncio.create_task(_download_item(i, item))
+        for i, item in enumerate(data.media_list[:10])
+    ]
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+
+    for result in sorted(
+        (r for r in results if not isinstance(r, Exception) and r is not None),
+        key=lambda value: value[0],
+    ):
+        _, media_type, media_path = result
+        downloaded_paths.append(media_path)
+        media_items.append({"path": media_path, "type": media_type})
+
+    for result in results:
+        if isinstance(result, Exception):
+            logging.error("Instagram media download task failed: error=%s", result)
 
     if not media_items:
         await handle_download_error(message, business_id=business_id)
@@ -401,8 +493,29 @@ async def download_instagram_audio_callback(call: types.CallbackQuery):
         audio_item = data.media_list[0]
         timestamp = datetime.datetime.now().strftime("%Y%m%d%H%M%S")
         download_name = f"{data.id}_{timestamp}_instagram_audio.mp3"
+        progress_state = {"last": 0.0}
 
-        metrics = await inst_service.download_media(audio_item.url, download_name)
+        async def on_progress(progress: DownloadProgress):
+            now = time.monotonic()
+            if not progress.done and now - progress_state["last"] < 1.0:
+                return
+            progress_state["last"] = now
+            await safe_edit_text(status_message, build_progress_status("Instagram audio", progress))
+
+        async def on_retry(failed_attempt: int, total_attempts: int, _error):
+            if failed_attempt >= 2:
+                await safe_edit_text(
+                    status_message,
+                    bm.retrying_again_status(failed_attempt + 1, total_attempts),
+                )
+
+        metrics = await inst_service.download_media(
+            audio_item.url,
+            download_name,
+            user_id=call.from_user.id,
+            on_progress=on_progress,
+            on_retry=on_retry,
+        )
         if not metrics:
             await status_message.edit_text("Error downloading audio.")
             return
@@ -444,6 +557,10 @@ async def download_instagram_audio_callback(call: types.CallbackQuery):
         await remove_file(metrics.path)
         logging.debug("Removed temporary Instagram audio file: path=%s", metrics.path)
 
+    except DownloadRateLimitError as e:
+        await call.message.reply(build_rate_limit_text(e.retry_after))
+    except DownloadQueueBusyError as e:
+        await call.message.reply(build_queue_busy_text(e.position))
     except Exception as e:
         logging.exception(
             "Error downloading Instagram audio: url=%s error=%s",
@@ -495,7 +612,11 @@ async def inline_instagram_query(query: types.InlineQuery):
 
             if not db_id:
                 logging.info("Downloading inline Instagram video: url=%s", original_url)
-                metrics = await inst_service.download_media(media.url, download_name)
+                metrics = await inst_service.download_media(
+                    media.url,
+                    download_name,
+                    user_id=query.from_user.id,
+                )
                 if metrics:
                     log_download_metrics("instagram_inline", metrics)
                     download_path = metrics.path

@@ -37,6 +37,7 @@ Example  `.env`  file:
     custom_api_url = YOUR_CUSTOM_TELEGRAM_API_URL
     CHANNEL_ID = YOUR_CHANNEL_ID_FOR_INLINE_QUERY_VIDEOS
     COBALT_API_URL = YOUR_COBALT_NODE_URL
+    DOWNLOAD_SUBPROCESS_THRESHOLD_MB = 0  # set >0 to run large downloads in a separate worker process
 
 You can check how to run your own cobalt instance [HERE](https://github.com/imputnet/cobalt/blob/main/docs/run-an-instance.md) 
 
@@ -65,6 +66,15 @@ Commands:
 - /setting : Change the bot settings.
 - /stats : View bot statistics.
 - /remove_keyboard : Remove reply keyboard.
+- /perf : (admin) queue performance p50/p95 per platform.
+- /session : (admin) current bot-session downloads and traffic.
+
+### Performance Queue
+
+- Heavy downloads now run through a shared priority queue with per-user rate limiting.
+- Queue workers auto-scale based on real load (queue wait and backlog).
+- Progress messages include percent, speed and ETA when source supports streaming progress.
+- Optional worker-process mode: set `DOWNLOAD_SUBPROCESS_THRESHOLD_MB` to move large downloads into a separate process.
 
 ### Telegram Bot Link
 

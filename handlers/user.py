@@ -3,6 +3,7 @@ import re
 from collections import defaultdict
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
+import time
 
 import matplotlib.pyplot as plt
 from aiogram import types, Router, F
@@ -19,6 +20,9 @@ from main import db, send_analytics, bot
 from services.pending_requests import pop_pending
 
 router = Router()
+
+_UPDATE_INFO_TTL_SECONDS = 120.0
+_update_info_cache: dict[int, tuple[float, str, Optional[str]]] = {}
 
 SERVICE_ORDER = ["Instagram", "TikTok", "YouTube", "Twitter", "Other"]
 SERVICE_COLORS = ["#6C5DD3", "#FF6B6B", "#28C76F", "#00CFE8", "#FFA500"]
@@ -54,12 +58,20 @@ async def update_info(message: types.Message):
     user_id = message.from_user.id
     user_name = message.from_user.full_name
     user_username = message.from_user.username
+
+    now = time.monotonic()
+    cached = _update_info_cache.get(user_id)
+    if cached and now - cached[0] <= _UPDATE_INFO_TTL_SECONDS:
+        if cached[1] == user_name and cached[2] == user_username:
+            return
+
     result = await db.user_exist(user_id)
     if result:
         await db.user_update_name(user_id, user_name, user_username)
     else:
         await db.add_user(user_id, user_name, user_username, "private", "uk", 'active')
     await db.set_active(user_id)
+    _update_info_cache[user_id] = (now, user_name, user_username)
 
 
 @router.message(Command("start"))
