@@ -85,7 +85,13 @@ def scrape_media(tweet_id):
         raise
 
 
-async def _collect_media_files(tweet_id, tweet_media, *, user_id: Optional[int] = None):
+async def _collect_media_files(
+    tweet_id,
+    tweet_media,
+    *,
+    user_id: Optional[int] = None,
+    request_id: Optional[str] = None,
+):
     photos: list[str] = []
     videos: list[str] = []
 
@@ -113,6 +119,7 @@ async def _collect_media_files(tweet_id, tweet_media, *, user_id: Optional[int] 
                 file_name,
                 skip_if_exists=True,
                 user_id=user_id,
+                request_id=request_id,
             )
         )
         media_meta.append((media_type, file_name, media_url))
@@ -228,6 +235,7 @@ async def reply_media(message, tweet_id, tweet_media, bot_url, business_id, user
             tweet_id,
             tweet_media,
             user_id=message.from_user.id,
+            request_id=f"twitter:{message.chat.id}:{message.message_id}:{tweet_id}",
         )
         logging.info(
             "Tweet media fetched: tweet_id=%s photos=%s videos=%s",

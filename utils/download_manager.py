@@ -140,6 +140,7 @@ class ResilientDownloader:
         user_id: Optional[int] = None,
         source: Optional[str] = None,
         priority: Optional[int] = None,
+        request_id: Optional[str] = None,
         size_hint: Optional[int] = None,
         max_size_bytes: Optional[int] = None,
         on_queued: Optional[Callable[[QueueTicket], Awaitable[None] | None]] = None,
@@ -195,6 +196,7 @@ class ResilientDownloader:
                 priority=queue_priority,
                 source=source or self.source,
                 user_id=user_id,
+                request_id=request_id,
                 on_queued=on_queued,
             )
         except QueueRateLimitError as exc:

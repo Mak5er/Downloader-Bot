@@ -47,6 +47,7 @@ class _QueuedJob:
     created_at: float = field(compare=False)
     source: str = field(compare=False)
     user_id: Optional[int] = field(compare=False)
+    request_key: Optional[tuple[int, str]] = field(compare=False, default=None)
     runner: Optional[Callable[[], Awaitable[Any]]] = field(compare=False, default=None)
     future: Optional[asyncio.Future] = field(compare=False, default=None)
     stop_worker: bool = field(compare=False, default=False)
@@ -58,7 +59,7 @@ class AdaptiveDownloadQueue:
 
     Features:
     - Prioritised scheduling (lower number = higher priority)
-    - Per-user rate limiting and pending-job cap
+    - Per-user rate limiting and bounded in-flight slots
     - Queue position feedback
     - p50/p95 runtime + queue wait metrics per source
     - Adaptive worker scaling based on real queue pressure
@@ -67,18 +68,23 @@ class AdaptiveDownloadQueue:
     def __init__(
         self,
         *,
-        min_workers: int = 2,
-        max_workers: int = 8,
+        min_workers: int = 4,
+        max_workers: int = 10,
         max_queue_size: int = 300,
         per_user_rate_limit: int = 5,
         per_user_window_seconds: float = 10.0,
-        per_user_max_pending: int = 2,
+        per_user_max_pending: int = 4,
+        per_user_pending_timeout_seconds: float = 0.0,
         metric_window: int = 300,
     ) -> None:
         if min_workers < 1:
             raise ValueError("min_workers must be >= 1")
         if max_workers < min_workers:
             raise ValueError("max_workers must be >= min_workers")
+        if per_user_max_pending < 1:
+            raise ValueError("per_user_max_pending must be >= 1")
+        if per_user_pending_timeout_seconds < 0:
+            raise ValueError("per_user_pending_timeout_seconds must be >= 0")
 
         self.min_workers = int(min_workers)
         self.max_workers = int(max_workers)
@@ -86,6 +92,7 @@ class AdaptiveDownloadQueue:
         self.per_user_rate_limit = int(per_user_rate_limit)
         self.per_user_window_seconds = float(per_user_window_seconds)
         self.per_user_max_pending = int(per_user_max_pending)
+        self.per_user_pending_timeout_seconds = float(per_user_pending_timeout_seconds)
 
         self._queue: asyncio.PriorityQueue[_QueuedJob] = asyncio.PriorityQueue()
         self._sequence = count(1)
@@ -96,6 +103,9 @@ class AdaptiveDownloadQueue:
 
         self._user_recent: dict[int, deque[float]] = defaultdict(deque)
         self._user_pending: dict[int, int] = defaultdict(int)
+        self._user_slots: dict[int, asyncio.Semaphore] = {}
+        self._user_submit_locks: dict[int, asyncio.Lock] = {}
+        self._request_refs: dict[tuple[int, str], int] = defaultdict(int)
 
         self._processing_samples: dict[str, deque[float]] = defaultdict(lambda: deque(maxlen=metric_window))
         self._queue_wait_samples: dict[str, deque[float]] = defaultdict(lambda: deque(maxlen=metric_window))
@@ -116,47 +126,84 @@ class AdaptiveDownloadQueue:
         priority: int,
         source: str,
         user_id: Optional[int] = None,
+        request_id: Optional[str] = None,
         on_queued: Optional[Callable[[QueueTicket], Awaitable[None] | None]] = None,
     ) -> T:
         await self._ensure_started()
 
-        if self._queue.qsize() >= self.max_queue_size:
-            raise QueueBackpressureError(position=self._queue.qsize() + 1)
-
+        reserved_user_slot = False
+        queued = False
+        request_key: Optional[tuple[int, str]] = None
         if user_id is not None:
-            self._enforce_rate_limit(user_id)
-            pending = self._user_pending[user_id]
-            if pending >= self.per_user_max_pending:
-                raise QueueBackpressureError(position=pending + 1)
-            self._user_pending[user_id] += 1
+            if request_id:
+                request_key = (user_id, str(request_id))
+
+            submit_lock = self._user_submit_locks.setdefault(user_id, asyncio.Lock())
+            async with submit_lock:
+                if request_key is not None:
+                    refs = self._request_refs.get(request_key, 0)
+                    if refs <= 0:
+                        self._enforce_rate_limit(user_id)
+                        await self._reserve_user_slot(user_id)
+                        reserved_user_slot = True
+                    self._request_refs[request_key] = refs + 1
+                else:
+                    self._enforce_rate_limit(user_id)
+                    await self._reserve_user_slot(user_id)
+                    reserved_user_slot = True
 
         loop = asyncio.get_running_loop()
         future: asyncio.Future[T] = loop.create_future()
-        job = _QueuedJob(
-            priority=int(priority),
-            order=next(self._sequence),
-            created_at=time.monotonic(),
-            source=source or "generic",
-            user_id=user_id,
-            runner=runner,
-            future=future,
-        )
+        try:
+            if self._queue.qsize() >= self.max_queue_size:
+                raise QueueBackpressureError(position=self._queue.qsize() + 1)
 
-        self._queue.put_nowait(job)
-        self._last_non_empty_queue = time.monotonic()
-        await self._maybe_autotune()
-
-        if on_queued:
-            ticket = QueueTicket(
-                position=self._queue.qsize(),
-                queue_size=self._queue.qsize(),
-                active_workers=self.active_workers,
+            job = _QueuedJob(
+                priority=int(priority),
+                order=next(self._sequence),
+                created_at=time.monotonic(),
+                source=source or "generic",
+                user_id=user_id,
+                request_key=request_key,
+                runner=runner,
+                future=future,
             )
-            maybe = on_queued(ticket)
-            if asyncio.iscoroutine(maybe):
-                await maybe
 
-        return await future
+            self._queue.put_nowait(job)
+            queued = True
+            self._last_non_empty_queue = time.monotonic()
+            await self._maybe_autotune()
+
+            if on_queued:
+                ticket = QueueTicket(
+                    position=self._queue.qsize(),
+                    queue_size=self._queue.qsize(),
+                    active_workers=self.active_workers,
+                )
+                try:
+                    maybe = on_queued(ticket)
+                    if asyncio.iscoroutine(maybe):
+                        await maybe
+                except Exception as exc:
+                    logging.debug(
+                        "Queue on_queued callback failed: source=%s user_id=%s error=%s",
+                        source,
+                        user_id,
+                        exc,
+                    )
+
+            return await future
+        except Exception:
+            if user_id is not None and not queued:
+                if request_key is not None:
+                    self._decrement_request_ref(
+                        request_key,
+                        user_id,
+                        release_slot_if_last=reserved_user_slot,
+                    )
+                elif reserved_user_slot:
+                    self._release_user_slot(user_id)
+            raise
 
     async def metrics_snapshot(self) -> dict[str, QueueMetricSnapshot]:
         snapshot: dict[str, QueueMetricSnapshot] = {}
@@ -242,13 +289,63 @@ class AdaptiveDownloadQueue:
             finally:
                 self._queue.task_done()
                 if job.user_id is not None:
-                    self._user_pending[job.user_id] = max(0, self._user_pending[job.user_id] - 1)
-                    if self._user_pending[job.user_id] == 0:
-                        self._user_pending.pop(job.user_id, None)
+                    if job.request_key is not None:
+                        self._decrement_request_ref(
+                            job.request_key,
+                            job.user_id,
+                            release_slot_if_last=True,
+                        )
+                    else:
+                        self._release_user_slot(job.user_id)
 
                 processing = max(0.0, time.monotonic() - started)
                 self._record_metric(job.source, queue_wait, processing)
                 await self._maybe_autotune()
+
+    async def _reserve_user_slot(self, user_id: int) -> None:
+        semaphore = self._user_slots.get(user_id)
+        if semaphore is None:
+            semaphore = asyncio.Semaphore(self.per_user_max_pending)
+            self._user_slots[user_id] = semaphore
+
+        timeout = self.per_user_pending_timeout_seconds
+        if timeout > 0:
+            try:
+                await asyncio.wait_for(semaphore.acquire(), timeout=timeout)
+            except asyncio.TimeoutError as exc:
+                pending = max(1, self._user_pending.get(user_id, self.per_user_max_pending))
+                raise QueueBackpressureError(position=pending + 1) from exc
+        else:
+            await semaphore.acquire()
+
+        self._user_pending[user_id] += 1
+
+    def _release_user_slot(self, user_id: int) -> None:
+        semaphore = self._user_slots.get(user_id)
+        if semaphore is not None:
+            semaphore.release()
+
+        remaining = self._user_pending.get(user_id, 0) - 1
+        if remaining <= 0:
+            self._user_pending.pop(user_id, None)
+            return
+        self._user_pending[user_id] = remaining
+
+    def _decrement_request_ref(
+        self,
+        request_key: tuple[int, str],
+        user_id: int,
+        *,
+        release_slot_if_last: bool,
+    ) -> None:
+        refs = self._request_refs.get(request_key, 0) - 1
+        if refs <= 0:
+            self._request_refs.pop(request_key, None)
+            if release_slot_if_last:
+                self._release_user_slot(user_id)
+            return
+        self._request_refs[request_key] = refs
+
 
     def _record_metric(self, source: str, queue_wait: float, processing: float) -> None:
         source_key = source or "generic"

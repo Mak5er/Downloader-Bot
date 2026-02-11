@@ -251,6 +251,7 @@ class TikTokService:
         filename: str,
         *,
         user_id: Optional[int] = None,
+        request_id: Optional[str] = None,
         size_hint: Optional[int] = None,
         on_queued=None,
         on_progress=None,
@@ -268,6 +269,7 @@ class TikTokService:
                 filename,
                 headers=headers,
                 user_id=user_id,
+                request_id=request_id,
                 size_hint=size_hint,
                 on_queued=on_queued,
                 on_progress=on_progress,
@@ -293,6 +295,7 @@ class TikTokService:
         filename: str,
         *,
         user_id: Optional[int] = None,
+        request_id: Optional[str] = None,
         size_hint: Optional[int] = None,
         on_queued=None,
         on_progress=None,
@@ -309,6 +312,7 @@ class TikTokService:
                 filename,
                 headers=headers,
                 user_id=user_id,
+                request_id=request_id,
                 size_hint=size_hint,
                 on_queued=on_queued,
                 on_progress=on_progress,
@@ -535,6 +539,7 @@ async def process_tiktok_video(message: types.Message, data: dict, bot_url: str,
     status_message = await message.answer(bm.downloading_video_status())
     download_path: Optional[str] = None
     progress_throttle_state = {"last": 0.0}
+    request_id = f"tiktok_video:{message.chat.id}:{message.message_id}:{info.id}"
     source_data = data.get("data", {}) if isinstance(data, dict) else {}
     size_hint = None
     for key in ("size_hd", "size", "wm_size"):
@@ -566,6 +571,7 @@ async def process_tiktok_video(message: types.Message, data: dict, bot_url: str,
                 info.id,
                 download_name,
                 user_id=message.from_user.id,
+                request_id=request_id,
                 size_hint=size_hint,
                 on_progress=on_progress,
                 on_retry=_on_retry_download,
@@ -731,6 +737,7 @@ async def download_tiktok_mp3_callback(call: types.CallbackQuery):
         bot_url = await get_bot_url(bot)
         bot_avatar = await get_bot_avatar_thumbnail(bot)
         cache_key = f"{video_url}#audio"
+        request_id = f"tiktok_audio:{call.message.chat.id}:{call.message.message_id}:{video_id}"
         db_file_id = await db.get_file_id(cache_key)
         if db_file_id:
             await send_chat_action_if_needed(
@@ -800,6 +807,7 @@ async def download_tiktok_mp3_callback(call: types.CallbackQuery):
             info.music_play_url,
             download_name,
             user_id=call.from_user.id,
+            request_id=request_id,
             on_progress=on_progress,
             on_retry=_on_retry_download,
         )
@@ -889,10 +897,12 @@ async def inline_tiktok_query(query: types.InlineQuery):
             db_id = await db.get_file_id(db_video_url)
 
             if not db_id:
+                inline_request_id = f"tiktok_inline:{query.from_user.id}:{query.id}:{info.id}"
                 metrics = await tiktok_service.download_video(
                     info.id,
                     name,
                     user_id=query.from_user.id,
+                    request_id=inline_request_id,
                 )
                 if metrics:
                     log_download_metrics("tiktok_inline", metrics)

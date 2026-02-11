@@ -140,6 +140,7 @@ class InstagramService:
         filename: str,
         *,
         user_id: Optional[int] = None,
+        request_id: Optional[str] = None,
         size_hint: Optional[int] = None,
         on_queued=None,
         on_progress=None,
@@ -150,6 +151,7 @@ class InstagramService:
                 url,
                 filename,
                 user_id=user_id,
+                request_id=request_id,
                 size_hint=size_hint,
                 on_queued=on_queued,
                 on_progress=on_progress,
@@ -362,6 +364,7 @@ async def process_instagram_media_group(message: types.Message, data: InstagramV
 
     media_items = []
     downloaded_paths = []
+    request_id = f"instagram_group:{message.chat.id}:{message.message_id}:{data.id}"
 
     async def _download_item(index: int, item: InstagramMedia):
         ext = "mp4" if item.type == "video" else "jpg"
@@ -370,6 +373,7 @@ async def process_instagram_media_group(message: types.Message, data: InstagramV
             item.url,
             filename,
             user_id=message.from_user.id,
+            request_id=request_id,
         )
         if not metrics:
             return None
