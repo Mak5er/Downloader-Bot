@@ -265,7 +265,10 @@ async def process_instagram_video(message: types.Message, data: InstagramVideo, 
         await maybe_delete_user_message(message, user_settings["delete_message"])
         return
 
-    status_message = await message.answer(bm.downloading_video_status())
+    show_service_status = business_id is None
+    status_message: Optional[types.Message] = None
+    if show_service_status:
+        status_message = await message.answer(bm.downloading_video_status())
     progress_state = {"last": 0.0}
     download_path: Optional[str] = None
 
@@ -278,7 +281,7 @@ async def process_instagram_video(message: types.Message, data: InstagramVideo, 
             await safe_edit_text(status_message, build_progress_status("Instagram video", progress))
 
         async def on_retry(failed_attempt: int, total_attempts: int, _error):
-            if failed_attempt >= 2:
+            if show_service_status and failed_attempt >= 2:
                 await safe_edit_text(
                     status_message,
                     bm.retrying_again_status(failed_attempt + 1, total_attempts),
@@ -332,9 +335,15 @@ async def process_instagram_video(message: types.Message, data: InstagramVideo, 
             logging.error("Error caching Instagram video: url=%s error=%s", db_video_url, e)
 
     except DownloadRateLimitError as e:
-        await message.reply(build_rate_limit_text(e.retry_after))
+        if show_service_status:
+            await message.reply(build_rate_limit_text(e.retry_after))
+        else:
+            await handle_download_error(message, business_id=business_id)
     except DownloadQueueBusyError as e:
-        await message.reply(build_queue_busy_text(e.position))
+        if show_service_status:
+            await message.reply(build_queue_busy_text(e.position))
+        else:
+            await handle_download_error(message, business_id=business_id)
     except Exception as e:
         logging.exception(
             "Error processing Instagram video: url=%s error=%s",
@@ -457,7 +466,11 @@ async def download_instagram_audio_callback(call: types.CallbackQuery):
 
     await call.answer()
     original_url = call.data.replace("audio:inst:", "")
-    status_message = await call.message.answer(bm.downloading_audio_status())
+    business_id = call.message.business_connection_id
+    show_service_status = business_id is None
+    status_message: Optional[types.Message] = None
+    if show_service_status:
+        status_message = await call.message.answer(bm.downloading_audio_status())
 
     try:
         bot_url = await get_bot_url(bot)
@@ -474,7 +487,7 @@ async def download_instagram_audio_callback(call: types.CallbackQuery):
                 bot,
                 call.message.chat.id,
                 "upload_audio",
-                call.message.business_connection_id,
+                business_id,
             )
             try:
                 await status_message.delete()
@@ -490,7 +503,10 @@ async def download_instagram_audio_callback(call: types.CallbackQuery):
 
         data = await inst_service.fetch_data(original_url, audio_only=True)
         if not data or not data.media_list:
-            await status_message.edit_text("Error fetching audio.")
+            if show_service_status:
+                await safe_edit_text(status_message, "Error fetching audio.")
+            else:
+                await handle_download_error(call.message, business_id=business_id)
             logging.error("Failed to fetch Instagram audio: url=%s", original_url)
             return
 
@@ -507,7 +523,7 @@ async def download_instagram_audio_callback(call: types.CallbackQuery):
             await safe_edit_text(status_message, build_progress_status("Instagram audio", progress))
 
         async def on_retry(failed_attempt: int, total_attempts: int, _error):
-            if failed_attempt >= 2:
+            if show_service_status and failed_attempt >= 2:
                 await safe_edit_text(
                     status_message,
                     bm.retrying_again_status(failed_attempt + 1, total_attempts),
@@ -521,11 +537,17 @@ async def download_instagram_audio_callback(call: types.CallbackQuery):
             on_retry=on_retry,
         )
         if not metrics:
-            await status_message.edit_text("Error downloading audio.")
+            if show_service_status:
+                await safe_edit_text(status_message, "Error downloading audio.")
+            else:
+                await handle_download_error(call.message, business_id=business_id)
             return
 
         if metrics.size >= MAX_FILE_SIZE:
-            await status_message.edit_text("Audio is too large for Telegram.")
+            if show_service_status:
+                await safe_edit_text(status_message, "Audio is too large for Telegram.")
+            else:
+                await call.message.reply(bm.audio_too_large())
             await remove_file(metrics.path)
             return
 
@@ -533,7 +555,7 @@ async def download_instagram_audio_callback(call: types.CallbackQuery):
             bot,
             call.message.chat.id,
             "upload_audio",
-            call.message.business_connection_id,
+            business_id,
         )
         try:
             await status_message.delete()
@@ -562,9 +584,15 @@ async def download_instagram_audio_callback(call: types.CallbackQuery):
         logging.debug("Removed temporary Instagram audio file: path=%s", metrics.path)
 
     except DownloadRateLimitError as e:
-        await call.message.reply(build_rate_limit_text(e.retry_after))
+        if show_service_status:
+            await call.message.reply(build_rate_limit_text(e.retry_after))
+        else:
+            await handle_download_error(call.message, business_id=business_id)
     except DownloadQueueBusyError as e:
-        await call.message.reply(build_queue_busy_text(e.position))
+        if show_service_status:
+            await call.message.reply(build_queue_busy_text(e.position))
+        else:
+            await handle_download_error(call.message, business_id=business_id)
     except Exception as e:
         logging.exception(
             "Error downloading Instagram audio: url=%s error=%s",
@@ -572,7 +600,9 @@ async def download_instagram_audio_callback(call: types.CallbackQuery):
             e,
         )
         if status_message:
-            await status_message.edit_text(bm.something_went_wrong())
+            await safe_edit_text(status_message, bm.something_went_wrong())
+        else:
+            await handle_download_error(call.message, business_id=business_id)
     finally:
         if status_message:
             try:
