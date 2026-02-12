@@ -27,6 +27,7 @@ from handlers.utils import (
     remove_file,
     safe_delete_message,
     safe_edit_text,
+    send_chat_action_if_needed,
     retry_async_operation,
     resolve_settings_target_id,
 )
@@ -330,9 +331,12 @@ async def download_video(message: types.Message):
     )
     await send_analytics(user_id=message.from_user.id, chat_type=message.chat.type, action_name="youtube_video")
     status_message: Optional[types.Message] = None
+    business_id = message.business_connection_id
+    show_service_status = business_id is None
     try:
-        await react_to_message(message, "👾", skip_if_business=False)
-        status_message = await message.answer(bm.fetching_info_status())
+        await react_to_message(message, "👾", business_id=business_id)
+        if show_service_status:
+            status_message = await message.answer(bm.fetching_info_status())
 
         user_settings = await db.user_settings(resolve_settings_target_id(message))
         user_captions = user_settings["captions"]
@@ -360,7 +364,7 @@ async def download_video(message: types.Message):
                 db_file_id,
             )
             await safe_delete_message(status_message)
-            await bot.send_chat_action(message.chat.id, "upload_video")
+            await send_chat_action_if_needed(bot, message.chat.id, "upload_video", business_id)
             await message.answer_video(
                 video=db_file_id,
                 caption=bm.captions(user_captions, yt['title'], bot_url),
@@ -385,7 +389,7 @@ async def download_video(message: types.Message):
         size_hint_raw = video.get("filesize") or video.get("filesize_approx")
         size_hint = safe_int(size_hint_raw, 0) or None
         if size_hint and size_hint >= MAX_FILE_SIZE:
-            await handle_video_too_large(message, skip_if_business=False)
+            await handle_video_too_large(message, business_id=business_id)
             return
 
         async def on_progress(progress: DownloadProgress):
@@ -452,16 +456,16 @@ async def download_video(message: types.Message):
                     timeout=900.0,
                 )
         if not metrics:
-            await handle_download_error(message, skip_if_business=False)
+            await handle_download_error(message, business_id=business_id)
             return
 
         if metrics.size >= MAX_FILE_SIZE:
-            await handle_video_too_large(message, skip_if_business=False)
+            await handle_video_too_large(message, business_id=business_id)
             await remove_file(metrics.path)
             return
 
         await safe_edit_text(status_message, bm.uploading_status())
-        await bot.send_chat_action(message.chat.id, "upload_video")
+        await send_chat_action_if_needed(bot, message.chat.id, "upload_video", business_id)
         sent_message = await message.answer_video(
             video=FSInputFile(metrics.path),
             caption=bm.captions(user_captions, yt['title'], bot_url),
@@ -487,17 +491,26 @@ async def download_video(message: types.Message):
 
         await remove_file(metrics.path)
     except DownloadRateLimitError as e:
-        await message.reply(build_rate_limit_text(e.retry_after))
+        if show_service_status:
+            await message.reply(build_rate_limit_text(e.retry_after))
+        else:
+            await handle_download_error(message, business_id=business_id)
     except DownloadQueueBusyError as e:
-        await message.reply(build_queue_busy_text(e.position))
+        if show_service_status:
+            await message.reply(build_queue_busy_text(e.position))
+        else:
+            await handle_download_error(message, business_id=business_id)
     except DownloadTooLargeError:
-        await handle_video_too_large(message, skip_if_business=False)
+        await handle_video_too_large(message, business_id=business_id)
     except asyncio.TimeoutError:
-        await safe_edit_text(status_message, bm.timeout_error())
-        await handle_download_error(message, skip_if_business=False, text=bm.timeout_error())
+        if show_service_status:
+            await safe_edit_text(status_message, bm.timeout_error())
+            await handle_download_error(message, business_id=business_id, text=bm.timeout_error())
+        else:
+            await handle_download_error(message, business_id=business_id)
     except Exception as e:
         logging.error(f"Video download error: {e}")
-        await handle_download_error(message, skip_if_business=False)
+        await handle_download_error(message, business_id=business_id)
     finally:
         await safe_delete_message(status_message)
     await update_info(message)
@@ -520,12 +533,15 @@ async def download_music(message: types.Message):
         url,
     )
     status_message: Optional[types.Message] = None
+    business_id = message.business_connection_id
+    show_service_status = business_id is None
     try:
-        await react_to_message(message, "👾", skip_if_business=False)
+        await react_to_message(message, "👾", business_id=business_id)
         user_settings = await db.user_settings(resolve_settings_target_id(message))
         bot_url = await get_bot_url(bot)
         bot_avatar = await get_bot_avatar_thumbnail(bot)
-        status_message = await message.answer(bm.downloading_audio_status())
+        if show_service_status:
+            status_message = await message.answer(bm.downloading_audio_status())
 
         # Get YouTube audio object - run in thread pool
         yt = await asyncio.to_thread(get_youtube_video, url)
@@ -574,11 +590,11 @@ async def download_music(message: types.Message):
                 on_retry=on_retry_download,
             )
         if not metrics:
-            await handle_download_error(message, skip_if_business=False)
+            await handle_download_error(message, business_id=business_id)
             return
 
         await safe_edit_text(status_message, bm.uploading_status())
-        await bot.send_chat_action(message.chat.id, "upload_voice")
+        await send_chat_action_if_needed(bot, message.chat.id, "upload_voice", business_id)
 
         await message.answer_audio(
             audio=FSInputFile(metrics.path),
@@ -591,14 +607,20 @@ async def download_music(message: types.Message):
 
         await remove_file(metrics.path)
     except DownloadRateLimitError as e:
-        await message.reply(build_rate_limit_text(e.retry_after))
+        if show_service_status:
+            await message.reply(build_rate_limit_text(e.retry_after))
+        else:
+            await handle_download_error(message, business_id=business_id)
     except DownloadQueueBusyError as e:
-        await message.reply(build_queue_busy_text(e.position))
+        if show_service_status:
+            await message.reply(build_queue_busy_text(e.position))
+        else:
+            await handle_download_error(message, business_id=business_id)
     except DownloadTooLargeError:
         await message.reply(bm.audio_too_large())
     except Exception as e:
         logging.error(f"Audio download error: {e}")
-        await handle_download_error(message, skip_if_business=False)
+        await handle_download_error(message, business_id=business_id)
     finally:
         await safe_delete_message(status_message)
     await update_info(message)
@@ -611,7 +633,11 @@ async def download_youtube_mp3_callback(call: types.CallbackQuery):
         return
 
     await call.answer()
-    status_message = await call.message.answer(bm.downloading_audio_status())
+    business_id = call.message.business_connection_id
+    show_service_status = business_id is None
+    status_message: Optional[types.Message] = None
+    if show_service_status:
+        status_message = await call.message.answer(bm.downloading_audio_status())
     video_id = call.data.split(":", 2)[2]
     url = f"https://www.youtube.com/watch?v={video_id}"
     logging.info(
@@ -626,13 +652,13 @@ async def download_youtube_mp3_callback(call: types.CallbackQuery):
 
         yt = await asyncio.to_thread(get_youtube_video, url)
         if not yt:
-            await handle_download_error(call.message, skip_if_business=False)
+            await handle_download_error(call.message, business_id=business_id)
             return
 
         cache_key = f"{yt['webpage_url']}#audio"
         db_file_id = await db.get_file_id(cache_key)
         if db_file_id:
-            await bot.send_chat_action(call.message.chat.id, "upload_audio")
+            await send_chat_action_if_needed(bot, call.message.chat.id, "upload_audio", business_id)
             try:
                 await status_message.delete()
                 status_message = None
@@ -649,7 +675,7 @@ async def download_youtube_mp3_callback(call: types.CallbackQuery):
 
         base_name = f"{yt['id']}_youtube_audio"
         async def on_retry_download(failed_attempt: int, total_attempts: int, _error):
-            if failed_attempt >= 2:
+            if show_service_status and failed_attempt >= 2:
                 await safe_edit_text(
                     status_message,
                     bm.retrying_again_status(failed_attempt + 1, total_attempts),
@@ -668,7 +694,7 @@ async def download_youtube_mp3_callback(call: types.CallbackQuery):
             on_retry=on_retry_download,
         )
         if not metrics:
-            await handle_download_error(call.message, skip_if_business=False)
+            await handle_download_error(call.message, business_id=business_id)
             return
 
         if metrics.size >= MAX_FILE_SIZE:
@@ -676,7 +702,7 @@ async def download_youtube_mp3_callback(call: types.CallbackQuery):
             await remove_file(metrics.path)
             return
 
-        await bot.send_chat_action(call.message.chat.id, "upload_audio")
+        await send_chat_action_if_needed(bot, call.message.chat.id, "upload_audio", business_id)
         try:
             await status_message.delete()
             status_message = None

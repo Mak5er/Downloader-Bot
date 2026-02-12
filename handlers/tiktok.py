@@ -404,6 +404,7 @@ async def process_tiktok(message: types.Message):
     try:
         bot_url = await get_bot_url(bot)
         business_id = message.business_connection_id
+        show_service_status = business_id is None
         text = get_message_text(message)
 
         logging.info(
@@ -446,7 +447,7 @@ async def process_tiktok(message: types.Message):
             return payload.get("code") not in (0, None)
 
         async def _on_retry_fetch(failed_attempt: int, total_attempts: int, _error):
-            if failed_attempt >= 2 and not retry_notice_sent["value"]:
+            if show_service_status and failed_attempt >= 2 and not retry_notice_sent["value"]:
                 retry_notice_sent["value"] = True
                 await message.reply(bm.retrying_again_status(failed_attempt + 1, total_attempts))
 
@@ -536,7 +537,10 @@ async def process_tiktok_video(message: types.Message, data: dict, bot_url: str,
         await maybe_delete_user_message(message, user_settings["delete_message"])
         return
 
-    status_message = await message.answer(bm.downloading_video_status())
+    show_service_status = business_id is None
+    status_message: Optional[types.Message] = None
+    if show_service_status:
+        status_message = await message.answer(bm.downloading_video_status())
     download_path: Optional[str] = None
     progress_throttle_state = {"last": 0.0}
     request_id = f"tiktok_video:{message.chat.id}:{message.message_id}:{info.id}"
@@ -560,7 +564,7 @@ async def process_tiktok_video(message: types.Message, data: dict, bot_url: str,
             await safe_edit_text(status_message, build_progress_status("TikTok video", progress))
 
         async def _on_retry_download(failed_attempt: int, total_attempts: int, _error):
-            if failed_attempt >= 2:
+            if show_service_status and failed_attempt >= 2:
                 await safe_edit_text(
                     status_message,
                     bm.retrying_again_status(failed_attempt + 1, total_attempts),
@@ -612,12 +616,21 @@ async def process_tiktok_video(message: types.Message, data: dict, bot_url: str,
             logging.error("Error caching TikTok video: url=%s error=%s", db_video_url, e)
 
     except DownloadRateLimitError as e:
-        await message.reply(build_rate_limit_text(e.retry_after))
+        if show_service_status:
+            await message.reply(build_rate_limit_text(e.retry_after))
+        else:
+            await handle_download_error(message, business_id=business_id)
     except DownloadQueueBusyError as e:
-        await message.reply(build_queue_busy_text(e.position))
+        if show_service_status:
+            await message.reply(build_queue_busy_text(e.position))
+        else:
+            await handle_download_error(message, business_id=business_id)
     except asyncio.TimeoutError:
-        await safe_edit_text(status_message, bm.timeout_error())
-        await handle_download_error(message, business_id=business_id, text=bm.timeout_error())
+        if show_service_status:
+            await safe_edit_text(status_message, bm.timeout_error())
+            await handle_download_error(message, business_id=business_id, text=bm.timeout_error())
+        else:
+            await handle_download_error(message, business_id=business_id)
     except Exception as e:
         logging.exception("Error processing TikTok video: url=%s error=%s", db_video_url, e)
         await handle_download_error(message, business_id=business_id)
@@ -719,7 +732,11 @@ async def download_tiktok_mp3_callback(call: types.CallbackQuery):
         return
 
     await call.answer()
-    status_message = await call.message.answer(bm.downloading_audio_status())
+    business_id = call.message.business_connection_id
+    show_service_status = business_id is None
+    status_message: Optional[types.Message] = None
+    if show_service_status:
+        status_message = await call.message.answer(bm.downloading_audio_status())
     parts = call.data.split(":", 3)
     if len(parts) != 4:
         await handle_download_error(call.message)
@@ -744,7 +761,7 @@ async def download_tiktok_mp3_callback(call: types.CallbackQuery):
                 bot,
                 call.message.chat.id,
                 "upload_audio",
-                call.message.business_connection_id,
+                business_id,
             )
             try:
                 await status_message.delete()
@@ -767,7 +784,7 @@ async def download_tiktok_mp3_callback(call: types.CallbackQuery):
             return payload.get("code") not in (0, None)
 
         async def _on_retry_fetch(failed_attempt: int, total_attempts: int, _error):
-            if failed_attempt >= 2:
+            if show_service_status and failed_attempt >= 2:
                 await safe_edit_text(
                     status_message,
                     bm.retrying_again_status(failed_attempt + 1, total_attempts),
@@ -797,7 +814,7 @@ async def download_tiktok_mp3_callback(call: types.CallbackQuery):
             await safe_edit_text(status_message, build_progress_status("TikTok audio", progress))
 
         async def _on_retry_download(failed_attempt: int, total_attempts: int, _error):
-            if failed_attempt >= 2:
+            if show_service_status and failed_attempt >= 2:
                 await safe_edit_text(
                     status_message,
                     bm.retrying_again_status(failed_attempt + 1, total_attempts),
@@ -824,7 +841,7 @@ async def download_tiktok_mp3_callback(call: types.CallbackQuery):
             bot,
             call.message.chat.id,
             "upload_audio",
-            call.message.business_connection_id,
+            business_id,
         )
         try:
             await status_message.delete()
@@ -842,9 +859,15 @@ async def download_tiktok_mp3_callback(call: types.CallbackQuery):
 
         await remove_file(metrics.path)
     except DownloadRateLimitError as e:
-        await call.message.reply(build_rate_limit_text(e.retry_after))
+        if show_service_status:
+            await call.message.reply(build_rate_limit_text(e.retry_after))
+        else:
+            await handle_download_error(call.message, business_id=business_id)
     except DownloadQueueBusyError as e:
-        await call.message.reply(build_queue_busy_text(e.position))
+        if show_service_status:
+            await call.message.reply(build_queue_busy_text(e.position))
+        else:
+            await handle_download_error(call.message, business_id=business_id)
     finally:
         if status_message:
             try:
