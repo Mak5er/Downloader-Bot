@@ -489,7 +489,7 @@ async def stats_command(message: types.Message):
 
         await remove_file(filename)
     except Exception:
-        await message.answer("Could not generate stats right now. Please try again later.")
+        await message.answer(bm.stats_temporarily_unavailable())
         logging.exception("Error handling /stats")
 
 

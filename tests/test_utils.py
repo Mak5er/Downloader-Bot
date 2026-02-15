@@ -1,6 +1,6 @@
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
-
+import messages as bm
 import pytest
 
 from handlers import utils
@@ -28,7 +28,7 @@ async def test_maybe_delete_user_message_handles_error(monkeypatch):
     result = await utils.maybe_delete_user_message(message, "on")
 
     assert result is False
-    message.answer.assert_awaited_once_with(utils.DELETE_WARNING_TEXT)
+    message.answer.assert_awaited_once_with(bm.delete_permission_warning())
 
 
 @pytest.mark.asyncio

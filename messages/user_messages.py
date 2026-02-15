@@ -1,23 +1,30 @@
 def cancel():
-    return "❌ Cancel"
+    return "✖️ Cancel"
 
 
 def welcome_message():
-    return "Welcome to MaxLoad Downloader! Send me a link to download the video."
+    return (
+        '<b>Welcome to MaxLoad <tg-emoji emoji-id="5420141555233071341">❤️</tg-emoji></b>\n\n'
+        "Drop a link and I'll download media from:\n"
+        '<tg-emoji emoji-id="5897688871407193475">📷</tg-emoji> Instagram\n'
+        '<tg-emoji emoji-id="5895712202903522988">🎵</tg-emoji> TikTok\n'
+        '<tg-emoji emoji-id="5897615917092703809">▶️</tg-emoji> YouTube\n'
+        '<tg-emoji emoji-id="5897842755790441683">🐦</tg-emoji> X (Twitter)\n\n'
+        "Use /settings to customize captions, buttons, and chat auto-delete."
+    )
 
 
 def settings():
     return (
         "<b>⚙️ Settings</b>\n"
-        "Using the buttons below, you can customize the bot's functionalities. "
-        "Keep in mind that all the changes made will only apply to you."
+        "Use the buttons below to customize how downloads are sent. "
+        "These changes apply only to your account."
     )
 
 
 def settings_private_only():
     return (
-        "Settings are available only in a private chat. "
-        "Please message the bot directly to update your preferences."
+        "Settings are available only in private chat. Open DM with the bot to change preferences."
     )
 
 
@@ -25,28 +32,27 @@ def get_field_text(field: str):
     texts = {
         "captions": (
             "<b>📝 Descriptions</b>\n"
-            "Choose if you want to add a short description to downloaded content. "
-            "Keep in mind that some extractors still don't support this feature."
+            "Show or hide post captions in downloaded media. "
+            "Some sources may not provide captions."
         ),
         "delete_message": (
             "<b>🗑️ Delete Messages</b>\n"
-            "Automatically delete URLs after they are processed. "
-            "Useful if you want to keep your chat clean."
+            "Automatically remove your link once the download is handled."
         ),
         "info_buttons": (
             "<b>ℹ️ Info Buttons</b>\n"
-            "Show or hide additional info buttons in messages."
+            "Toggle additional info buttons under downloaded media."
         ),
         "url_button": (
             "<b>🔗 URL Button</b>\n"
-            "Enable or disable a button with the direct URL to the downloaded content."
+            "Show or hide a button with the original post link."
         ),
         "audio_button": (
             "<b>🎧 MP3 Button</b>\n"
-            "Show or hide the Download MP3 button under videos with audio."
+            "Toggle the Download MP3 button when audio is available."
         ),
     }
-    return texts.get(field, "<b>Settings</b>\nNo description available for this option.")
+    return texts.get(field, "<b>Settings</b>\nThis option doesn't have a description yet.")
 
 
 def captions(user_captions, post_caption, bot_url, *, limit: int = 1024):
@@ -58,14 +64,13 @@ def captions(user_captions, post_caption, bot_url, *, limit: int = 1024):
         if len(value) <= max_len:
             return value
         cut = value[:max_len]
-        # Avoid ending in the middle of an HTML entity (e.g. "&amp").
         amp = cut.rfind("&")
         semi = cut.rfind(";")
         if amp > semi:
             cut = cut[:amp]
         return cut
 
-    footer = '🚀 Powered by <a href="{bot_url}">MaxLoad</a>'.format(bot_url=bot_url)
+    footer = '<tg-emoji emoji-id="5283080528818360566">🚀</tg-emoji> Powered by <a href="{bot_url}">MaxLoad</a>'.format(bot_url=bot_url)
 
     if user_captions == "on" and post_caption:
         body = html.escape(str(post_caption))
@@ -85,23 +90,23 @@ def captions(user_captions, post_caption, bot_url, *, limit: int = 1024):
 
 
 def downloading_audio_status():
-    return "🎧 Downloading audio, please wait..."
+    return "🎧 Downloading audio..."
 
 
 def downloading_video_status():
-    return "🎬 Downloading video, please wait..."
+    return "<tg-emoji emoji-id='5375464961822695044'>🎬</tg-emoji> Downloading video..."
 
 
 def fetching_info_status():
-    return "🔎 Fetching info..."
+    return "<tg-emoji emoji-id='5188217332748527444'>🔎</tg-emoji> Fetching info..."
 
 
 def uploading_status():
-    return "☁️ Uploading to Telegram..."
+    return "☁️ Uploading file to Telegram..."
 
 
 def timeout_error():
-    return "⏱️ Timed out. Please try again later."
+    return "<tg-emoji emoji-id='5413704112220949842'>⏰</tg-emoji> Request timed out. Please try again later."
 
 
 def retrying_again_status(next_attempt: int, total_attempts: int):
@@ -109,46 +114,72 @@ def retrying_again_status(next_attempt: int, total_attempts: int):
 
 
 def dm_start_required():
-    return "🔒 Please open the bot in private chat and press Start so I can process your link."
+    return "<tg-emoji emoji-id='5472308992514464048'>🔒</tg-emoji> First-time setup needed: open DM, press Start, and resend the link."
 
 
 def settings_admin_only():
-    return "Only group admins can use /settings in group chats."
+    return "Only group admins can open /settings in group chats."
 
 
 def join_group(chat_title: str) -> str:
     return (
-        "👋 Hi! Thanks for adding me to <b>{chat_title}</b> 🌸\n"
+        "Thanks for adding me to <b>{chat_title}</b> <tg-emoji emoji-id='5280764381804650651'>🌸</tg-emoji>\n"
         "Please grant me <b>admin rights</b> to unlock full functionality 🔓"
     ).format(chat_title=chat_title)
 
 
 def admin_rights_granted(chat_title: str) -> str:
     return (
-        "Thanks for granting admin rights in <b>{chat_title}</b> 🌸\n"
+        "Thanks for granting admin rights in <b>{chat_title}</b> <tg-emoji emoji-id='5280764381804650651'>🌸</tg-emoji>\n"
         "💻 I'll keep downloads running smoothly."
     ).format(chat_title=chat_title)
 
 
 def something_went_wrong():
-    return "Something went wrong :(\nPlease try again later."
+    return "<tg-emoji emoji-id='5447644880824181073'>⚠️</tg-emoji> Couldn't process this link right now. \nPlease try again later."
 
 
 def video_too_large():
-    return "The video is too large."
+    return "The video is too large for Telegram."
 
 
 def audio_too_large():
-    return "The audio is too large."
+    return "The audio is too large for Telegram."
 
 
 def nothing_found():
-    return "Nothing found. Please check the link and try again."
+    return (
+        "No media found. Check the link and try again."
+    )
 
 
 def keyboard_removed():
-    return "Keyboard removed."
+    return "Reply keyboard removed."
 
 
 def tiktok_live_not_supported():
-    return "TikTok LIVE streams are not supported yet."
+    return "TikTok LIVE streams aren't supported yet. Send a regular TikTok post link."
+
+
+def delete_permission_warning():
+    return "Auto-delete failed: missing permission to delete messages in this chat. Please grant delete permissions or turn off auto-delete in settings."
+
+
+def stats_temporarily_unavailable():
+    return "Couldn't generate stats right now. Please try again later."
+
+
+def no_queue_metrics_yet():
+    return "No queue metrics yet."
+
+
+def open_bot_for_audio():
+    return "Open the bot in private chat to download audio."
+
+
+def audio_fetch_failed():
+    return "Failed to get audio info. Please try again later."
+
+
+def audio_download_failed():
+    return "Audio download failed. Please try again later."

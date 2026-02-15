@@ -461,7 +461,7 @@ async def process_instagram_media_group(message: types.Message, data: InstagramV
 @router.callback_query(F.data.startswith("audio:inst:"))
 async def download_instagram_audio_callback(call: types.CallbackQuery):
     if not call.message:
-        await call.answer("Open the bot to download audio", show_alert=True)
+        await call.answer(bm.open_bot_for_audio(), show_alert=True)
         return
 
     await call.answer()
@@ -504,7 +504,7 @@ async def download_instagram_audio_callback(call: types.CallbackQuery):
         data = await inst_service.fetch_data(original_url, audio_only=True)
         if not data or not data.media_list:
             if show_service_status:
-                await safe_edit_text(status_message, "Error fetching audio.")
+                await safe_edit_text(status_message, bm.audio_fetch_failed())
             else:
                 await handle_download_error(call.message, business_id=business_id)
             logging.error("Failed to fetch Instagram audio: url=%s", original_url)
@@ -538,14 +538,14 @@ async def download_instagram_audio_callback(call: types.CallbackQuery):
         )
         if not metrics:
             if show_service_status:
-                await safe_edit_text(status_message, "Error downloading audio.")
+                await safe_edit_text(status_message, bm.audio_download_failed())
             else:
                 await handle_download_error(call.message, business_id=business_id)
             return
 
         if metrics.size >= MAX_FILE_SIZE:
             if show_service_status:
-                await safe_edit_text(status_message, "Audio is too large for Telegram.")
+                await safe_edit_text(status_message, bm.audio_too_large())
             else:
                 await call.message.reply(bm.audio_too_large())
             await remove_file(metrics.path)

@@ -14,10 +14,6 @@ from log.logger import logger as logging
 from services.download_queue import QueueTicket
 from utils.download_manager import DownloadProgress
 
-DELETE_WARNING_TEXT = (
-    "I can't delete the link in this chat because I don't have enough permissions."
-)
-
 _bot_avatar_file_id: Optional[str] = None
 _bot_avatar_path: Optional[str] = None
 _bot_username: Optional[str] = None
@@ -132,7 +128,7 @@ async def maybe_delete_user_message(message: types.Message, delete_flag) -> bool
         await message.delete()
         return True
     except TelegramAPIError:
-        await message.answer(DELETE_WARNING_TEXT)
+        await message.answer(bm.delete_permission_warning())
         return False
 
 

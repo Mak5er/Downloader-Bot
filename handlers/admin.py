@@ -72,7 +72,7 @@ async def perf_metrics(message: types.Message):
     queue = get_download_queue()
     snapshot = await queue.metrics_snapshot()
     if not snapshot:
-        await message.answer("No queue metrics collected yet.")
+        await message.answer(bm.no_queue_metrics_yet())
         return
 
     lines = ["<b>Queue performance (p50/p95)</b>"]
