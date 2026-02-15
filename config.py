@@ -15,10 +15,9 @@ OUTPUT_DIR = "downloads"
 COBALT_API_URL = os.getenv("COBALT_API_URL")
 
 BOT_COMMANDS = [
-    {'command': 'start', 'description': '🚀Початок роботи / Get started🔥'},
-    {'command': 'settings', 'description': '⚙️Налаштування / Settings🛠'},
-    {'command': 'stats', 'description': '📊Статистика / Statistics📈'},
-    {'command': 'remove_keyboard', 'description': '🗑️Прибрати клавіатуру / Remove keyboard🗑️'},
+    {'command': 'start', 'description': '🚀 Get started'},
+    {'command': 'settings', 'description': '⚙️ Settings'},
+    {'command': 'stats', 'description': '📊 Statistics'},
 
 ]
 ADMINS_UID = [admin_id]
