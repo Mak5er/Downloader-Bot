@@ -13,6 +13,7 @@ API_SECRET = str(os.getenv("API_SECRET"))
 CHANNEL_ID = str(os.getenv("CHANNEL_ID"))
 OUTPUT_DIR = "downloads"
 COBALT_API_URL = os.getenv("COBALT_API_URL")
+COBALT_API_KEY = os.getenv("COBALT_API_KEY")
 
 BOT_COMMANDS = [
     {'command': 'start', 'description': '🚀 Get started'},

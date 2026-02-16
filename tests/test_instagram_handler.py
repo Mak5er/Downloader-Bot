@@ -1,4 +1,4 @@
-﻿import pytest
+import pytest
 
 from handlers import instagram
 from utils.download_manager import DownloadMetrics
@@ -45,43 +45,21 @@ async def test_instagram_service_download_media_handles_error(monkeypatch, tmp_p
     assert await service.download_media("https://example.com/v.mp4", "ig.mp4") is None
 
 
-class _DummyResponse:
-    def __init__(self, status, payload):
-        self.status = status
-        self._payload = payload
-
-    async def json(self, content_type=None):
-        return self._payload
-
-
-class _DummyRequestCtx:
-    def __init__(self, response):
-        self._response = response
-
-    async def __aenter__(self):
-        return self._response
-
-    async def __aexit__(self, exc_type, exc, tb):
-        return False
-
-
-class _DummySession:
-    def __init__(self, response):
-        self._response = response
-
-    def post(self, *_args, **_kwargs):
-        return _DummyRequestCtx(self._response)
-
-
 @pytest.mark.asyncio
-async def test_instagram_service_fetch_data_parses_single_url(monkeypatch, tmp_path):
-    payload = {"url": "https://cdn.example.com/video.mp4"}
+async def test_instagram_service_fetch_data_parses_tunnel(monkeypatch, tmp_path):
+    payload_response = {"status": "tunnel", "url": "https://cdn.example.com/video.mp4"}
+    captured = {}
 
-    async def fake_get_http_session():
-        return _DummySession(_DummyResponse(200, payload))
+    async def fake_fetch_cobalt_data(base_url, api_key, payload, **kwargs):
+        captured["base_url"] = base_url
+        captured["api_key"] = api_key
+        captured["payload"] = payload
+        captured["kwargs"] = kwargs
+        return payload_response
 
     monkeypatch.setattr(instagram, "COBALT_API_URL", "https://cobalt.test")
-    monkeypatch.setattr(instagram, "get_http_session", fake_get_http_session)
+    monkeypatch.setattr(instagram, "COBALT_API_KEY", "test-key")
+    monkeypatch.setattr(instagram, "fetch_cobalt_data", fake_fetch_cobalt_data)
 
     service = instagram.InstagramService(output_dir=str(tmp_path))
     data = await service.fetch_data("https://instagram.com/reel/xyz")
@@ -89,23 +67,27 @@ async def test_instagram_service_fetch_data_parses_single_url(monkeypatch, tmp_p
     assert data is not None
     assert len(data.media_list) == 1
     assert data.media_list[0].url == "https://cdn.example.com/video.mp4"
-    assert data.media_list[0].type in {"video", "photo"}
+    assert data.media_list[0].type == "video"
+    assert captured["base_url"] == "https://cobalt.test"
+    assert captured["api_key"] == "test-key"
+    assert captured["payload"]["downloadMode"] == "auto"
+    assert captured["kwargs"]["source"] == "instagram"
 
 
 @pytest.mark.asyncio
 async def test_instagram_service_fetch_data_parses_picker(monkeypatch, tmp_path):
     payload = {
+        "status": "picker",
         "picker": [
             {"type": "photo", "url": "https://cdn.example.com/1.jpg"},
             {"type": "video", "url": "https://cdn.example.com/2.mp4"},
-        ]
+        ],
     }
 
-    async def fake_get_http_session():
-        return _DummySession(_DummyResponse(200, payload))
+    async def fake_fetch_cobalt_data(*_args, **_kwargs):
+        return payload
 
-    monkeypatch.setattr(instagram, "COBALT_API_URL", "https://cobalt.test")
-    monkeypatch.setattr(instagram, "get_http_session", fake_get_http_session)
+    monkeypatch.setattr(instagram, "fetch_cobalt_data", fake_fetch_cobalt_data)
 
     service = instagram.InstagramService(output_dir=str(tmp_path))
     data = await service.fetch_data("https://instagram.com/p/abc")
@@ -116,3 +98,58 @@ async def test_instagram_service_fetch_data_parses_picker(monkeypatch, tmp_path)
         "https://cdn.example.com/1.jpg",
         "https://cdn.example.com/2.mp4",
     ]
+
+
+@pytest.mark.asyncio
+async def test_instagram_service_fetch_data_audio_uses_picker_audio(monkeypatch, tmp_path):
+    payload = {
+        "status": "picker",
+        "audio": "https://cdn.example.com/audio.mp3",
+        "picker": [
+            {"type": "photo", "url": "https://cdn.example.com/1.jpg"},
+        ],
+    }
+    captured = {}
+
+    async def fake_fetch_cobalt_data(_base_url, _api_key, request_payload, **_kwargs):
+        captured["payload"] = request_payload
+        return payload
+
+    monkeypatch.setattr(instagram, "fetch_cobalt_data", fake_fetch_cobalt_data)
+
+    service = instagram.InstagramService(output_dir=str(tmp_path))
+    data = await service.fetch_data("https://instagram.com/reel/xyz", audio_only=True)
+
+    assert data is not None
+    assert len(data.media_list) == 1
+    assert data.media_list[0].type == "audio"
+    assert data.media_list[0].url == "https://cdn.example.com/audio.mp3"
+    assert captured["payload"]["downloadMode"] == "audio"
+
+
+@pytest.mark.asyncio
+async def test_instagram_service_fetch_data_returns_none_on_error_status(monkeypatch, tmp_path):
+    payload = {"status": "error", "error": {"code": "api.fetch.failed"}}
+
+    async def fake_fetch_cobalt_data(*_args, **_kwargs):
+        return payload
+
+    monkeypatch.setattr(instagram, "fetch_cobalt_data", fake_fetch_cobalt_data)
+
+    service = instagram.InstagramService(output_dir=str(tmp_path))
+    data = await service.fetch_data("https://instagram.com/reel/xyz")
+
+    assert data is None
+
+
+@pytest.mark.asyncio
+async def test_instagram_service_fetch_data_returns_none_when_cobalt_client_fails(monkeypatch, tmp_path):
+    async def fake_fetch_cobalt_data(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(instagram, "fetch_cobalt_data", fake_fetch_cobalt_data)
+
+    service = instagram.InstagramService(output_dir=str(tmp_path))
+    data = await service.fetch_data("https://instagram.com/reel/xyz")
+
+    assert data is None
