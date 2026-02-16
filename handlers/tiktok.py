@@ -23,6 +23,7 @@ from handlers.utils import (
     build_progress_status,
     build_queue_busy_text,
     build_rate_limit_text,
+    build_start_deeplink_url,
     get_bot_url,
     get_bot_avatar_thumbnail,
     get_message_text,
@@ -50,6 +51,7 @@ from utils.download_manager import (
     log_download_metrics,
 )
 from utils.http_client import get_http_session
+from services.inline_album_links import create_inline_album_request
 
 MAX_FILE_SIZE = int(1.5 * 1024 * 1024 * 1024)  # 1.5 GB
 TIKTOK_USER_AGENT = (
@@ -400,12 +402,12 @@ tiktok_service = TikTokService(OUTPUT_DIR)
     F.text.regexp(r"(https?://(www\.|vm\.|vt\.|vn\.)?tiktok\.com/\S+)")
     | F.caption.regexp(r"(https?://(www\.|vm\.|vt\.|vn\.)?tiktok\.com/\S+)")
 )
-async def process_tiktok(message: types.Message):
+async def process_tiktok(message: types.Message, direct_url: Optional[str] = None):
     try:
         bot_url = await get_bot_url(bot)
         business_id = message.business_connection_id
         show_service_status = business_id is None
-        text = get_message_text(message)
+        text = direct_url or get_message_text(message)
 
         logging.info(
             "TikTok request received: user_id=%s username=%s business_id=%s text=%s",
@@ -418,7 +420,7 @@ async def process_tiktok(message: types.Message):
         stripped = (text or "").strip()
 
         # Profile lookup: allow messages like "@username" without a URL.
-        if re.fullmatch(r"@[\w.]{1,32}", stripped):
+        if direct_url is None and re.fullmatch(r"@[\w.]{1,32}", stripped):
             await react_to_message(message, "рџ‘ѕ", business_id=business_id)
             settings = await get_user_settings(message)
             await process_tiktok_profile(message, stripped, bot_url, settings["captions"])
@@ -967,21 +969,58 @@ async def inline_tiktok_query(query: types.InlineQuery):
                     logging.debug("Removed inline TikTok temp file: path=%s", download_path)
                 return
         elif images:
-            results.append(InlineQueryResultArticle(
-                id="unsupported_tiktok_photos",
-                title="📷 TikTok Photos",
-                description="⚠️ TikTok photos not supported inline.",
-                input_message_content=types.InputTextMessageContent(
-                    message_text="⚠️ TikTok photos not supported inline.")
-            ))
-            logging.info(
-                "Inline TikTok photos requested but unsupported: user_id=%s query=%s",
-                query.from_user.id,
-                query.query,
-            )
-            await query.answer(results, cache_time=10, is_personal=True)
-            return
-        await query.answer([], cache_time=1, is_personal=True)
+            first_photo = images[0] if images else None
+            if first_photo and match:
+                source_url = strip_tiktok_tracking(match.group(0))
+                if len(images) == 1:
+                    results.append(types.InlineQueryResultPhoto(
+                        id=f"tiktok_photo_{query.id}",
+                        photo_url=first_photo,
+                        thumbnail_url=first_photo,
+                        title=bm.inline_photo_title("TikTok"),
+                        description=bm.inline_photo_description(),
+                        caption=bm.captions(
+                            user_settings["captions"],
+                            info.description if info else None,
+                            bot_url,
+                        ),
+                        reply_markup=kb.return_video_info_keyboard(
+                            info.views if info else None,
+                            info.likes if info else None,
+                            info.comments if info else None,
+                            info.shares if info else None,
+                            info.music_play_url if info else None,
+                            source_url,
+                            user_settings,
+                        ),
+                        parse_mode="HTML",
+                    ))
+                    await query.answer(results, cache_time=10, is_personal=True)
+                    return
+
+                token = create_inline_album_request(query.from_user.id, "tiktok", source_url)
+                deep_link = build_start_deeplink_url(bot_url, f"album_{token}")
+                results.append(types.InlineQueryResultPhoto(
+                    id=f"tiktok_album_{query.id}",
+                    photo_url=first_photo,
+                    thumbnail_url=first_photo,
+                    title=bm.inline_album_title("TikTok"),
+                    description=bm.inline_album_description(),
+                    caption=bm.captions(
+                        user_settings["captions"],
+                        info.description if info else None,
+                        bot_url,
+                    ),
+                    reply_markup=types.InlineKeyboardMarkup(
+                        inline_keyboard=[[
+                            types.InlineKeyboardButton(text=bm.inline_open_full_album_button(), url=deep_link)
+                        ]]
+                    ),
+                    parse_mode="HTML",
+                ))
+                await query.answer(results, cache_time=10, is_personal=True)
+                return
+            
     except Exception as e:
         logging.exception(
             "Error processing inline TikTok query: user_id=%s query=%s error=%s",

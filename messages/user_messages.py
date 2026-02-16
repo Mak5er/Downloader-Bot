@@ -183,3 +183,35 @@ def audio_fetch_failed():
 
 def audio_download_failed():
     return "Audio download failed. Please try again later."
+
+
+def inline_album_link_invalid():
+    return "This album link is expired or invalid."
+
+
+def inline_photo_title(service_name: str):
+    return f"{service_name} Photo"
+
+
+def inline_photo_description():
+    return "Single photo"
+
+
+def inline_album_title(service_name: str):
+    return f"{service_name} Album"
+
+
+def inline_album_description():
+    return "Open full album in bot"
+
+
+def inline_open_full_album_button():
+    return "Open Full Album"
+
+
+def inline_photos_title(service_name: str):
+    return f"{service_name} Photos"
+
+
+def inline_photos_not_supported(service_name: str):
+    return f"{service_name} photos are not supported inline."

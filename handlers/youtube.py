@@ -1,7 +1,9 @@
 import asyncio
 import glob
+import hashlib
 import os
 import time
+import re
 from typing import Any, Optional
 
 from aiogram import types, Router, F
@@ -724,6 +726,104 @@ async def download_youtube_mp3_callback(call: types.CallbackQuery):
                 await status_message.delete()
             except Exception:
                 pass
+
+
+@router.inline_query(F.query.regexp(r"(https?://(?:www\.)?music\.youtube\.com/\S+)"))
+async def inline_youtube_music_query(query: types.InlineQuery):
+    metrics: Optional[DownloadMetrics] = None
+    try:
+        await send_analytics(
+            user_id=query.from_user.id,
+            chat_type=query.chat_type,
+            action_name="inline_youtube_music",
+        )
+
+        match = re.search(r"(https?://(?:www\.)?music\.youtube\.com/\S+)", query.query or "")
+        if not match:
+            await query.answer([], cache_time=1, is_personal=True)
+            return
+        if not CHANNEL_ID:
+            logging.error("CHANNEL_ID is not configured; YouTube Music inline is disabled")
+            await query.answer([], cache_time=1, is_personal=True)
+            return
+
+        url = match.group(0)
+        yt = await asyncio.to_thread(get_youtube_video, url)
+        if not yt:
+            await query.answer([], cache_time=1, is_personal=True)
+            return
+
+        user_settings = await db.user_settings(query.from_user.id)
+        bot_url = await get_bot_url(bot)
+        bot_avatar = await get_bot_avatar_thumbnail(bot)
+
+        webpage_url = yt.get("webpage_url") or url
+        cache_key = f"{webpage_url}#audio"
+        db_file_id = await db.get_file_id(cache_key)
+
+        if not db_file_id:
+            base_name = f"{yt.get('id', 'youtube_music')}_youtube_music_inline"
+            metrics = await retry_async_operation(
+                lambda: download_mp3_with_ytdlp_metrics(
+                    webpage_url,
+                    base_name,
+                    "youtube_music_inline_mp3",
+                    max_filesize=MAX_FILE_SIZE - 1,
+                ),
+                attempts=3,
+                delay_seconds=2.0,
+                should_retry_result=lambda result: result is None,
+            )
+            if not metrics:
+                await query.answer([], cache_time=1, is_personal=True)
+                return
+            if metrics.size >= MAX_FILE_SIZE:
+                await query.answer([], cache_time=1, is_personal=True)
+                return
+
+            send_kwargs = {
+                "chat_id": CHANNEL_ID,
+                "audio": FSInputFile(metrics.path),
+                "title": yt.get("title"),
+                "caption": f"🎵 YouTube Music from {query.from_user.full_name}",
+            }
+            if bot_avatar:
+                send_kwargs["thumbnail"] = bot_avatar
+
+            sent = await bot.send_audio(**send_kwargs)
+            db_file_id = sent.audio.file_id
+            await db.add_file(cache_key, db_file_id, "audio")
+            logging.info(
+                "YouTube music inline cached: url=%s file_id=%s",
+                webpage_url,
+                db_file_id,
+            )
+
+        if not db_file_id:
+            await query.answer([], cache_time=1, is_personal=True)
+            return
+
+        result_id = hashlib.md5(webpage_url.encode("utf-8")).hexdigest()[:32]
+        results = [
+            types.InlineQueryResultCachedAudio(
+                id=f"ytmusic_{result_id}",
+                audio_file_id=db_file_id,
+                caption=bm.captions(user_settings["captions"], None, bot_url),
+                parse_mode="HTML",
+            )
+        ]
+        await query.answer(results, cache_time=10, is_personal=True)
+    except Exception as e:
+        logging.exception(
+            "Error processing YouTube Music inline query: user_id=%s query=%s error=%s",
+            query.from_user.id,
+            query.query,
+            e,
+        )
+        await query.answer([], cache_time=1, is_personal=True)
+    finally:
+        if metrics and metrics.path:
+            await remove_file(metrics.path)
 
 
 @router.inline_query(F.query.regexp(r"(https?://(www\.)?(youtube|youtu|youtube-nocookie)\.(com|be)/(?!@)[\S]+)"))

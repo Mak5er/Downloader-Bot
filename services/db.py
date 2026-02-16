@@ -405,6 +405,10 @@ class DataBase:
             return "Instagram"
         if "youtube" in lower:
             return "YouTube"
+        if "soundcloud" in lower:
+            return "SoundCloud"
+        if "pinterest" in lower:
+            return "Pinterest"
         if "twitter" in lower or "x_" in lower:
             return "Twitter"
         return "Other"

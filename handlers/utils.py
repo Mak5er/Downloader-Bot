@@ -303,6 +303,13 @@ def build_queue_busy_text(position: int) -> str:
     )
 
 
+def build_start_deeplink_url(bot_url: str, payload: str) -> str:
+    base = (bot_url or "").strip()
+    if not base.startswith(("http://", "https://")):
+        base = f"https://{base.lstrip('/')}"
+    return f"{base}?start={payload}"
+
+
 async def retry_async_operation(
     operation: Callable[[], Awaitable[T]],
     *,

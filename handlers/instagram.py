@@ -6,19 +6,23 @@ from typing import Optional
 from dataclasses import dataclass
 from urllib.parse import urlparse, urlunparse
 
-import aiohttp
 from aiogram import types, Router, F
 from aiogram.types import FSInputFile
 from aiogram.utils.media_group import MediaGroupBuilder
 
 import keyboards as kb
 import messages as bm
-from config import OUTPUT_DIR, COBALT_API_URL
+from config import (
+    OUTPUT_DIR,
+    COBALT_API_URL,
+    COBALT_API_KEY,
+)
 from handlers.user import update_info
 from handlers.utils import (
     build_progress_status,
     build_queue_busy_text,
     build_rate_limit_text,
+    build_start_deeplink_url,
     get_bot_url,
     get_message_text,
     handle_download_error,
@@ -43,7 +47,8 @@ from utils.download_manager import (
     ResilientDownloader,
     log_download_metrics,
 )
-from utils.http_client import get_http_session
+from utils.cobalt_client import fetch_cobalt_data
+from services.inline_album_links import create_inline_album_request
 
 router = Router()
 
@@ -56,6 +61,43 @@ def strip_instagram_url(url: str) -> str:
     except Exception:
         return url
     return urlunparse((parsed.scheme, parsed.netloc, parsed.path, parsed.params, "", ""))
+
+
+def _classify_cobalt_media_type(
+    media_url: str,
+    *,
+    audio_only: bool = False,
+    declared_type: Optional[str] = None,
+    filename: Optional[str] = None,
+    mime_type: Optional[str] = None,
+) -> str:
+    if audio_only:
+        return "audio"
+
+    if declared_type:
+        normalized_type = declared_type.lower()
+        if normalized_type in {"video", "gif", "merge", "mute", "remux"}:
+            return "video"
+        if normalized_type == "photo":
+            return "photo"
+        if normalized_type == "audio":
+            return "audio"
+
+    if mime_type:
+        normalized_mime = mime_type.lower()
+        if normalized_mime.startswith("video/"):
+            return "video"
+        if normalized_mime.startswith("image/"):
+            return "photo"
+        if normalized_mime.startswith("audio/"):
+            return "audio"
+
+    probe = f"{media_url} {filename or ''}".lower()
+    if any(ext in probe for ext in (".mp3", ".m4a", ".aac", ".ogg", ".wav", ".opus")):
+        return "audio"
+    if any(ext in probe for ext in (".jpg", ".jpeg", ".png", ".webp", ".avif")):
+        return "photo"
+    return "video"
 
 
 @dataclass
@@ -92,47 +134,121 @@ class InstagramService:
         payload = {
             "url": url,
             "videoQuality": "720",
-            "downloadMode": "audio" if audio_only else "pro",
-            "alwaysProxy": True
+            "downloadMode": "audio" if audio_only else "auto",
+            "alwaysProxy": True,
+            "localProcessing": "disabled",
         }
-        headers = {
-            "Accept": "application/json",
-            "Content-Type": "application/json",
-        }
-
-        try:
-            session = await get_http_session()
-            async with session.post(
-                f"{COBALT_API_URL}/api/json",
-                json=payload,
-                headers=headers,
-                timeout=15,
-            ) as resp:
-                if resp.status != 200:
-                    logging.error("Cobalt error: status %s", resp.status)
-                    return None
-
-                data = await resp.json(content_type=None)
-                media_list = []
-
-                if "url" in data:
-                    m_type = "audio" if audio_only else ("video" if "mp4" in data["url"] else "photo")
-                    media_list.append(InstagramMedia(url=data["url"], type=m_type))
-
-                elif "picker" in data:
-                    for item in data["picker"]:
-                        m_type = "video" if item.get("type") == "video" else "photo"
-                        media_list.append(InstagramMedia(url=item["url"], type=m_type))
-
-                return InstagramVideo(
-                    id=str(int(datetime.datetime.now().timestamp())),
-                    description="",
-                    author="instagram_user",
-                    media_list=media_list
-                )
-        except Exception as e:
-            logging.error("Instagram fetch exception: %s", e)
+        data = await fetch_cobalt_data(
+            COBALT_API_URL,
+            COBALT_API_KEY,
+            payload,
+            source="instagram",
+            timeout=15,
+            attempts=3,
+            retry_delay=0.0,
+        )
+        if not data:
             return None
+
+        media_list = []
+        status = data.get("status")
+
+        # Backward compatibility with old Cobalt response structure.
+        if not status:
+            if "url" in data:
+                status = "tunnel"
+            elif "picker" in data:
+                status = "picker"
+
+        if status in {"tunnel", "redirect"}:
+            media_url = data.get("url")
+            if isinstance(media_url, str) and media_url:
+                media_list.append(
+                    InstagramMedia(
+                        url=media_url,
+                        type=_classify_cobalt_media_type(
+                            media_url,
+                            audio_only=audio_only,
+                            filename=data.get("filename"),
+                        ),
+                    )
+                )
+
+        elif status == "picker":
+            picker_audio_url = data.get("audio")
+            if audio_only and isinstance(picker_audio_url, str) and picker_audio_url:
+                media_list.append(InstagramMedia(url=picker_audio_url, type="audio"))
+            else:
+                picker_items = data.get("picker") or []
+                for item in picker_items:
+                    if not isinstance(item, dict):
+                        continue
+                    media_url = item.get("url")
+                    if not isinstance(media_url, str) or not media_url:
+                        continue
+                    media_list.append(
+                        InstagramMedia(
+                            url=media_url,
+                            type=_classify_cobalt_media_type(
+                                media_url,
+                                audio_only=audio_only,
+                                declared_type=item.get("type"),
+                            ),
+                        )
+                    )
+
+        elif status == "local-processing":
+            tunnel_urls = data.get("tunnel") or []
+            output = data.get("output") or {}
+            if not isinstance(tunnel_urls, list) or not tunnel_urls:
+                logging.error("Cobalt local-processing response has no tunnels: payload=%s", data)
+                return None
+            if not audio_only and len(tunnel_urls) > 1:
+                logging.error(
+                    "Unsupported Cobalt local-processing payload for Instagram: type=%s tunnel_count=%s",
+                    data.get("type"),
+                    len(tunnel_urls),
+                )
+                return None
+            for media_url in tunnel_urls:
+                if not isinstance(media_url, str) or not media_url:
+                    continue
+                media_list.append(
+                    InstagramMedia(
+                        url=media_url,
+                        type=_classify_cobalt_media_type(
+                            media_url,
+                            audio_only=audio_only,
+                            declared_type=data.get("type"),
+                            filename=output.get("filename") if isinstance(output, dict) else None,
+                            mime_type=output.get("type") if isinstance(output, dict) else None,
+                        ),
+                    )
+                )
+
+        elif status == "error":
+            error_obj = data.get("error") or {}
+            logging.error(
+                "Cobalt API returned error: code=%s context=%s",
+                error_obj.get("code") if isinstance(error_obj, dict) else None,
+                error_obj.get("context") if isinstance(error_obj, dict) else None,
+            )
+            return None
+
+        else:
+            logging.error("Unsupported Cobalt response status: status=%s payload=%s", status, data)
+            return None
+
+        if not media_list:
+            logging.error("Cobalt response has no media items: status=%s payload=%s", status, data)
+            return None
+
+        return InstagramVideo(
+            id=str(int(datetime.datetime.now().timestamp())),
+            description="",
+            author="instagram_user",
+            media_list=media_list
+        )
 
     async def download_media(
         self,
@@ -176,16 +292,19 @@ inst_service = InstagramService(OUTPUT_DIR)
 
 @router.message(F.text.regexp(r"(https?://(www\.)?instagram\.com/(p|reels|reel)/[^/?#&]+)"))
 @router.business_message(F.text.regexp(r"(https?://(www\.)?instagram\.com/(p|reels|reel)/[^/?#&]+)"))
-async def process_instagram(message: types.Message):
+async def process_instagram(message: types.Message, direct_url: Optional[str] = None):
     try:
         bot_url = await get_bot_url(bot)
         business_id = message.business_connection_id
         text = get_message_text(message)
 
-        url_match = re.search(r"(https?://(www\.)?instagram\.com/(p|reels|reel)/[^/?#&]+)", text)
-        if not url_match:
-            return
-        url = strip_instagram_url(url_match.group(0))
+        if direct_url:
+            url = strip_instagram_url(direct_url)
+        else:
+            url_match = re.search(r"(https?://(www\.)?instagram\.com/(p|reels|reel)/[^/?#&]+)", text)
+            if not url_match:
+                return
+            url = strip_instagram_url(url_match.group(0))
 
         logging.info("Instagram request: user_id=%s url=%s", message.from_user.id, url)
         user_settings = await get_user_settings(message)
@@ -225,9 +344,9 @@ async def process_instagram(message: types.Message):
         await update_info(message)
 
 
-async def process_instagram_url(message: types.Message):
+async def process_instagram_url(message: types.Message, url: Optional[str] = None):
     """Backward-compatible entrypoint used by pending-request flow."""
-    await process_instagram(message)
+    await process_instagram(message, direct_url=url)
 
 
 async def process_instagram_video(message: types.Message, data: InstagramVideo, original_url: str, bot_url: str,
@@ -697,25 +816,49 @@ async def inline_instagram_query(query: types.InlineQuery):
                 await query.answer(results, cache_time=10, is_personal=True)
                 return
 
-        else:
-            results = [
-                types.InlineQueryResultArticle(
-                    id="unsupported_instagram_content",
-                    title="📷 Instagram Content",
-                    description="⚠️ Only single videos supported inline.",
-                    input_message_content=types.InputTextMessageContent(
-                        message_text="⚠️ Only single Instagram videos supported inline. Use regular chat for albums/photos."
+        elif any(item.type == "photo" for item in data.media_list):
+            photo_items = [item for item in data.media_list if item.type == "photo"]
+            first_photo = photo_items[0] if photo_items else None
+            if first_photo:
+                if len(photo_items) == 1 and len(data.media_list) == 1:
+                    results = [
+                        types.InlineQueryResultPhoto(
+                            id=f"instagram_photo_{data.id}",
+                            photo_url=first_photo.url,
+                            thumbnail_url=first_photo.url,
+                            title=bm.inline_photo_title("Instagram"),
+                            description=bm.inline_photo_description(),
+                            caption=bm.captions(user_settings["captions"], data.description, bot_url),
+                            reply_markup=kb.return_video_info_keyboard(
+                                None, None, None, None, None, original_url, user_settings,
+                                audio_callback_data=None,
+                            ),
+                            parse_mode="HTML",
+                        )
+                    ]
+                    await query.answer(results, cache_time=10, is_personal=True)
+                    return
+
+                token = create_inline_album_request(query.from_user.id, "instagram", original_url)
+                deep_link = build_start_deeplink_url(bot_url, f"album_{token}")
+                results = [
+                    types.InlineQueryResultPhoto(
+                        id=f"instagram_album_{data.id}",
+                        photo_url=first_photo.url,
+                        thumbnail_url=first_photo.url,
+                        title=bm.inline_album_title("Instagram"),
+                        description=bm.inline_album_description(),
+                        caption=bm.captions(user_settings["captions"], data.description, bot_url),
+                        reply_markup=types.InlineKeyboardMarkup(
+                            inline_keyboard=[[
+                                types.InlineKeyboardButton(text=bm.inline_open_full_album_button(), url=deep_link)
+                            ]]
+                        ),
+                        parse_mode="HTML",
                     )
-                )
-            ]
-            logging.info(
-                "Inline Instagram non-video content requested: user_id=%s url=%s media_count=%s",
-                query.from_user.id,
-                original_url,
-                len(data.media_list),
-            )
-            await query.answer(results, cache_time=10, is_personal=True)
-            return
+                ]
+                await query.answer(results, cache_time=10, is_personal=True)
+                return
 
     except Exception as e:
         logging.exception(
