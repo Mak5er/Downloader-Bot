@@ -24,12 +24,13 @@ router = Router()
 _UPDATE_INFO_TTL_SECONDS = 120.0
 _update_info_cache: dict[int, tuple[float, str, Optional[str]]] = {}
 
-SERVICE_ORDER = ["Instagram", "TikTok", "YouTube", "Twitter", "Other"]
-SERVICE_COLORS = ["#6C5DD3", "#FF6B6B", "#28C76F", "#00CFE8", "#FFA500"]
+SERVICE_ORDER = ["Instagram", "TikTok", "YouTube", "SoundCloud", "Twitter", "Other"]
+SERVICE_COLORS = ["#6C5DD3", "#FF6B6B", "#28C76F", "#FF8800", "#00CFE8", "#FFA500"]
 SERVICE_EMOJI = {
     "Instagram": "📸",
     "TikTok": "🎵",
     "YouTube": "▶️",
+    "SoundCloud": "🎧",
     "Twitter": "🐦",
     "Other": "📦",
 }
@@ -154,6 +155,15 @@ async def _process_pending_message(message: types.Message) -> None:
     if re.search(r"(https?://(www\.)?instagram\.com/\S+)", text, re.IGNORECASE):
         from handlers import instagram
         await instagram.process_instagram_url(message)
+        return
+
+    if re.search(
+        r"(https?://(?:www\.|m\.)?soundcloud\.com/\S+|https?://on\.soundcloud\.com/\S+|https?://soundcloud\.app\.goo\.gl/\S+)",
+        text,
+        re.IGNORECASE,
+    ):
+        from handlers import soundcloud
+        await soundcloud.process_soundcloud_url(message)
         return
 
     if re.search(r"(https?://(www\.)?(youtube|youtu|youtube-nocookie)\.(com|be)/\S+)", text, re.IGNORECASE):
