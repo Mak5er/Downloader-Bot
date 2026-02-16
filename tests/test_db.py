@@ -10,6 +10,7 @@ from services import db as db_module
 def test_map_action_to_service_includes_soundcloud():
     assert db_module.DataBase._map_action_to_service("soundcloud_audio") == "SoundCloud"
     assert db_module.DataBase._map_action_to_service("inline_soundcloud_audio") == "SoundCloud"
+    assert db_module.DataBase._map_action_to_service("pinterest_media") == "Pinterest"
 
 
 @pytest_asyncio.fixture
@@ -202,9 +203,18 @@ async def test_downloaded_files_by_service(database):
                     created_at=today,
                 )
             )
+            session.add(
+                db_module.AnalyticsEvent(
+                    user_id=1,
+                    chat_type="private",
+                    action_name="pinterest_media",
+                    created_at=today,
+                )
+            )
 
     by_service = await database.get_downloaded_files_by_service("Year")
     assert by_service["Instagram"][today_str] == 1
     assert by_service["TikTok"][today_str] == 1
     assert by_service["SoundCloud"][today_str] == 1
+    assert by_service["Pinterest"][today_str] == 1
     assert by_service["Other"][today_str] == 1

@@ -258,7 +258,7 @@ async def process_soundcloud(message: types.Message):
 
         logging.info("SoundCloud request: user_id=%s url=%s", message.from_user.id, source_url)
         await send_analytics(user_id=message.from_user.id, chat_type=message.chat.type, action_name="soundcloud_audio")
-        await react_to_message(message, "рџ‘ѕ", business_id=business_id)
+        await react_to_message(message, "\U0001F47E", business_id=business_id)
         user_settings = await get_user_settings(message)
         bot_url = await get_bot_url(bot)
 

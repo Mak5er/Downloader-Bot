@@ -60,6 +60,27 @@ async def test_send_welcome(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_send_welcome_deeplink_skips_default_welcome(monkeypatch):
+    fake_send_analytics = AsyncMock()
+    fake_update_info = AsyncMock()
+    fake_process_deeplink = AsyncMock(return_value=True)
+
+    monkeypatch.setattr(user, "send_analytics", fake_send_analytics)
+    monkeypatch.setattr(user, "update_info", fake_update_info)
+    monkeypatch.setattr(user, "_extract_start_payload", lambda _text: "album_token")
+    monkeypatch.setattr(user, "_process_inline_album_deeplink", fake_process_deeplink)
+
+    message = DummyMessage()
+    message.text = "/start album_token"
+    await user.send_welcome(message)
+
+    fake_send_analytics.assert_awaited_once()
+    fake_update_info.assert_awaited_once_with(message)
+    fake_process_deeplink.assert_awaited_once_with(message, "album_token")
+    message.reply.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_settings_menu_private(monkeypatch):
     fake_send_analytics = AsyncMock()
     fake_db = SimpleNamespace(

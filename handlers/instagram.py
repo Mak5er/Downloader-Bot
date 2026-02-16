@@ -22,6 +22,7 @@ from handlers.utils import (
     build_progress_status,
     build_queue_busy_text,
     build_rate_limit_text,
+    build_start_deeplink_url,
     get_bot_url,
     get_message_text,
     handle_download_error,
@@ -47,6 +48,7 @@ from utils.download_manager import (
     log_download_metrics,
 )
 from utils.cobalt_client import fetch_cobalt_data
+from services.inline_album_links import create_inline_album_request
 
 router = Router()
 
@@ -290,16 +292,19 @@ inst_service = InstagramService(OUTPUT_DIR)
 
 @router.message(F.text.regexp(r"(https?://(www\.)?instagram\.com/(p|reels|reel)/[^/?#&]+)"))
 @router.business_message(F.text.regexp(r"(https?://(www\.)?instagram\.com/(p|reels|reel)/[^/?#&]+)"))
-async def process_instagram(message: types.Message):
+async def process_instagram(message: types.Message, direct_url: Optional[str] = None):
     try:
         bot_url = await get_bot_url(bot)
         business_id = message.business_connection_id
         text = get_message_text(message)
 
-        url_match = re.search(r"(https?://(www\.)?instagram\.com/(p|reels|reel)/[^/?#&]+)", text)
-        if not url_match:
-            return
-        url = strip_instagram_url(url_match.group(0))
+        if direct_url:
+            url = strip_instagram_url(direct_url)
+        else:
+            url_match = re.search(r"(https?://(www\.)?instagram\.com/(p|reels|reel)/[^/?#&]+)", text)
+            if not url_match:
+                return
+            url = strip_instagram_url(url_match.group(0))
 
         logging.info("Instagram request: user_id=%s url=%s", message.from_user.id, url)
         user_settings = await get_user_settings(message)
@@ -339,9 +344,9 @@ async def process_instagram(message: types.Message):
         await update_info(message)
 
 
-async def process_instagram_url(message: types.Message):
+async def process_instagram_url(message: types.Message, url: Optional[str] = None):
     """Backward-compatible entrypoint used by pending-request flow."""
-    await process_instagram(message)
+    await process_instagram(message, direct_url=url)
 
 
 async def process_instagram_video(message: types.Message, data: InstagramVideo, original_url: str, bot_url: str,
@@ -811,25 +816,49 @@ async def inline_instagram_query(query: types.InlineQuery):
                 await query.answer(results, cache_time=10, is_personal=True)
                 return
 
-        else:
-            results = [
-                types.InlineQueryResultArticle(
-                    id="unsupported_instagram_content",
-                    title="📷 Instagram Content",
-                    description="⚠️ Only single videos supported inline.",
-                    input_message_content=types.InputTextMessageContent(
-                        message_text="⚠️ Only single Instagram videos supported inline. Use regular chat for albums/photos."
+        elif any(item.type == "photo" for item in data.media_list):
+            photo_items = [item for item in data.media_list if item.type == "photo"]
+            first_photo = photo_items[0] if photo_items else None
+            if first_photo:
+                if len(photo_items) == 1 and len(data.media_list) == 1:
+                    results = [
+                        types.InlineQueryResultPhoto(
+                            id=f"instagram_photo_{data.id}",
+                            photo_url=first_photo.url,
+                            thumbnail_url=first_photo.url,
+                            title=bm.inline_photo_title("Instagram"),
+                            description=bm.inline_photo_description(),
+                            caption=bm.captions(user_settings["captions"], data.description, bot_url),
+                            reply_markup=kb.return_video_info_keyboard(
+                                None, None, None, None, None, original_url, user_settings,
+                                audio_callback_data=None,
+                            ),
+                            parse_mode="HTML",
+                        )
+                    ]
+                    await query.answer(results, cache_time=10, is_personal=True)
+                    return
+
+                token = create_inline_album_request(query.from_user.id, "instagram", original_url)
+                deep_link = build_start_deeplink_url(bot_url, f"album_{token}")
+                results = [
+                    types.InlineQueryResultPhoto(
+                        id=f"instagram_album_{data.id}",
+                        photo_url=first_photo.url,
+                        thumbnail_url=first_photo.url,
+                        title=bm.inline_album_title("Instagram"),
+                        description=bm.inline_album_description(),
+                        caption=bm.captions(user_settings["captions"], data.description, bot_url),
+                        reply_markup=types.InlineKeyboardMarkup(
+                            inline_keyboard=[[
+                                types.InlineKeyboardButton(text=bm.inline_open_full_album_button(), url=deep_link)
+                            ]]
+                        ),
+                        parse_mode="HTML",
                     )
-                )
-            ]
-            logging.info(
-                "Inline Instagram non-video content requested: user_id=%s url=%s media_count=%s",
-                query.from_user.id,
-                original_url,
-                len(data.media_list),
-            )
-            await query.answer(results, cache_time=10, is_personal=True)
-            return
+                ]
+                await query.answer(results, cache_time=10, is_personal=True)
+                return
 
     except Exception as e:
         logging.exception(

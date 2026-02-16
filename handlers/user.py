@@ -17,6 +17,7 @@ import messages as bm
 from handlers.utils import get_message_text, remove_file
 from log.logger import logger as logging
 from main import db, send_analytics, bot
+from services.inline_album_links import get_inline_album_request
 from services.pending_requests import pop_pending
 
 router = Router()
@@ -24,13 +25,14 @@ router = Router()
 _UPDATE_INFO_TTL_SECONDS = 120.0
 _update_info_cache: dict[int, tuple[float, str, Optional[str]]] = {}
 
-SERVICE_ORDER = ["Instagram", "TikTok", "YouTube", "SoundCloud", "Twitter", "Other"]
-SERVICE_COLORS = ["#6C5DD3", "#FF6B6B", "#28C76F", "#FF8800", "#00CFE8", "#FFA500"]
+SERVICE_ORDER = ["Instagram", "TikTok", "YouTube", "SoundCloud", "Pinterest", "Twitter", "Other"]
+SERVICE_COLORS = ["#6C5DD3", "#FF6B6B", "#28C76F", "#FF8800", "#E60023", "#00CFE8", "#FFA500"]
 SERVICE_EMOJI = {
     "Instagram": "📸",
     "TikTok": "🎵",
     "YouTube": "▶️",
     "SoundCloud": "🎧",
+    "Pinterest": "📌",
     "Twitter": "🐦",
     "Other": "📦",
 }
@@ -78,9 +80,14 @@ async def update_info(message: types.Message):
 @router.message(Command("start"))
 async def send_welcome(message: types.Message):
     await send_analytics(user_id=message.from_user.id, chat_type=message.chat.type, action_name='start')
+    await update_info(message)
+
+    if message.chat.type == ChatType.PRIVATE:
+        payload = _extract_start_payload(get_message_text(message))
+        if payload and await _process_inline_album_deeplink(message, payload):
+            return
 
     await message.reply(bm.welcome_message())
-    await update_info(message)
 
     if message.chat.type == ChatType.PRIVATE:
         pending = pop_pending(message.from_user.id)
@@ -90,6 +97,58 @@ async def send_welcome(message: types.Message):
             except Exception:
                 pass
             await _process_pending_message(pending.message)
+
+
+def _extract_start_payload(text: str) -> Optional[str]:
+    if not text:
+        return None
+    parts = text.strip().split(maxsplit=1)
+    if not parts:
+        return None
+    if not parts[0].startswith("/start"):
+        return None
+    if len(parts) < 2:
+        return None
+    return parts[1].strip() or None
+
+
+async def _process_inline_album_deeplink(message: types.Message, payload: str) -> bool:
+    if not payload.startswith("album_"):
+        return False
+    token = payload.removeprefix("album_").strip()
+    if not token:
+        return False
+
+    request = get_inline_album_request(token)
+    if not request:
+        await message.reply(bm.inline_album_link_invalid())
+        return True
+
+    try:
+        if request.service == "instagram":
+            from handlers import instagram
+            await instagram.process_instagram(message, direct_url=request.url)
+            return True
+        if request.service == "tiktok":
+            from handlers import tiktok
+            await tiktok.process_tiktok(message, direct_url=request.url)
+            return True
+        if request.service == "pinterest":
+            from handlers import pinterest
+            await pinterest.process_pinterest(message, direct_url=request.url)
+            return True
+    except Exception:
+        logging.exception(
+            "Failed to process inline album deeplink: user_id=%s service=%s url=%s",
+            message.from_user.id,
+            request.service,
+            request.url,
+        )
+        await message.reply(bm.something_went_wrong())
+        return True
+
+    await message.reply(bm.inline_album_link_invalid())
+    return True
 
 
 @router.my_chat_member()
@@ -164,6 +223,11 @@ async def _process_pending_message(message: types.Message) -> None:
     ):
         from handlers import soundcloud
         await soundcloud.process_soundcloud_url(message)
+        return
+
+    if re.search(r"(https?://(?:[\w-]+\.)?pinterest\.[\w.]+/\S+|https?://pin\.it/\S+)", text, re.IGNORECASE):
+        from handlers import pinterest
+        await pinterest.process_pinterest_url(message)
         return
 
     if re.search(r"(https?://(www\.)?(youtube|youtu|youtube-nocookie)\.(com|be)/\S+)", text, re.IGNORECASE):
