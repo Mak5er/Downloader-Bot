@@ -6,12 +6,12 @@ def welcome_message():
     return (
         '<b>Welcome to MaxLoad <tg-emoji emoji-id="5420141555233071341">❤️</tg-emoji></b>\n\n'
         "Drop a link and I'll download media from:\n"
-        '<tg-emoji emoji-id="5233542693853895723">📷</tg-emoji> Instagram\n'
-        '<tg-emoji emoji-id="5231244718846809316">🎵</tg-emoji> TikTok\n'
-        '<tg-emoji emoji-id="5233253036964480155">▶️</tg-emoji> YouTube\n'
-        '<tg-emoji emoji-id="5233562948919661906">🐦</tg-emoji> X (Twitter)\n'
-        '<tg-emoji emoji-id="5231107765224643519">🎧</tg-emoji> SoundCloud\n'
-        '<tg-emoji emoji-id="5233213523265357426">📌</tg-emoji> Pinterest\n\n'
+        '<tg-emoji emoji-id="5233671414023753035">📷</tg-emoji> Instagram\n'
+        '<tg-emoji emoji-id="5233597424622144804">🎵</tg-emoji> TikTok\n'
+        '<tg-emoji emoji-id="5233311027612913110">▶️</tg-emoji> YouTube\n'
+        '<tg-emoji emoji-id="5231309843435919433">🐦</tg-emoji> X (Twitter)\n'
+        '<tg-emoji emoji-id="5233448977667492819">🎧</tg-emoji> SoundCloud\n'
+        '<tg-emoji emoji-id="5233210422298974231">📌</tg-emoji> Pinterest\n\n'
         "Use /settings to customize captions, buttons, and chat auto-delete."
     )
 
