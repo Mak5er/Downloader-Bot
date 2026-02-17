@@ -395,12 +395,12 @@ tiktok_service = TikTokService(OUTPUT_DIR)
 
 
 @router.message(
-    F.text.regexp(r"(https?://(www\.|vm\.|vt\.|vn\.)?tiktok\.com/\S+)")
-    | F.caption.regexp(r"(https?://(www\.|vm\.|vt\.|vn\.)?tiktok\.com/\S+)")
+    F.text.regexp(r"(https?://(www\.|vm\.|vt\.|vn\.)?tiktok\.com/\S+)", mode="search")
+    | F.caption.regexp(r"(https?://(www\.|vm\.|vt\.|vn\.)?tiktok\.com/\S+)", mode="search")
 )
 @router.business_message(
-    F.text.regexp(r"(https?://(www\.|vm\.|vt\.|vn\.)?tiktok\.com/\S+)")
-    | F.caption.regexp(r"(https?://(www\.|vm\.|vt\.|vn\.)?tiktok\.com/\S+)")
+    F.text.regexp(r"(https?://(www\.|vm\.|vt\.|vn\.)?tiktok\.com/\S+)", mode="search")
+    | F.caption.regexp(r"(https?://(www\.|vm\.|vt\.|vn\.)?tiktok\.com/\S+)", mode="search")
 )
 async def process_tiktok(message: types.Message, direct_url: Optional[str] = None):
     try:
@@ -878,7 +878,7 @@ async def download_tiktok_mp3_callback(call: types.CallbackQuery):
                 pass
 
 
-@router.inline_query(F.query.regexp(r"(https?://(www\.|vm\.|vt\.|vn\.)?tiktok\.com/\S+)"))
+@router.inline_query(F.query.regexp(r"(https?://(www\.|vm\.|vt\.|vn\.)?tiktok\.com/\S+)", mode="search"))
 async def inline_tiktok_query(query: types.InlineQuery):
     try:
         await send_analytics(user_id=query.from_user.id, chat_type=query.chat_type, action_name="inline_tiktok_video")

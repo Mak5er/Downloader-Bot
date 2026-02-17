@@ -241,8 +241,12 @@ class SoundCloudService:
 soundcloud_service = SoundCloudService(OUTPUT_DIR)
 
 
-@router.message(F.text.regexp(SOUNDCLOUD_URL_REGEX) | F.caption.regexp(SOUNDCLOUD_URL_REGEX))
-@router.business_message(F.text.regexp(SOUNDCLOUD_URL_REGEX) | F.caption.regexp(SOUNDCLOUD_URL_REGEX))
+@router.message(
+    F.text.regexp(SOUNDCLOUD_URL_REGEX, mode="search") | F.caption.regexp(SOUNDCLOUD_URL_REGEX, mode="search")
+)
+@router.business_message(
+    F.text.regexp(SOUNDCLOUD_URL_REGEX, mode="search") | F.caption.regexp(SOUNDCLOUD_URL_REGEX, mode="search")
+)
 async def process_soundcloud(message: types.Message):
     status_message: Optional[types.Message] = None
     audio_path: Optional[str] = None
@@ -386,7 +390,7 @@ async def process_soundcloud_url(message: types.Message):
     await process_soundcloud(message)
 
 
-@router.inline_query(F.query.regexp(SOUNDCLOUD_URL_REGEX))
+@router.inline_query(F.query.regexp(SOUNDCLOUD_URL_REGEX, mode="search"))
 async def inline_soundcloud_query(query: types.InlineQuery):
     audio_path: Optional[str] = None
     thumb_path: Optional[str] = None

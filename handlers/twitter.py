@@ -273,12 +273,12 @@ async def reply_media(message, tweet_id, tweet_media, bot_url, business_id, user
 
 
 @router.message(
-    F.text.regexp(r"(https?://(www\.)?(twitter|x)\.com/\S+|https?://t\.co/\S+)")
-    | F.caption.regexp(r"(https?://(www\.)?(twitter|x)\.com/\S+|https?://t\.co/\S+)")
+    F.text.regexp(r"(https?://(www\.)?(twitter|x)\.com/\S+|https?://t\.co/\S+)", mode="search")
+    | F.caption.regexp(r"(https?://(www\.)?(twitter|x)\.com/\S+|https?://t\.co/\S+)", mode="search")
 )
 @router.business_message(
-    F.text.regexp(r"(https?://(www\.)?(twitter|x)\.com/\S+|https?://t\.co/\S+)")
-    | F.caption.regexp(r"(https?://(www\.)?(twitter|x)\.com/\S+|https?://t\.co/\S+)")
+    F.text.regexp(r"(https?://(www\.)?(twitter|x)\.com/\S+|https?://t\.co/\S+)", mode="search")
+    | F.caption.regexp(r"(https?://(www\.)?(twitter|x)\.com/\S+|https?://t\.co/\S+)", mode="search")
 )
 async def handle_tweet_links(message):
     business_id = message.business_connection_id

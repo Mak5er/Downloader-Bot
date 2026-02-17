@@ -249,8 +249,12 @@ class PinterestService:
 pinterest_service = PinterestService(OUTPUT_DIR)
 
 
-@router.message(F.text.regexp(PINTEREST_URL_REGEX) | F.caption.regexp(PINTEREST_URL_REGEX))
-@router.business_message(F.text.regexp(PINTEREST_URL_REGEX) | F.caption.regexp(PINTEREST_URL_REGEX))
+@router.message(
+    F.text.regexp(PINTEREST_URL_REGEX, mode="search") | F.caption.regexp(PINTEREST_URL_REGEX, mode="search")
+)
+@router.business_message(
+    F.text.regexp(PINTEREST_URL_REGEX, mode="search") | F.caption.regexp(PINTEREST_URL_REGEX, mode="search")
+)
 async def process_pinterest(message: types.Message, direct_url: Optional[str] = None):
     try:
         business_id = message.business_connection_id
@@ -534,7 +538,7 @@ async def process_pinterest_media_group(
             await remove_file(path)
 
 
-@router.inline_query(F.query.regexp(PINTEREST_URL_REGEX))
+@router.inline_query(F.query.regexp(PINTEREST_URL_REGEX, mode="search"))
 async def inline_pinterest_query(query: types.InlineQuery):
     try:
         await send_analytics(user_id=query.from_user.id, chat_type=query.chat_type, action_name="inline_pinterest_video")

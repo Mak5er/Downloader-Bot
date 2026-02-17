@@ -47,6 +47,8 @@ from utils.download_manager import (
 )
 
 MAX_FILE_SIZE = int(1.5 * 1024 * 1024 * 1024)  # 1.5 GB Telegram-safe limit
+YOUTUBE_VIDEO_URL_REGEX = r"(https?://(www\.)?(youtube|youtu|youtube-nocookie)\.(com|be)/(?!@)\S+)"
+YOUTUBE_MUSIC_URL_REGEX = r"(https?://)?(music\.)?(youtube|youtu|youtube-nocookie)\.(com|be)/\S+"
 YTDLP_FORMAT_720 = "bestvideo[height<=720][vcodec^=avc1]+bestaudio[ext=m4a]/best[height<=720][ext=mp4]/best"
 YTDLP_SPEED_OPTS: dict[str, Any] = {
     "quiet": True,
@@ -82,6 +84,16 @@ def safe_int(value, default: int = 0) -> int:
         return int(value)
     except (TypeError, ValueError):
         return default
+
+
+def _extract_youtube_url(text: str, pattern: str) -> Optional[str]:
+    match = re.search(pattern, text or "", re.IGNORECASE)
+    if not match:
+        return None
+    url = match.group(0).strip()
+    if not url.lower().startswith(("http://", "https://")):
+        url = f"https://{url}"
+    return url
 
 
 async def download_stream(
@@ -316,15 +328,17 @@ def _is_manifest_stream(stream: dict) -> bool:
 
 
 @router.message(
-    F.text.regexp(r"(https?://(www\.)?(youtube|youtu|youtube-nocookie)\.(com|be)/(?!@)[\S]+)")
-    | F.caption.regexp(r"(https?://(www\.)?(youtube|youtu|youtube-nocookie)\.(com|be)/(?!@)[\S]+)")
+    F.text.regexp(YOUTUBE_VIDEO_URL_REGEX, mode="search")
+    | F.caption.regexp(YOUTUBE_VIDEO_URL_REGEX, mode="search")
 )
 @router.business_message(
-    F.text.regexp(r"(https?://(www\.)?(youtube|youtu|youtube-nocookie)\.(com|be)/(?!@)[\S]+)")
-    | F.caption.regexp(r"(https?://(www\.)?(youtube|youtu|youtube-nocookie)\.(com|be)/(?!@)[\S]+)")
+    F.text.regexp(YOUTUBE_VIDEO_URL_REGEX, mode="search")
+    | F.caption.regexp(YOUTUBE_VIDEO_URL_REGEX, mode="search")
 )
 async def download_video(message: types.Message):
-    url = get_message_text(message)
+    url = _extract_youtube_url(get_message_text(message), YOUTUBE_VIDEO_URL_REGEX)
+    if not url:
+        return
     logging.info(
         "Downloading YouTube video : user_id=%s username=%s url=%s",
         message.from_user.id,
@@ -519,15 +533,17 @@ async def download_video(message: types.Message):
 
 
 @router.message(
-    F.text.regexp(r'(https?://)?(music\.)?(youtube|youtu|youtube-nocookie)\.(com|be)/.+')
-    | F.caption.regexp(r'(https?://)?(music\.)?(youtube|youtu|youtube-nocookie)\.(com|be)/.+')
+    F.text.regexp(YOUTUBE_MUSIC_URL_REGEX, mode="search")
+    | F.caption.regexp(YOUTUBE_MUSIC_URL_REGEX, mode="search")
 )
 @router.business_message(
-    F.text.regexp(r'(https?://)?(music\.)?(youtube|youtu|youtube-nocookie)\.(com|be)/.+')
-    | F.caption.regexp(r'(https?://)?(music\.)?(youtube|youtu|youtube-nocookie)\.(com|be)/.+')
+    F.text.regexp(YOUTUBE_MUSIC_URL_REGEX, mode="search")
+    | F.caption.regexp(YOUTUBE_MUSIC_URL_REGEX, mode="search")
 )
 async def download_music(message: types.Message):
-    url = get_message_text(message)
+    url = _extract_youtube_url(get_message_text(message), YOUTUBE_MUSIC_URL_REGEX)
+    if not url:
+        return
     logging.info(
         "Downloading YouTube audio: user_id=%s username=%s url=%s",
         message.from_user.id,
@@ -728,7 +744,7 @@ async def download_youtube_mp3_callback(call: types.CallbackQuery):
                 pass
 
 
-@router.inline_query(F.query.regexp(r"(https?://(?:www\.)?music\.youtube\.com/\S+)"))
+@router.inline_query(F.query.regexp(YOUTUBE_MUSIC_URL_REGEX, mode="search"))
 async def inline_youtube_music_query(query: types.InlineQuery):
     metrics: Optional[DownloadMetrics] = None
     try:
@@ -738,8 +754,8 @@ async def inline_youtube_music_query(query: types.InlineQuery):
             action_name="inline_youtube_music",
         )
 
-        match = re.search(r"(https?://(?:www\.)?music\.youtube\.com/\S+)", query.query or "")
-        if not match:
+        url = _extract_youtube_url(query.query or "", YOUTUBE_MUSIC_URL_REGEX)
+        if not url:
             await query.answer([], cache_time=1, is_personal=True)
             return
         if not CHANNEL_ID:
@@ -747,7 +763,6 @@ async def inline_youtube_music_query(query: types.InlineQuery):
             await query.answer([], cache_time=1, is_personal=True)
             return
 
-        url = match.group(0)
         yt = await asyncio.to_thread(get_youtube_video, url)
         if not yt:
             await query.answer([], cache_time=1, is_personal=True)
@@ -826,10 +841,13 @@ async def inline_youtube_music_query(query: types.InlineQuery):
             await remove_file(metrics.path)
 
 
-@router.inline_query(F.query.regexp(r"(https?://(www\.)?(youtube|youtu|youtube-nocookie)\.(com|be)/(?!@)[\S]+)"))
+@router.inline_query(F.query.regexp(YOUTUBE_VIDEO_URL_REGEX, mode="search"))
 async def inline_youtube_query(query: types.InlineQuery):
     try:
-        url = query.query
+        url = _extract_youtube_url(query.query, YOUTUBE_VIDEO_URL_REGEX)
+        if not url:
+            await query.answer([], cache_time=1, is_personal=True)
+            return
         logging.info(
             "Downloading YouTube Inline: user_id=%s query=%s",
             query.from_user.id,
