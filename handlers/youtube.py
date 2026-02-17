@@ -48,7 +48,7 @@ from utils.download_manager import (
 
 MAX_FILE_SIZE = int(1.5 * 1024 * 1024 * 1024)  # 1.5 GB Telegram-safe limit
 YOUTUBE_VIDEO_URL_REGEX = r"(https?://(www\.)?(youtube|youtu|youtube-nocookie)\.(com|be)/(?!@)\S+)"
-YOUTUBE_MUSIC_URL_REGEX = r"(https?://)?(music\.)?(youtube|youtu|youtube-nocookie)\.(com|be)/\S+"
+YOUTUBE_MUSIC_URL_REGEX = r"(https?://)?music\.(youtube|youtu|youtube-nocookie)\.(com|be)/\S+"
 YTDLP_FORMAT_720 = "bestvideo[height<=720][vcodec^=avc1]+bestaudio[ext=m4a]/best[height<=720][ext=mp4]/best"
 YTDLP_SPEED_OPTS: dict[str, Any] = {
     "quiet": True,
