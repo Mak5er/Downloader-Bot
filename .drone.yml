@@ -1,0 +1,22 @@
+kind: pipeline
+type: docker
+name: build-and-push-ghcr
+
+trigger:
+  event:
+    - push
+
+steps:
+  - name: build-and-push
+    image: plugins/docker
+    settings:
+      registry: ghcr.io
+      username:
+        from_secret: GHCR_USER
+      password:
+        from_secret: GHCR_TOKEN
+      repo:
+        from_secret: IMAGE_NAME
+      tags:
+        - latest
+        - ${DRONE_COMMIT_SHA:0:7}
