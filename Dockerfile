@@ -27,7 +27,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY requirements.txt .
 
 # Build dependency wheels (faster rebuilds with cache)
-RUN pip install -U pip setuptools wheel && \
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install -U pip setuptools wheel && \
     pip wheel --wheel-dir /wheels -r requirements.txt
 
 
