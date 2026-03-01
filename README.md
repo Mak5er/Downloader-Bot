@@ -37,6 +37,7 @@ Example  `.env`  file:
     custom_api_url = YOUR_CUSTOM_TELEGRAM_API_URL
     CHANNEL_ID = YOUR_CHANNEL_ID_FOR_INLINE_QUERY_VIDEOS
     COBALT_API_URL = YOUR_COBALT_NODE_URL
+    COBALT_API_KEY = YOUR_COBALT_API_KEY
     DOWNLOAD_SUBPROCESS_THRESHOLD_MB = 0  # set >0 to run large downloads in a separate worker process
 
 You can check how to run your own cobalt instance [HERE](https://github.com/imputnet/cobalt/blob/main/docs/run-an-instance.md) 
