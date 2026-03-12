@@ -12,6 +12,8 @@ from sqlalchemy.orm import declarative_base, relationship
 from config import DATABASE_URL
 from log.logger import logger as logging
 
+logging = logging.bind(service="db")
+
 Base = declarative_base()
 
 
@@ -75,10 +77,13 @@ async def run_alembic_migration():
         logging.warning("Alembic executable not found. Skipping migrations.")
         return
 
+    logging.event("alembic_migration_start")
+
     subprocess.run([
         alembic_exe, "revision", "--autogenerate", "-m", "auto update"
     ], cwd=os.path.dirname(__file__), stdout=subprocess.DEVNULL)
     subprocess.run([alembic_exe, "upgrade", "head"], cwd=os.path.dirname(__file__))
+    logging.event("alembic_migration_complete")
 
 
 class DataBase:
@@ -106,6 +111,7 @@ class DataBase:
         self._status_ttl_seconds = 20.0
 
     async def init_db(self):
+        started_at = time.perf_counter()
         async with self.engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
             # If using PostgreSQL, sync sequences to current max IDs to avoid PK collisions after migrations
@@ -122,7 +128,10 @@ class DataBase:
                 await conn.execute(
                     text("SELECT setval(pg_get_serial_sequence('users','user_id'), COALESCE(MAX(user_id),0)+1, false) FROM users")
                 )
-        logging.info("Database tables checked.")
+        logging.perf(
+            "db_init",
+            duration_ms=(time.perf_counter() - started_at) * 1000.0,
+        )
 
     async def get_session(self):
         async with self.SessionLocal() as session:
@@ -346,7 +355,7 @@ class DataBase:
                 await session.commit()
                 self._file_cache[url] = (time.monotonic(), file_id)
             except Exception as e:
-                logging.error(f"Error in add_file: {e}")
+                logging.error("Error in add_file: %s", e)
                 await session.rollback()
 
     async def get_file_id(self, url):
@@ -362,7 +371,7 @@ class DataBase:
                 self._file_cache[url] = (now, file_id)
                 return file_id
             except Exception as e:
-                logging.error(f"Error in get_file_id: {e}")
+                logging.error("Error in get_file_id: %s", e)
                 return None
 
     async def get_downloaded_files_count(self, period: str):

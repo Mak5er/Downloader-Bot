@@ -24,6 +24,10 @@ Install the required Python packages using pip:
 
     pip install -r requirements.txt
 
+For local development and tests use:
+
+    pip install -r requirements-dev.txt
+
 Before running the script, you also need to set up your custom Telegram API node by
 using [this repository](https://github.com/aiogram/telegram-bot-api).
 
@@ -49,6 +53,18 @@ Run the script using Python:
 Or using Docker:
 
     docker compose up -d
+
+Notes about performance:
+
+- Docker build is faster with the included `.dockerignore`, because `.venv`, tests, logs and downloads are no longer sent into the build context.
+- `docker-compose.yml` now uses named volumes for `downloads` and `log` instead of bind-mounting the whole repo, which is noticeably faster on Docker Desktop/Windows.
+
+### Logging
+
+- Console logs are colorized and now include `service`, `flow` and `request_id`.
+- General text logs are written to `log/bot_log.log` and `log/error_log.log`.
+- Structured JSONL logs are written to `log/events_log.jsonl` and `log/perf_log.jsonl`.
+- Main handlers attach request-scoped logging context automatically, so one user request can be traced across fetch, queue, download and upload stages.
 
 ### Database Tables
 

@@ -11,7 +11,7 @@ from urllib.parse import urlparse, urlunparse
 import aiohttp
 import requests
 from aiogram import types, Router, F
-from aiogram.types import FSInputFile, InlineQueryResultVideo, InlineQueryResultArticle
+from aiogram.types import FSInputFile, InlineQueryResultArticle
 from aiogram.utils.media_group import MediaGroupBuilder
 from fake_useragent import UserAgent
 
@@ -20,6 +20,7 @@ import messages as bm
 from config import OUTPUT_DIR, CHANNEL_ID
 from handlers.user import update_info
 from handlers.utils import (
+    build_request_id,
     build_progress_status,
     build_queue_busy_text,
     build_rate_limit_text,
@@ -34,9 +35,16 @@ from handlers.utils import (
     remove_file,
     safe_delete_message,
     safe_edit_text,
+    safe_edit_inline_media,
+    safe_edit_inline_text,
     send_chat_action_if_needed,
     retry_async_operation,
     resolve_settings_target_id,
+    with_callback_logging,
+    with_chosen_inline_logging,
+    with_inline_query_logging,
+    with_inline_send_logging,
+    with_message_logging,
 )
 from log.logger import logger as logging
 from main import bot, db, send_analytics
@@ -52,6 +60,15 @@ from utils.download_manager import (
 )
 from utils.http_client import get_http_session
 from services.inline_album_links import create_inline_album_request
+from services.inline_service_icons import get_inline_service_icon
+from services.inline_video_requests import (
+    claim_inline_video_request_for_send,
+    complete_inline_video_request,
+    create_inline_video_request,
+    reset_inline_video_request,
+)
+
+logging = logging.bind(service="tiktok")
 
 MAX_FILE_SIZE = int(1.5 * 1024 * 1024 * 1024)  # 1.5 GB
 TIKTOK_USER_AGENT = (
@@ -234,6 +251,54 @@ async def video_info(data: dict) -> Optional[TikTokVideo]:
     )
 
 
+def is_invalid_tiktok_payload(payload: dict) -> bool:
+    if not isinstance(payload, dict):
+        return True
+    if payload.get("error"):
+        return True
+    return payload.get("code") not in (0, None)
+
+
+async def fetch_tiktok_data_with_retry(video_url: str, *, on_retry=None) -> dict:
+    async def _fetch_with_retry(target_url: str) -> dict:
+        return await retry_async_operation(
+            lambda: fetch_tiktok_data(target_url),
+            attempts=3,
+            delay_seconds=2.0,
+            should_retry_result=is_invalid_tiktok_payload,
+            on_retry=on_retry,
+        )
+
+    base_url = strip_tiktok_tracking(video_url)
+    data = await _fetch_with_retry(base_url)
+    if is_invalid_tiktok_payload(data) and urlparse(base_url).netloc.lower() in _SHORT_HOSTS:
+        resolved_url = await asyncio.wait_for(asyncio.to_thread(process_tiktok_url, base_url), timeout=6.0)
+        if resolved_url != base_url:
+            return await _fetch_with_retry(resolved_url)
+    return data
+
+
+def build_tiktok_video_url(info: TikTokVideo) -> str:
+    return f"https://tiktok.com/@{info.author}/video/{info.id}"
+
+
+def get_tiktok_audio_callback_data(info: TikTokVideo) -> Optional[str]:
+    if info.author and info.id:
+        return f"audio:tiktok:{info.author}:{info.id}"
+    return None
+
+
+def get_tiktok_size_hint(data: dict) -> Optional[int]:
+    source_data = data.get("data", {}) if isinstance(data, dict) else {}
+    for key in ("size_hd", "size", "wm_size"):
+        raw = source_data.get(key)
+        if isinstance(raw, (int, float)):
+            return int(raw)
+        if isinstance(raw, str) and raw.isdigit():
+            return int(raw)
+    return None
+
+
 class TikTokService:
     DOWNLOAD_URL_TEMPLATE = "https://tikwm.com/video/media/play/{video_id}.mp4"
 
@@ -402,6 +467,7 @@ tiktok_service = TikTokService(OUTPUT_DIR)
     F.text.regexp(r"(https?://(www\.|vm\.|vt\.|vn\.)?tiktok\.com/\S+)", mode="search")
     | F.caption.regexp(r"(https?://(www\.|vm\.|vt\.|vn\.)?tiktok\.com/\S+)", mode="search")
 )
+@with_message_logging("tiktok", "message")
 async def process_tiktok(message: types.Message, direct_url: Optional[str] = None):
     try:
         bot_url = await get_bot_url(bot)
@@ -441,34 +507,12 @@ async def process_tiktok(message: types.Message, direct_url: Optional[str] = Non
 
         retry_notice_sent = {"value": False}
 
-        def _invalid_tiktok_payload(payload: dict) -> bool:
-            if not isinstance(payload, dict):
-                return True
-            if payload.get("error"):
-                return True
-            return payload.get("code") not in (0, None)
-
         async def _on_retry_fetch(failed_attempt: int, total_attempts: int, _error):
             if show_service_status and failed_attempt >= 2 and not retry_notice_sent["value"]:
                 retry_notice_sent["value"] = True
                 await message.reply(bm.retrying_again_status(failed_attempt + 1, total_attempts))
 
-        async def _fetch_with_retry(target_url: str) -> dict:
-            return await retry_async_operation(
-                lambda: fetch_tiktok_data(target_url),
-                attempts=3,
-                delay_seconds=2.0,
-                should_retry_result=_invalid_tiktok_payload,
-                on_retry=_on_retry_fetch,
-            )
-
-        # Fast path: most APIs accept the original URL. Expand only if needed.
-        base_url = strip_tiktok_tracking(url)
-        data = await _fetch_with_retry(base_url)
-        if (data.get("error") or data.get("code") not in (0, None)) and urlparse(base_url).netloc.lower() in _SHORT_HOSTS:
-            resolved_url = await asyncio.wait_for(asyncio.to_thread(process_tiktok_url, base_url), timeout=6.0)
-            if resolved_url != base_url:
-                data = await _fetch_with_retry(resolved_url)
+        data = await fetch_tiktok_data_with_retry(url, on_retry=_on_retry_fetch)
         images = data.get("data", {}).get("images", [])
 
         user_settings = await get_user_settings(message)
@@ -510,13 +554,11 @@ async def process_tiktok_video(message: types.Message, data: dict, bot_url: str,
         await handle_download_error(message, business_id=business_id)
         return
 
-    audio_callback_data = None
-    if info.author and info.id:
-        audio_callback_data = f"audio:tiktok:{info.author}:{info.id}"
+    audio_callback_data = get_tiktok_audio_callback_data(info)
 
     timestamp = datetime.datetime.now().strftime("%Y%m%d%H%M%S")
     download_name = f"{info.id}_{timestamp}_tiktok_video.mp4"
-    db_video_url = f'https://tiktok.com/@{info.author}/video/{info.id}'
+    db_video_url = build_tiktok_video_url(info)
 
     db_file_id = await db.get_file_id(db_video_url)
     if db_file_id:
@@ -546,16 +588,7 @@ async def process_tiktok_video(message: types.Message, data: dict, bot_url: str,
     download_path: Optional[str] = None
     progress_throttle_state = {"last": 0.0}
     request_id = f"tiktok_video:{message.chat.id}:{message.message_id}:{info.id}"
-    source_data = data.get("data", {}) if isinstance(data, dict) else {}
-    size_hint = None
-    for key in ("size_hd", "size", "wm_size"):
-        raw = source_data.get(key)
-        if isinstance(raw, (int, float)):
-            size_hint = int(raw)
-            break
-        if isinstance(raw, str) and raw.isdigit():
-            size_hint = int(raw)
-            break
+    size_hint = get_tiktok_size_hint(data)
 
     try:
         async def on_progress(progress: DownloadProgress):
@@ -647,10 +680,8 @@ async def process_tiktok_photos(message: types.Message, data: dict, bot_url: str
                                 business_id: Optional[int], images: list):
     await send_analytics(user_id=message.from_user.id, chat_type=message.chat.type, action_name="tiktok_photos")
     info = await video_info(data)
-    audio_callback_data = None
-    if info and info.author and info.id:
-        audio_callback_data = f"audio:tiktok:{info.author}:{info.id}"
-    video_url = f'https://tiktok.com/@{info.author}/video/{info.id}'
+    audio_callback_data = get_tiktok_audio_callback_data(info) if info else None
+    video_url = build_tiktok_video_url(info) if info else ""
     if not images:
         logging.warning(
             "TikTok photo post missing images: user_id=%s url=%s",
@@ -778,13 +809,6 @@ async def download_tiktok_mp3_callback(call: types.CallbackQuery):
             )
             return
 
-        def _invalid_tiktok_payload(payload: dict) -> bool:
-            if not isinstance(payload, dict):
-                return True
-            if payload.get("error"):
-                return True
-            return payload.get("code") not in (0, None)
-
         async def _on_retry_fetch(failed_attempt: int, total_attempts: int, _error):
             if show_service_status and failed_attempt >= 2:
                 await safe_edit_text(
@@ -792,13 +816,7 @@ async def download_tiktok_mp3_callback(call: types.CallbackQuery):
                     bm.retrying_again_status(failed_attempt + 1, total_attempts),
                 )
 
-        data = await retry_async_operation(
-            lambda: fetch_tiktok_data(video_url),
-            attempts=3,
-            delay_seconds=2.0,
-            should_retry_result=_invalid_tiktok_payload,
-            on_retry=_on_retry_fetch,
-        )
+        data = await fetch_tiktok_data_with_retry(video_url, on_retry=_on_retry_fetch)
         info = await video_info(data)
         if not info or not info.music_play_url:
             await handle_download_error(call.message)
@@ -879,6 +897,7 @@ async def download_tiktok_mp3_callback(call: types.CallbackQuery):
 
 
 @router.inline_query(F.query.regexp(r"(https?://(www\.|vm\.|vt\.|vn\.)?tiktok\.com/\S+)", mode="search"))
+@with_inline_query_logging("tiktok", "inline_query")
 async def inline_tiktok_query(query: types.InlineQuery):
     try:
         await send_analytics(user_id=query.from_user.id, chat_type=query.chat_type, action_name="inline_tiktok_video")
@@ -894,22 +913,10 @@ async def inline_tiktok_query(query: types.InlineQuery):
             logging.debug("Inline TikTok query pattern not matched: query=%s", query.query)
             return await query.answer([], cache_time=1, is_personal=True)
 
-        data = await retry_async_operation(
-            lambda: fetch_tiktok_data(query.query),
-            attempts=3,
-            delay_seconds=2.0,
-            should_retry_result=lambda payload: (
-                not isinstance(payload, dict)
-                or bool(payload.get("error"))
-                or payload.get("code") not in (0, None)
-            ),
-        )
+        source_url = strip_tiktok_tracking(match.group(0))
+        data = await fetch_tiktok_data_with_retry(source_url)
         info = await video_info(data)
         images = data.get("data", {}).get("images", [])
-
-        timestamp = datetime.datetime.now().strftime("%Y%m%d%H%M%S")
-        name = f"{info.id}_{timestamp}_tiktok_video.mp4"
-        download_path: Optional[str] = None
 
         results = []
         if not images:
@@ -917,9 +924,28 @@ async def inline_tiktok_query(query: types.InlineQuery):
             if not info:
                 return await query.answer([], cache_time=1, is_personal=True)
 
-            db_video_url = f'https://tiktok.com/@{info.author}/video/{info.id}'
+            db_video_url = build_tiktok_video_url(info)
 
             db_id = await db.get_file_id(db_video_url)
+            if not db_id and not CHANNEL_ID:
+                logging.error("CHANNEL_ID is not configured; TikTok inline video send is disabled")
+                return await query.answer([], cache_time=1, is_personal=True)
+
+            token = create_inline_video_request("tiktok", source_url, query.from_user.id, user_settings)
+            results.append(
+                InlineQueryResultArticle(
+                    id=f"tiktok_inline:{token}",
+                    title="TikTok Video",
+                    description=info.description or "Press the button to send this video inline.",
+                    thumbnail_url=get_inline_service_icon("tiktok"),
+                    input_message_content=types.InputTextMessageContent(
+                        message_text=bm.inline_send_video_prompt("TikTok"),
+                    ),
+                    reply_markup=kb.inline_send_video_keyboard(token),
+                )
+            )
+            await query.answer(results, cache_time=10, is_personal=True)
+            return
 
             if not db_id:
                 inline_request_id = f"tiktok_inline:{query.from_user.id}:{query.id}:{info.id}"
@@ -1029,6 +1055,222 @@ async def inline_tiktok_query(query: types.InlineQuery):
             e,
         )
         await query.answer([], cache_time=1, is_personal=True)
+
+
+@with_inline_send_logging("tiktok", "inline_send")
+async def _send_inline_tiktok_video(
+    *,
+    token: str,
+    inline_message_id: str,
+    actor_name: str,
+    request_event_id: str,
+    duplicate_handler: str,
+) -> None:
+    request = claim_inline_video_request_for_send(token, duplicate_handler=duplicate_handler)
+    if request is None:
+        return
+
+    download_path: Optional[str] = None
+
+    async def _edit_inline_status(text: str, *, with_retry_button: bool = False) -> None:
+        reply_markup = kb.inline_send_video_keyboard(token) if with_retry_button else None
+        await safe_edit_inline_text(
+            bot,
+            inline_message_id,
+            text,
+            reply_markup=reply_markup,
+        )
+
+    try:
+        await _edit_inline_status(bm.fetching_info_status())
+
+        async def _on_retry_fetch(failed_attempt: int, total_attempts: int, _error):
+            if failed_attempt >= 2:
+                await _edit_inline_status(bm.retrying_again_status(failed_attempt + 1, total_attempts))
+
+        data = await fetch_tiktok_data_with_retry(request.source_url, on_retry=_on_retry_fetch)
+        info = await video_info(data)
+        images = data.get("data", {}).get("images", [])
+        if not info:
+            reset_inline_video_request(token)
+            await _edit_inline_status(bm.something_went_wrong(), with_retry_button=True)
+            return
+        if images:
+            complete_inline_video_request(token)
+            await _edit_inline_status(bm.inline_photos_not_supported("TikTok"))
+            return
+
+        db_video_url = build_tiktok_video_url(info)
+        audio_callback_data = get_tiktok_audio_callback_data(info)
+        db_id = await db.get_file_id(db_video_url)
+
+        if not db_id:
+            if not CHANNEL_ID:
+                logging.error("CHANNEL_ID is not configured; TikTok inline upload is disabled")
+                reset_inline_video_request(token)
+                await _edit_inline_status(bm.something_went_wrong(), with_retry_button=True)
+                return
+
+            timestamp = datetime.datetime.now().strftime("%Y%m%d%H%M%S")
+            download_name = f"{info.id}_{timestamp}_tiktok_video.mp4"
+            progress_state = {"last": 0.0}
+            request_id = f"tiktok_inline:{request.owner_user_id}:{request_event_id}:{info.id}"
+            size_hint = get_tiktok_size_hint(data)
+
+            await _edit_inline_status(bm.downloading_video_status())
+
+            async def on_progress(progress: DownloadProgress):
+                now = time.monotonic()
+                if not progress.done and now - progress_state["last"] < 1.0:
+                    return
+                progress_state["last"] = now
+                await _edit_inline_status(build_progress_status("TikTok video", progress))
+
+            async def _on_retry_download(failed_attempt: int, total_attempts: int, _error):
+                if failed_attempt >= 2:
+                    await _edit_inline_status(bm.retrying_again_status(failed_attempt + 1, total_attempts))
+
+            metrics = await asyncio.wait_for(
+                tiktok_service.download_video(
+                    info.id,
+                    download_name,
+                    user_id=request.owner_user_id,
+                    request_id=request_id,
+                    size_hint=size_hint,
+                    on_progress=on_progress,
+                    on_retry=_on_retry_download,
+                ),
+                timeout=420.0,
+            )
+            if not metrics:
+                reset_inline_video_request(token)
+                await _edit_inline_status(bm.something_went_wrong(), with_retry_button=True)
+                return
+
+            log_download_metrics("tiktok_inline", metrics)
+            download_path = metrics.path
+            if metrics.size >= MAX_FILE_SIZE:
+                complete_inline_video_request(token)
+                await _edit_inline_status(bm.video_too_large())
+                return
+
+            await _edit_inline_status(bm.uploading_status())
+            sent = await bot.send_video(
+                chat_id=CHANNEL_ID,
+                video=FSInputFile(download_path),
+                caption=f"TikTok Video from {actor_name}",
+            )
+            db_id = sent.video.file_id
+            await db.add_file(db_video_url, db_id, "video")
+            logging.info(
+                "Inline TikTok video cached: url=%s file_id=%s",
+                db_video_url,
+                db_id,
+            )
+        else:
+            await _edit_inline_status(bm.uploading_status())
+
+        bot_url = await get_bot_url(bot)
+        edited = await safe_edit_inline_media(
+            bot,
+            inline_message_id,
+            types.InputMediaVideo(
+                media=db_id,
+                caption=bm.captions(request.user_settings["captions"], info.description, bot_url),
+                parse_mode="HTML",
+            ),
+            reply_markup=kb.return_video_info_keyboard(
+                info.views,
+                info.likes,
+                info.comments,
+                info.shares,
+                info.music_play_url,
+                db_video_url,
+                request.user_settings,
+                audio_callback_data=audio_callback_data,
+            ),
+        )
+        if edited:
+            complete_inline_video_request(token)
+            logging.info(
+                "Served inline TikTok video: inline_message_id=%s url=%s file_id=%s",
+                inline_message_id,
+                db_video_url,
+                db_id,
+            )
+            return
+
+        reset_inline_video_request(token)
+        await _edit_inline_status(bm.something_went_wrong(), with_retry_button=True)
+    except DownloadRateLimitError as e:
+        reset_inline_video_request(token)
+        await _edit_inline_status(build_rate_limit_text(e.retry_after), with_retry_button=True)
+    except DownloadQueueBusyError as e:
+        reset_inline_video_request(token)
+        await _edit_inline_status(build_queue_busy_text(e.position), with_retry_button=True)
+    except asyncio.TimeoutError:
+        reset_inline_video_request(token)
+        await _edit_inline_status(bm.timeout_error(), with_retry_button=True)
+    except Exception as e:
+        logging.exception(
+            "Error sending inline TikTok video: inline_message_id=%s token=%s error=%s",
+            inline_message_id,
+            token,
+            e,
+        )
+        reset_inline_video_request(token)
+        await _edit_inline_status(bm.something_went_wrong(), with_retry_button=True)
+    finally:
+        if download_path:
+            await remove_file(download_path)
+
+
+@router.chosen_inline_result(F.result_id.startswith("tiktok_inline:"))
+@with_chosen_inline_logging("tiktok", "chosen_inline")
+async def chosen_inline_tiktok_result(result: types.ChosenInlineResult):
+    inline_message_id = result.inline_message_id
+    if not inline_message_id:
+        logging.warning(
+            "Chosen inline TikTok result is missing inline_message_id; enable inline feedback in BotFather"
+        )
+        return
+
+    token = result.result_id.removeprefix("tiktok_inline:")
+    await _send_inline_tiktok_video(
+        token=token,
+        inline_message_id=inline_message_id,
+        actor_name=result.from_user.full_name,
+        request_event_id=result.result_id,
+        duplicate_handler="chosen",
+    )
+
+
+@router.callback_query(F.data.startswith("inline:tiktok:"))
+@with_callback_logging("tiktok", "inline_callback")
+async def send_inline_tiktok_video_callback(call: types.CallbackQuery):
+    token = call.data.removeprefix("inline:tiktok:")
+    inline_message_id = call.inline_message_id
+    if not inline_message_id:
+        await call.answer("This button works only in inline mode.", show_alert=True)
+        return
+
+    await call.answer()
+    try:
+        await _send_inline_tiktok_video(
+            token=token,
+            inline_message_id=inline_message_id,
+            actor_name=call.from_user.full_name,
+            request_event_id=str(call.id),
+            duplicate_handler="callback",
+        )
+    except ValueError as exc:
+        if str(exc) == "already_processing":
+            await call.answer(bm.inline_video_already_processing(), show_alert=False)
+            return
+        if str(exc) == "already_completed":
+            await call.answer(bm.inline_video_already_sent(), show_alert=False)
+            return
+        await call.answer(bm.something_went_wrong(), show_alert=True)
 
 
 @router.callback_query(lambda call: any(call.data.startswith(prefix) for prefix in

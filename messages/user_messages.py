@@ -217,3 +217,23 @@ def inline_photos_title(service_name: str):
 
 def inline_photos_not_supported(service_name: str):
     return f"{service_name} photos are not supported inline."
+
+
+def inline_send_video_button():
+    return "Send video inline"
+
+
+def inline_send_video_prompt(service_name: str):
+    return f"{service_name} video is being prepared...\nIf it does not start automatically, tap the button below."
+
+
+def inline_send_audio_prompt(service_name: str):
+    return f"{service_name} audio is being prepared...\nIf it does not start automatically, tap the button below."
+
+
+def inline_video_already_processing():
+    return "This inline video is already being prepared."
+
+
+def inline_video_already_sent():
+    return "This inline video was already sent."

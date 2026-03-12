@@ -1,6 +1,7 @@
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
+
 def cancel_keyboard() -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     builder.button(text="❌ Cancel", callback_data="cancel_action")
@@ -114,6 +115,22 @@ def return_audio_download_keyboard(platform, url):
         [InlineKeyboardButton(text="🎧 Download MP3", callback_data=f"{platform}_audio_{url}")]
     ]
     return InlineKeyboardMarkup(inline_keyboard=audio_button)
+
+
+def inline_send_video_keyboard(token: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="Send video inline", callback_data=f"inline:tiktok:{token}")]
+        ]
+    )
+
+
+def inline_send_media_keyboard(text: str, callback_data: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text=text, callback_data=callback_data)]
+        ]
+    )
 
 
 def return_user_info_keyboard(nickname, followers, videos, likes, url):

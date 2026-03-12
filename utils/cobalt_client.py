@@ -1,11 +1,14 @@
 import asyncio
 import json
+import time
 from typing import Any, Optional
 
 import aiohttp
 
 from log.logger import logger as logging
 from utils.http_client import get_http_session
+
+logging = logging.bind(service="cobalt")
 
 
 class _CobaltRetryableError(Exception):
@@ -36,6 +39,7 @@ async def fetch_cobalt_data(
     attempts: int = 3,
     retry_delay: float = 0.0,
 ) -> Optional[dict[str, Any]]:
+    started_at = time.perf_counter()
     if not base_url:
         logging.error("COBALT_API_URL is not configured for %s", source)
         return None
@@ -56,6 +60,7 @@ async def fetch_cobalt_data(
 
     for attempt in range(1, total_attempts + 1):
         try:
+            attempt_started_at = time.perf_counter()
             session = await get_http_session()
             try:
                 async with session.post(
@@ -122,6 +127,19 @@ async def fetch_cobalt_data(
                 logging.error("Invalid Cobalt response type: %s", type(data))
                 return None
 
+            logging.perf(
+                "cobalt_request",
+                duration_ms=(time.perf_counter() - attempt_started_at) * 1000.0,
+                source=source,
+                attempt=attempt,
+                status=resp.status,
+            )
+            logging.perf(
+                "cobalt_request_total",
+                duration_ms=(time.perf_counter() - started_at) * 1000.0,
+                source=source,
+                attempts=attempt,
+            )
             return data
         except _CobaltRetryableError as exc:
             last_retryable_error = exc

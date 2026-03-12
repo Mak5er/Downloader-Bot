@@ -1,5 +1,4 @@
 import datetime
-import hashlib
 import re
 import time
 from dataclasses import dataclass
@@ -10,12 +9,15 @@ from aiogram import F, Router, types
 from aiogram.types import FSInputFile
 
 import messages as bm
+import keyboards as kb
 from config import CHANNEL_ID, COBALT_API_KEY, COBALT_API_URL, OUTPUT_DIR
 from handlers.user import update_info
 from handlers.utils import (
+    build_request_id,
     build_progress_status,
     build_queue_busy_text,
     build_rate_limit_text,
+    get_bot_avatar_thumbnail,
     get_bot_url,
     get_message_text,
     handle_download_error,
@@ -25,8 +27,15 @@ from handlers.utils import (
     retry_async_operation,
     safe_delete_message,
     safe_edit_text,
+    safe_edit_inline_media,
+    safe_edit_inline_text,
     send_chat_action_if_needed,
     resolve_settings_target_id,
+    with_callback_logging,
+    with_chosen_inline_logging,
+    with_inline_query_logging,
+    with_inline_send_logging,
+    with_message_logging,
 )
 from log.logger import logger as logging
 from main import bot, db, send_analytics
@@ -41,6 +50,15 @@ from utils.download_manager import (
     ResilientDownloader,
     log_download_metrics,
 )
+from services.inline_service_icons import get_inline_service_icon
+from services.inline_video_requests import (
+    claim_inline_video_request_for_send,
+    complete_inline_video_request,
+    create_inline_video_request,
+    reset_inline_video_request,
+)
+
+logging = logging.bind(service="soundcloud")
 
 router = Router()
 
@@ -247,10 +265,10 @@ soundcloud_service = SoundCloudService(OUTPUT_DIR)
 @router.business_message(
     F.text.regexp(SOUNDCLOUD_URL_REGEX, mode="search") | F.caption.regexp(SOUNDCLOUD_URL_REGEX, mode="search")
 )
+@with_message_logging("soundcloud", "message")
 async def process_soundcloud(message: types.Message):
     status_message: Optional[types.Message] = None
     audio_path: Optional[str] = None
-    thumb_path: Optional[str] = None
     try:
         business_id = message.business_connection_id
         show_service_status = business_id is None
@@ -265,15 +283,21 @@ async def process_soundcloud(message: types.Message):
         await react_to_message(message, "\U0001F47E", business_id=business_id)
         user_settings = await get_user_settings(message)
         bot_url = await get_bot_url(bot)
+        bot_avatar = await get_bot_avatar_thumbnail(bot)
 
         cache_key = f"{source_url}#audio"
         db_file_id = await db.get_file_id(cache_key)
         if db_file_id:
             await send_chat_action_if_needed(bot, message.chat.id, "upload_audio", business_id)
+            send_kwargs = {
+                "audio": db_file_id,
+                "caption": bm.captions(user_settings["captions"], None, bot_url),
+                "parse_mode": "HTML",
+            }
+            if bot_avatar:
+                send_kwargs["thumbnail"] = bot_avatar
             await message.answer_audio(
-                audio=db_file_id,
-                caption=bm.captions(user_settings["captions"], None, bot_url),
-                parse_mode="HTML",
+                **send_kwargs,
             )
             await maybe_delete_user_message(message, user_settings["delete_message"])
             return
@@ -323,17 +347,6 @@ async def process_soundcloud(message: types.Message):
             await message.reply(bm.audio_too_large())
             return
 
-        if track.thumbnail_url:
-            thumb_name = f"{track.id}_{timestamp}_soundcloud_cover.jpg"
-            thumb_metrics = await soundcloud_service.download_media(
-                track.thumbnail_url,
-                thumb_name,
-                user_id=message.from_user.id,
-                request_id=request_id,
-            )
-            if thumb_metrics:
-                thumb_path = thumb_metrics.path
-
         await safe_edit_text(status_message, bm.uploading_status())
         await send_chat_action_if_needed(bot, message.chat.id, "upload_audio", business_id)
 
@@ -344,14 +357,14 @@ async def process_soundcloud(message: types.Message):
             "caption": bm.captions(user_settings["captions"], None, bot_url),
             "parse_mode": "HTML",
         }
-        if thumb_path:
-            send_kwargs["thumbnail"] = FSInputFile(thumb_path)
+        if bot_avatar:
+            send_kwargs["thumbnail"] = bot_avatar
 
         try:
             sent = await message.answer_audio(**send_kwargs)
         except Exception as exc:
-            if thumb_path:
-                logging.warning("SoundCloud thumbnail upload failed, retrying without it: error=%s", exc)
+            if bot_avatar:
+                logging.warning("SoundCloud bot avatar upload failed, retrying without thumbnail: error=%s", exc)
                 send_kwargs.pop("thumbnail", None)
                 sent = await message.answer_audio(**send_kwargs)
             else:
@@ -380,8 +393,6 @@ async def process_soundcloud(message: types.Message):
         await safe_delete_message(status_message)
         if audio_path:
             await remove_file(audio_path)
-        if thumb_path:
-            await remove_file(thumb_path)
         await update_info(message)
 
 
@@ -391,9 +402,8 @@ async def process_soundcloud_url(message: types.Message):
 
 
 @router.inline_query(F.query.regexp(SOUNDCLOUD_URL_REGEX, mode="search"))
+@with_inline_query_logging("soundcloud", "inline_query")
 async def inline_soundcloud_query(query: types.InlineQuery):
-    audio_path: Optional[str] = None
-    thumb_path: Optional[str] = None
     try:
         await send_analytics(
             user_id=query.from_user.id,
@@ -413,85 +423,30 @@ async def inline_soundcloud_query(query: types.InlineQuery):
 
         source_url = strip_soundcloud_url(match.group(0))
         user_settings = await db.user_settings(query.from_user.id)
-        bot_url = await get_bot_url(bot)
-
-        cache_key = f"{source_url}#audio"
-        db_file_id = await db.get_file_id(cache_key)
-        track: Optional[SoundCloudTrack] = None
-
-        if not db_file_id:
-            track = await soundcloud_service.fetch_track(source_url)
-            if not track:
-                await query.answer([], cache_time=1, is_personal=True)
-                return
-
-            timestamp = datetime.datetime.now().strftime("%Y%m%d%H%M%S")
-            request_id = f"soundcloud_inline:{query.from_user.id}:{query.id}:{track.id}"
-            audio_name = f"{track.id}_{timestamp}_soundcloud_inline.mp3"
-            metrics = await soundcloud_service.download_media(
-                track.audio_url,
-                audio_name,
-                user_id=query.from_user.id,
-                request_id=request_id,
-            )
-            if not metrics:
-                await query.answer([], cache_time=1, is_personal=True)
-                return
-
-            audio_path = metrics.path
-            if metrics.size >= MAX_FILE_SIZE:
-                await remove_file(audio_path)
-                audio_path = None
-                await query.answer([], cache_time=1, is_personal=True)
-                return
-
-            if track.thumbnail_url:
-                thumb_name = f"{track.id}_{timestamp}_soundcloud_inline_cover.jpg"
-                thumb_metrics = await soundcloud_service.download_media(
-                    track.thumbnail_url,
-                    thumb_name,
-                    user_id=query.from_user.id,
-                    request_id=request_id,
-                )
-                if thumb_metrics:
-                    thumb_path = thumb_metrics.path
-
-            send_kwargs = {
-                "chat_id": CHANNEL_ID,
-                "audio": FSInputFile(audio_path),
-                "title": track.title,
-                "performer": track.artist or None,
-            }
-            if thumb_path:
-                send_kwargs["thumbnail"] = FSInputFile(thumb_path)
-
-            try:
-                sent = await bot.send_audio(**send_kwargs)
-            except Exception as exc:
-                if thumb_path:
-                    logging.warning("SoundCloud inline thumbnail upload failed, retrying without it: error=%s", exc)
-                    send_kwargs.pop("thumbnail", None)
-                    sent = await bot.send_audio(**send_kwargs)
-                else:
-                    raise
-
-            db_file_id = sent.audio.file_id
-            await db.add_file(cache_key, db_file_id, "audio")
-
-        if not db_file_id:
+        track = await soundcloud_service.fetch_track(source_url)
+        if not track:
             await query.answer([], cache_time=1, is_personal=True)
             return
 
-        result_id = hashlib.md5(source_url.encode("utf-8")).hexdigest()[:32]
+        token = create_inline_video_request("soundcloud", source_url, query.from_user.id, user_settings)
         results = [
-            types.InlineQueryResultCachedAudio(
-                id=f"soundcloud_{result_id}",
-                audio_file_id=db_file_id,
-                caption=bm.captions(user_settings["captions"], None, bot_url),
-                parse_mode="HTML",
+            types.InlineQueryResultArticle(
+                id=f"soundcloud_inline:{token}",
+                title="SoundCloud Audio",
+                description=track.title or "Press the button to send this audio inline.",
+                thumbnail_url=get_inline_service_icon("soundcloud"),
+                input_message_content=types.InputTextMessageContent(
+                    message_text=bm.inline_send_audio_prompt("SoundCloud"),
+                ),
+                reply_markup=kb.inline_send_media_keyboard(
+                    "Send audio inline",
+                    f"inline:soundcloud:{token}",
+                ),
             )
         ]
         await query.answer(results, cache_time=10, is_personal=True)
+        return
+
     except Exception as exc:
         logging.exception(
             "Error processing SoundCloud inline query: user_id=%s query=%s error=%s",
@@ -500,8 +455,165 @@ async def inline_soundcloud_query(query: types.InlineQuery):
             exc,
         )
         await query.answer([], cache_time=1, is_personal=True)
+
+
+@with_inline_send_logging("soundcloud", "inline_send")
+async def _send_inline_soundcloud_audio(
+    *,
+    token: str,
+    inline_message_id: str,
+    actor_name: str,
+    request_event_id: str,
+    duplicate_handler: str,
+) -> None:
+    request = claim_inline_video_request_for_send(token, duplicate_handler=duplicate_handler)
+    if request is None:
+        return
+
+    audio_path: Optional[str] = None
+
+    async def _edit_inline_status(text: str, *, with_retry_button: bool = False) -> None:
+        reply_markup = (
+            kb.inline_send_media_keyboard("Send audio inline", f"inline:soundcloud:{token}")
+            if with_retry_button
+            else None
+        )
+        await safe_edit_inline_text(bot, inline_message_id, text, reply_markup=reply_markup)
+
+    try:
+        await _edit_inline_status(bm.fetching_info_status())
+        source_url = request.source_url
+        cache_key = f"{source_url}#audio"
+        track = await soundcloud_service.fetch_track(source_url)
+        bot_avatar = await get_bot_avatar_thumbnail(bot)
+        if not track:
+            reset_inline_video_request(token)
+            await _edit_inline_status(bm.something_went_wrong(), with_retry_button=True)
+            return
+
+        db_file_id = await db.get_file_id(cache_key)
+        if not db_file_id:
+            timestamp = datetime.datetime.now().strftime("%Y%m%d%H%M%S")
+            request_id = f"soundcloud_inline:{request.owner_user_id}:{request_event_id}:{track.id}"
+            audio_name = f"{track.id}_{timestamp}_soundcloud_inline.mp3"
+            progress_state = {"last": 0.0}
+
+            await _edit_inline_status(bm.downloading_audio_status())
+
+            async def on_progress(progress: DownloadProgress):
+                now = time.monotonic()
+                if not progress.done and now - progress_state["last"] < 1.0:
+                    return
+                progress_state["last"] = now
+                await _edit_inline_status(build_progress_status("SoundCloud audio", progress))
+
+            metrics = await soundcloud_service.download_media(
+                track.audio_url,
+                audio_name,
+                user_id=request.owner_user_id,
+                request_id=request_id,
+                on_progress=on_progress,
+            )
+            if not metrics:
+                reset_inline_video_request(token)
+                await _edit_inline_status(bm.something_went_wrong(), with_retry_button=True)
+                return
+
+            audio_path = metrics.path
+            if metrics.size >= MAX_FILE_SIZE:
+                complete_inline_video_request(token)
+                await _edit_inline_status(bm.audio_too_large())
+                return
+
+            await _edit_inline_status(bm.uploading_status())
+            send_kwargs = {
+                "chat_id": CHANNEL_ID,
+                "audio": FSInputFile(audio_path),
+                "title": track.title,
+                "performer": track.artist or None,
+            }
+            if bot_avatar:
+                send_kwargs["thumbnail"] = bot_avatar
+
+            try:
+                sent = await bot.send_audio(**send_kwargs)
+            except Exception:
+                send_kwargs.pop("thumbnail", None)
+                sent = await bot.send_audio(**send_kwargs)
+
+            db_file_id = sent.audio.file_id
+            await db.add_file(cache_key, db_file_id, "audio")
+        else:
+            await _edit_inline_status(bm.uploading_status())
+
+        bot_url = await get_bot_url(bot)
+        edited = await safe_edit_inline_media(
+            bot,
+            inline_message_id,
+            types.InputMediaAudio(
+                media=db_file_id,
+                caption=bm.captions(request.user_settings["captions"], None, bot_url),
+                parse_mode="HTML",
+            ),
+        )
+        if edited:
+            complete_inline_video_request(token)
+            return
+
+        reset_inline_video_request(token)
+        await _edit_inline_status(bm.something_went_wrong(), with_retry_button=True)
+    except DownloadRateLimitError as e:
+        reset_inline_video_request(token)
+        await _edit_inline_status(build_rate_limit_text(e.retry_after), with_retry_button=True)
+    except DownloadQueueBusyError as e:
+        reset_inline_video_request(token)
+        await _edit_inline_status(build_queue_busy_text(e.position), with_retry_button=True)
+    except Exception:
+        reset_inline_video_request(token)
+        await _edit_inline_status(bm.something_went_wrong(), with_retry_button=True)
     finally:
         if audio_path:
             await remove_file(audio_path)
-        if thumb_path:
-            await remove_file(thumb_path)
+
+
+@router.chosen_inline_result(F.result_id.startswith("soundcloud_inline:"))
+@with_chosen_inline_logging("soundcloud", "chosen_inline")
+async def chosen_inline_soundcloud_result(result: types.ChosenInlineResult):
+    if not result.inline_message_id:
+        logging.warning("Chosen inline SoundCloud result is missing inline_message_id")
+        return
+
+    token = result.result_id.removeprefix("soundcloud_inline:")
+    await _send_inline_soundcloud_audio(
+        token=token,
+        inline_message_id=result.inline_message_id,
+        actor_name=result.from_user.full_name,
+        request_event_id=result.result_id,
+        duplicate_handler="chosen",
+    )
+
+
+@router.callback_query(F.data.startswith("inline:soundcloud:"))
+@with_callback_logging("soundcloud", "inline_callback")
+async def send_inline_soundcloud_audio_callback(call: types.CallbackQuery):
+    if not call.inline_message_id:
+        await call.answer("This button works only in inline mode.", show_alert=True)
+        return
+
+    token = call.data.removeprefix("inline:soundcloud:")
+    await call.answer()
+    try:
+        await _send_inline_soundcloud_audio(
+            token=token,
+            inline_message_id=call.inline_message_id,
+            actor_name=call.from_user.full_name,
+            request_event_id=str(call.id),
+            duplicate_handler="callback",
+        )
+    except ValueError as exc:
+        if str(exc) == "already_processing":
+            await call.answer(bm.inline_video_already_processing(), show_alert=False)
+            return
+        if str(exc) == "already_completed":
+            await call.answer(bm.inline_video_already_sent(), show_alert=False)
+            return

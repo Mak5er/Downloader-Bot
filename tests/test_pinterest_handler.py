@@ -1,6 +1,10 @@
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
+
 import pytest
 
 from handlers import pinterest
+from services.inline_video_requests import get_inline_video_request
 from utils.download_manager import DownloadMetrics
 
 
@@ -112,3 +116,44 @@ async def test_pinterest_service_download_media_handles_error(monkeypatch, tmp_p
 
     metrics = await service.download_media("https://cdn.example.com/video.mp4", "pin.mp4")
     assert metrics is None
+
+
+@pytest.mark.asyncio
+async def test_inline_pinterest_query_returns_send_button(monkeypatch):
+    settings = {
+        "captions": "on",
+        "delete_message": "off",
+        "info_buttons": "on",
+        "url_button": "on",
+        "audio_button": "on",
+    }
+    query = SimpleNamespace(
+        from_user=SimpleNamespace(id=42),
+        chat_type="inline",
+        query="https://www.pinterest.com/pin/123456789/",
+        answer=AsyncMock(),
+    )
+    post = pinterest.PinterestPost(
+        id="pin-123",
+        description="Pin video",
+        media_list=[pinterest.PinterestMedia(url="https://cdn.example.com/video.mp4", type="video")],
+    )
+
+    monkeypatch.setattr(pinterest, "CHANNEL_ID", -1001234567890)
+    monkeypatch.setattr(pinterest, "send_analytics", AsyncMock())
+    monkeypatch.setattr(pinterest.db, "user_settings", AsyncMock(return_value=settings))
+    monkeypatch.setattr(pinterest, "get_bot_url", AsyncMock(return_value="https://t.me/maxloadbot"))
+    monkeypatch.setattr(pinterest.pinterest_service, "fetch_post", AsyncMock(return_value=post))
+
+    await pinterest.inline_pinterest_query(query)
+
+    results = query.answer.await_args.args[0]
+    assert len(results) == 1
+    result = results[0]
+    assert result.title == "Pinterest Video"
+    assert result.reply_markup.inline_keyboard[0][0].text == "Send video inline"
+    assert result.thumbnail_url == pinterest.get_inline_service_icon("pinterest")
+    token = result.id.removeprefix("pinterest_inline:")
+    request = get_inline_video_request(token)
+    assert request is not None
+    assert request.source_url == "https://www.pinterest.com/pin/123456789/"

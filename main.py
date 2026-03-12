@@ -1,5 +1,5 @@
-import os
 import asyncio
+import os
 from dataclasses import dataclass
 from typing import Optional
 
@@ -12,22 +12,24 @@ from aiogram.client.telegram import TelegramAPIServer
 from aiogram.enums.parse_mode import ParseMode
 
 from config import (
-    BOT_TOKEN,
+    API_SECRET,
     BOT_COMMANDS,
+    BOT_TOKEN,
+    MEASUREMENT_ID,
     OUTPUT_DIR,
     custom_api_url,
-    MEASUREMENT_ID,
-    API_SECRET,
 )
 from log.logger import logger as logging
+from services.db import AnalyticsEvent, DataBase
 from services.download_queue import shutdown_download_queue
-from services.db import DataBase, AnalyticsEvent
 from utils.http_client import close_http_session
+
+logging = logging.bind(service="main")
 
 custom_timeout = 600
 session = AiohttpSession(
     api=TelegramAPIServer.from_base(custom_api_url),
-    timeout=custom_timeout
+    timeout=custom_timeout,
 )
 default = DefaultBotProperties(parse_mode=ParseMode.HTML)
 bot = Bot(token=BOT_TOKEN, default=default, session=session)
@@ -80,21 +82,21 @@ async def _send_to_google_analytics(payload: _AnalyticsPayload) -> None:
         return
 
     params = {
-        'client_id': str(payload.user_id),
-        'user_id': str(payload.user_id),
-        'events': [{
-            'name': payload.action_name,
-            'params': {
-                'chat_type': payload.chat_type,
-                'session_id': str(payload.user_id),
-                'engagement_time_msec': '1000'
-            }
+        "client_id": str(payload.user_id),
+        "user_id": str(payload.user_id),
+        "events": [{
+            "name": payload.action_name,
+            "params": {
+                "chat_type": payload.chat_type,
+                "session_id": str(payload.user_id),
+                "engagement_time_msec": "1000",
+            },
         }],
     }
 
     client = await _get_analytics_http_client()
     await client.post(
-        f'https://www.google-analytics.com/mp/collect?measurement_id={MEASUREMENT_ID}&api_secret={API_SECRET}',
+        f"https://www.google-analytics.com/mp/collect?measurement_id={MEASUREMENT_ID}&api_secret={API_SECRET}",
         json=params,
         timeout=10,
     )
@@ -104,22 +106,23 @@ async def _persist_analytics_batch(batch: list[_AnalyticsPayload]) -> None:
     if not batch:
         return
 
-    async with db.SessionLocal() as session:
+    async with db.SessionLocal() as db_session:
         for payload in batch:
-            session.add(
+            db_session.add(
                 AnalyticsEvent(
                     user_id=payload.user_id,
                     chat_type=payload.chat_type,
                     action_name=payload.action_name,
                 )
             )
-        await session.commit()
+        await db_session.commit()
 
 
 async def _flush_analytics_batch(batch: list[_AnalyticsPayload]) -> None:
     if not batch:
         return
 
+    started_at = asyncio.get_running_loop().time()
     for payload in batch:
         try:
             await _send_to_google_analytics(payload)
@@ -132,6 +135,11 @@ async def _flush_analytics_batch(batch: list[_AnalyticsPayload]) -> None:
             )
 
     await _persist_analytics_batch(batch)
+    logging.perf(
+        "analytics_batch_flush",
+        duration_ms=(asyncio.get_running_loop().time() - started_at) * 1000.0,
+        batch_size=len(batch),
+    )
 
 
 async def _analytics_worker(worker_id: int) -> None:
@@ -139,43 +147,44 @@ async def _analytics_worker(worker_id: int) -> None:
     if queue is None:
         return
 
-    loop = asyncio.get_running_loop()
-    while True:
-        item = await queue.get()
-        if item is None:
-            queue.task_done()
-            break
-
-        batch = [item]
-        stop_requested = False
-        deadline = loop.time() + _ANALYTICS_BATCH_TIMEOUT
-
-        while len(batch) < _ANALYTICS_BATCH_SIZE:
-            timeout = deadline - loop.time()
-            if timeout <= 0:
+    with logging.context(flow="analytics_worker", request_id=f"analytics-worker-{worker_id}"):
+        loop = asyncio.get_running_loop()
+        while True:
+            item = await queue.get()
+            if item is None:
+                queue.task_done()
                 break
+
+            batch = [item]
+            stop_requested = False
+            deadline = loop.time() + _ANALYTICS_BATCH_TIMEOUT
+
+            while len(batch) < _ANALYTICS_BATCH_SIZE:
+                timeout = deadline - loop.time()
+                if timeout <= 0:
+                    break
+                try:
+                    next_item = await asyncio.wait_for(queue.get(), timeout=timeout)
+                except asyncio.TimeoutError:
+                    break
+
+                if next_item is None:
+                    stop_requested = True
+                    queue.task_done()
+                    break
+
+                batch.append(next_item)
+
             try:
-                next_item = await asyncio.wait_for(queue.get(), timeout=timeout)
-            except asyncio.TimeoutError:
+                await _flush_analytics_batch(batch)
+            except Exception as error:
+                logging.error("Analytics worker failed: worker=%s error=%s", worker_id, error)
+            finally:
+                for _ in batch:
+                    queue.task_done()
+
+            if stop_requested:
                 break
-
-            if next_item is None:
-                stop_requested = True
-                queue.task_done()
-                break
-
-            batch.append(next_item)
-
-        try:
-            await _flush_analytics_batch(batch)
-        except Exception as error:
-            logging.error("Analytics worker failed: worker=%s error=%s", worker_id, error)
-        finally:
-            for _ in batch:
-                queue.task_done()
-
-        if stop_requested:
-            break
 
 
 async def start_analytics_workers() -> None:
@@ -188,7 +197,7 @@ async def start_analytics_workers() -> None:
         asyncio.create_task(_analytics_worker(idx), name=f"analytics-worker-{idx}")
         for idx in range(_ANALYTICS_WORKERS)
     ]
-    logging.info("Analytics workers started: count=%s", _ANALYTICS_WORKERS)
+    logging.event("analytics_workers_started", count=_ANALYTICS_WORKERS)
 
 
 async def stop_analytics_workers() -> None:
@@ -210,7 +219,7 @@ async def send_analytics(user_id, chat_type, action_name):
     try:
         payload = _AnalyticsPayload(
             user_id=user_id,
-            chat_type=chat_type.value if hasattr(chat_type, 'value') else str(chat_type),
+            chat_type=chat_type.value if hasattr(chat_type, "value") else str(chat_type),
             action_name=action_name,
         )
 
@@ -225,46 +234,65 @@ async def send_analytics(user_id, chat_type, action_name):
                     user_id,
                     action_name,
                 )
+                logging.event(
+                    "analytics_dropped",
+                    level=30,
+                    user_id=user_id,
+                    chat_type=payload.chat_type,
+                    action_name=action_name,
+                )
                 return
 
         await _flush_analytics_batch([payload])
     except Exception as error:
-        logging.error(f"Failed to record analytics event '{action_name}' for user {user_id}: {error}")
-
+        logging.error(
+            "Failed to record analytics event: action=%s user_id=%s error=%s",
+            action_name,
+            user_id,
+            error,
+        )
 
 
 async def main():
-    logging.info(f"Starting {(await bot.get_me()).username} bot initialisation")
-    await db.init_db()
-    await start_analytics_workers()
+    with logging.context(flow="startup", request_id="bot-startup"):
+        startup_started_at = asyncio.get_running_loop().time()
+        bot_me = await bot.get_me()
+        logging.event("bot_startup", bot_username=bot_me.username)
+        await db.init_db()
+        await start_analytics_workers()
 
-    import handlers
-    import middlewares
-    from handlers.admin import clear_downloads_and_notify
+        import handlers
+        import middlewares
+        from handlers.admin import clear_downloads_and_notify
 
-    if not os.path.exists(OUTPUT_DIR):
-        os.makedirs(OUTPUT_DIR)
+        if not os.path.exists(OUTPUT_DIR):
+            os.makedirs(OUTPUT_DIR)
 
-    dp.include_router(handlers.router)
+        dp.include_router(handlers.router)
 
-    # Додаємо інші мідлвейри
-    for middleware in middlewares.__all__:
-        dp.message.outer_middleware(middleware())
-        dp.callback_query.outer_middleware(middleware())
-        dp.inline_query.outer_middleware(middleware())
+        for middleware in middlewares.__all__:
+            dp.message.outer_middleware(middleware())
+            dp.callback_query.outer_middleware(middleware())
+            dp.inline_query.outer_middleware(middleware())
 
-    await bot.set_my_commands(commands=BOT_COMMANDS)
-    await bot.delete_webhook(drop_pending_updates=True)
+        await bot.set_my_commands(commands=BOT_COMMANDS)
+        await bot.delete_webhook(drop_pending_updates=True)
 
-    crontab('0 0 * * *', func=clear_downloads_and_notify, start=True)
+        crontab("0 0 * * *", func=clear_downloads_and_notify, start=True)
 
-    logging.info("Launching polling loop")
-    try:
-        await dp.start_polling(bot)
-    finally:
-        await stop_analytics_workers()
-        await shutdown_download_queue()
-        await close_http_session()
+        logging.perf(
+            "bot_startup_duration",
+            duration_ms=(asyncio.get_running_loop().time() - startup_started_at) * 1000.0,
+            bot_username=bot_me.username,
+        )
+        logging.event("polling_started")
+        try:
+            await dp.start_polling(bot)
+        finally:
+            logging.event("polling_stopping")
+            await stop_analytics_workers()
+            await shutdown_download_queue()
+            await close_http_session()
 
 
 if __name__ == "__main__":
