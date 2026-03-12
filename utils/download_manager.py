@@ -19,6 +19,8 @@ from services.download_queue import (
 )
 from services.runtime_stats import record_download
 
+logging = logging.bind(service="download_manager")
+
 
 class DownloadError(Exception):
     """Raised when a download fails after exhausting all retry attempts."""
@@ -151,6 +153,7 @@ class ResilientDownloader:
 
         Returns metrics describing the completed download.
         """
+        started_at = time.perf_counter()
         loop = asyncio.get_running_loop()
         progress_bridge = self._build_progress_bridge(loop, on_progress)
         headers_map = headers or {}
@@ -190,8 +193,18 @@ class ResilientDownloader:
 
         queue = get_download_queue()
         queue_priority = self._resolve_priority(priority=priority, size_hint=size_hint)
+        logging.event(
+            "download_submitted",
+            source=source or self.source,
+            request_id=request_id,
+            user_id=user_id,
+            url=url,
+            filename=filename,
+            queue_priority=queue_priority,
+            size_hint=size_hint,
+        )
         try:
-            return await queue.submit(
+            metrics = await queue.submit(
                 runner,
                 priority=queue_priority,
                 source=source or self.source,
@@ -199,6 +212,16 @@ class ResilientDownloader:
                 request_id=request_id,
                 on_queued=on_queued,
             )
+            logging.perf(
+                "download_total",
+                duration_ms=(time.perf_counter() - started_at) * 1000.0,
+                source=source or self.source,
+                request_id=request_id,
+                user_id=user_id,
+                url=url,
+                size=metrics.size,
+            )
+            return metrics
         except QueueRateLimitError as exc:
             raise DownloadRateLimitError(exc.retry_after) from exc
         except QueueBackpressureError as exc:
@@ -317,6 +340,7 @@ class ResilientDownloader:
         os.makedirs(self.output_dir, exist_ok=True)
         target_path = os.path.join(self.output_dir, filename)
         temp_path = f"{target_path}{self.config.temp_suffix}"
+        sync_started_at = time.perf_counter()
 
         if skip_if_exists and os.path.exists(target_path):
             size = os.path.getsize(target_path)
@@ -344,7 +368,16 @@ class ResilientDownloader:
         progress_state: Optional[_ProgressState] = None
 
         try:
+            probe_started_at = time.perf_counter()
             total_size, supports_range = self._probe(url, headers)
+            logging.perf(
+                "download_probe",
+                duration_ms=(time.perf_counter() - probe_started_at) * 1000.0,
+                source=self.source,
+                url=url,
+                total_size=total_size,
+                supports_range=supports_range,
+            )
             if max_size_bytes and total_size > 0 and total_size > max_size_bytes:
                 raise DownloadTooLargeError(total_size, max_size_bytes)
             use_multipart = supports_range and total_size >= self.config.multipart_threshold
@@ -409,6 +442,16 @@ class ResilientDownloader:
                 progress_state.downloaded_bytes = size
                 progress_state.total_bytes = max(progress_state.total_bytes, size)
                 self._emit_progress(progress_state, force=True, done=True)
+            logging.perf(
+                "download_sync",
+                duration_ms=(time.perf_counter() - sync_started_at) * 1000.0,
+                source=self.source,
+                url=url,
+                path=target_path,
+                size=size,
+                multipart=use_multipart,
+                resumed=resumed,
+            )
             return DownloadMetrics(
                 url=url,
                 path=target_path,
@@ -668,15 +711,27 @@ def log_download_metrics(source: str, metrics: DownloadMetrics) -> None:
     """Log unified download stats for handlers."""
     try:
         size_mb = metrics.size / (1024 * 1024)
-        logging.info(
-            "Download metrics: source=%s url=%s path=%s size=%.2fMB elapsed=%.2fs multipart=%s resumed=%s",
-            source,
-            metrics.url,
-            metrics.path,
-            size_mb,
-            metrics.elapsed,
-            metrics.used_multipart,
-            metrics.resumed,
+        logging.perf(
+            "download_metrics",
+            duration_ms=metrics.elapsed * 1000.0,
+            message=(
+                "Download metrics: source=%s url=%s path=%s size=%.2fMB elapsed=%.2fs multipart=%s resumed=%s"
+            )
+            % (
+                source,
+                metrics.url,
+                metrics.path,
+                size_mb,
+                metrics.elapsed,
+                metrics.used_multipart,
+                metrics.resumed,
+            ),
+            source=source,
+            url=metrics.url,
+            path=metrics.path,
+            size_mb=round(size_mb, 2),
+            multipart=metrics.used_multipart,
+            resumed=metrics.resumed,
         )
         record_download(source, metrics)
     except Exception as exc:  # pragma: no cover - defensive logging

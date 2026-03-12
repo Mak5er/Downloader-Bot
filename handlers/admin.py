@@ -20,6 +20,8 @@ import messages as bm
 from config import ADMINS_UID, OUTPUT_DIR
 from filters import IsBotAdmin
 from log.logger import logger as logging
+
+logging = logging.bind(service="admin")
 from main import bot, db
 from services.download_queue import get_download_queue
 from services.runtime_stats import get_runtime_snapshot
@@ -152,7 +154,7 @@ async def download_log_handler(call: types.CallbackQuery):
         with open(file_path, 'rb') as file:
             await call.message.answer_document(BufferedInputFile(file.read(), filename=filename))
 
-    logging.info(f"User action: Downloaded logs (User ID: {user_id})")
+    logging.info("User action: Downloaded logs (User ID: %s)", user_id)
 
 
 @router.callback_query(F.data == 'check_active_users')
@@ -190,19 +192,19 @@ async def check_active_users(call: types.CallbackQuery):
                 await bot.send_chat_action(chat_id=user_id, action="typing")
                 send_successful = True
             except TelegramRetryAfter as retry_error:
-                logging.warning(f"Retry-after triggered twice while checking user {user_id}: {retry_error}")
+                logging.warning("Retry-after triggered twice while checking user %s: %s", user_id, retry_error)
             except (TelegramForbiddenError, TelegramNotFound, TelegramBadRequest) as retry_error:
-                logging.info(f"User {user_id} unreachable on retry: {retry_error}")
+                logging.info("User %s unreachable on retry: %s", user_id, retry_error)
             except TelegramAPIError as retry_error:
-                logging.error(f"API error on retry while checking user {user_id}: {retry_error}")
+                logging.error("API error on retry while checking user %s: %s", user_id, retry_error)
             except Exception as retry_error:
-                logging.error(f"Unexpected retry error while checking user {user_id}: {retry_error}")
+                logging.error("Unexpected retry error while checking user %s: %s", user_id, retry_error)
         except (TelegramForbiddenError, TelegramNotFound, TelegramBadRequest) as error:
-            logging.info(f"User {user_id} unreachable: {error}")
+            logging.info("User %s unreachable: %s", user_id, error)
         except TelegramAPIError as error:
-            logging.error(f"API error while checking user {user_id}: {error}")
+            logging.error("API error while checking user %s: %s", user_id, error)
         except Exception as error:
-            logging.error(f"Unexpected error while checking user {user_id}: {error}")
+            logging.error("Unexpected error while checking user %s: %s", user_id, error)
 
         if send_successful:
             reachable += 1
@@ -303,17 +305,17 @@ async def admin_send_to_chat(message: types.Message, state: FSMContext):
     try:
         sent_message = await bot.send_message(chat_id=chat_id, text=chat_text)
     except (TelegramForbiddenError, TelegramNotFound, TelegramBadRequest) as error:
-        logging.info(f"Failed to send message to chat {chat_id}: {error}")
+        logging.info("Failed to send message to chat %s: %s", chat_id, error)
         await bot.delete_message(message.chat.id, progress_message.message_id)
         await message.answer(bm.chat_message_failed(chat_id), reply_markup=kb.return_back_to_admin_keyboard())
         return
     except TelegramAPIError as error:
-        logging.error(f"API error while sending message to chat {chat_id}: {error}")
+        logging.error("API error while sending message to chat %s: %s", chat_id, error)
         await bot.delete_message(message.chat.id, progress_message.message_id)
         await message.answer(bm.chat_message_failed(chat_id), reply_markup=kb.return_back_to_admin_keyboard())
         return
     except Exception as error:
-        logging.error(f"Unexpected error while sending message to chat {chat_id}: {error}")
+        logging.error("Unexpected error while sending message to chat %s: %s", chat_id, error)
         await bot.delete_message(message.chat.id, progress_message.message_id)
         await message.answer(bm.chat_message_failed(chat_id), reply_markup=kb.return_back_to_admin_keyboard())
         return
@@ -468,4 +470,4 @@ async def clear_downloads_and_notify():
         try:
             await bot.send_message(chat_id=admin_id, text=message)
         except Exception as e:
-            logging.error(f"Failed to send a message to admin {admin_id}: {e}")
+            logging.error("Failed to send a message to admin %s: %s", admin_id, e)

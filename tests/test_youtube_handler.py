@@ -1,8 +1,10 @@
-﻿from types import SimpleNamespace
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 
 from handlers import youtube
+from services.inline_video_requests import create_inline_video_request, get_inline_video_request
 from utils.download_manager import DownloadMetrics
 
 
@@ -103,3 +105,76 @@ def test_get_youtube_video_returns_none_on_error(monkeypatch):
     result = youtube.get_youtube_video("https://example.com/video")
 
     assert result is None
+
+
+@pytest.mark.asyncio
+async def test_chosen_inline_youtube_result_supports_regular_video(monkeypatch, tmp_path):
+    settings = {
+        "captions": "on",
+        "delete_message": "off",
+        "info_buttons": "on",
+        "url_button": "on",
+        "audio_button": "on",
+    }
+    token = create_inline_video_request(
+        "youtube",
+        "https://www.youtube.com/watch?v=abc123",
+        42,
+        settings,
+    )
+    result = SimpleNamespace(
+        result_id=f"youtube_inline:{token}",
+        inline_message_id="inline-message-1",
+        from_user=SimpleNamespace(full_name="Inline User"),
+    )
+    video_path = tmp_path / "video.mp4"
+    video_path.write_bytes(b"video")
+    metrics = DownloadMetrics(
+        url="https://cdn.example.com/video.mp4",
+        path=str(video_path),
+        size=video_path.stat().st_size,
+        elapsed=0.1,
+        used_multipart=False,
+        resumed=False,
+    )
+
+    monkeypatch.setattr(
+        youtube,
+        "get_youtube_video",
+        lambda url: {
+            "id": "abc123",
+            "title": "Regular Video",
+            "webpage_url": url,
+            "view_count": 10,
+            "like_count": 2,
+        },
+    )
+    monkeypatch.setattr(
+        youtube,
+        "get_video_stream",
+        lambda yt: {"url": "https://cdn.example.com/video.mp4", "filesize": 1024},
+    )
+    monkeypatch.setattr(youtube, "download_stream", AsyncMock(return_value=metrics))
+    monkeypatch.setattr(youtube.db, "get_file_id", AsyncMock(return_value=None))
+    monkeypatch.setattr(youtube.db, "add_file", AsyncMock())
+    monkeypatch.setattr(youtube, "get_bot_url", AsyncMock(return_value="https://t.me/maxloadbot"))
+    monkeypatch.setattr(youtube, "safe_edit_inline_text", AsyncMock(return_value=True))
+    monkeypatch.setattr(youtube, "safe_edit_inline_media", AsyncMock(return_value=True))
+    monkeypatch.setattr(youtube, "remove_file", AsyncMock())
+    monkeypatch.setattr(
+        youtube.bot,
+        "send_video",
+        AsyncMock(return_value=SimpleNamespace(video=SimpleNamespace(file_id="cached-file-id"))),
+    )
+
+    await youtube.chosen_inline_youtube_result(result)
+
+    assert youtube.safe_edit_inline_text.await_count == 3
+    assert youtube.safe_edit_inline_text.await_args_list[0].args[2] == youtube.bm.fetching_info_status()
+    assert youtube.safe_edit_inline_text.await_args_list[1].args[2] == youtube.bm.downloading_video_status()
+    assert youtube.safe_edit_inline_text.await_args_list[2].args[2] == youtube.bm.uploading_status()
+    media = youtube.safe_edit_inline_media.await_args.args[2]
+    assert media.media == "cached-file-id"
+    request = get_inline_video_request(token)
+    assert request is not None
+    assert request.state == "completed"

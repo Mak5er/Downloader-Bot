@@ -4,7 +4,12 @@ services:
       context: .
       dockerfile: Dockerfile
     volumes:
-      - .:/app
+      - downloader_downloads:/app/downloads
+      - downloader_log:/app/log
     env_file: .env
     container_name: downloader-bot
     restart: always
+
+volumes:
+  downloader_downloads:
+  downloader_log:

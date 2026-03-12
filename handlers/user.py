@@ -16,6 +16,8 @@ import keyboards as kb
 import messages as bm
 from handlers.utils import get_message_text, remove_file
 from log.logger import logger as logging
+
+logging = logging.bind(service="user")
 from main import db, send_analytics, bot
 from services.inline_album_links import get_inline_album_request
 from services.pending_requests import pop_pending
@@ -136,6 +138,10 @@ async def _process_inline_album_deeplink(message: types.Message, payload: str) -
         if request.service == "pinterest":
             from handlers import pinterest
             await pinterest.process_pinterest(message, direct_url=request.url)
+            return True
+        if request.service == "twitter":
+            from handlers import twitter
+            await twitter.handle_tweet_links(message, direct_url=request.url)
             return True
     except Exception:
         logging.exception(

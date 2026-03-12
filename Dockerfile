@@ -23,7 +23,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       libssl-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy only requirements first to maximize layer caching
+# Copy only runtime requirements first to maximize layer caching
 COPY requirements.txt .
 
 # Build dependency wheels (faster rebuilds with cache)
@@ -54,7 +54,7 @@ COPY requirements.txt .
 
 # Install dependencies from wheels (no compilation here)
 RUN pip install -U pip && \
-    pip install --no-cache-dir /wheels/*
+    pip install --no-cache-dir --no-index --find-links=/wheels -r requirements.txt
 
 # Copy application source code
 COPY . .

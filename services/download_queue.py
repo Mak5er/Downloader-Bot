@@ -9,6 +9,8 @@ from typing import Any, Awaitable, Callable, Optional, TypeVar
 
 from log.logger import logger as logging
 
+logging = logging.bind(service="download_queue")
+
 T = TypeVar("T")
 
 
@@ -130,6 +132,7 @@ class AdaptiveDownloadQueue:
         on_queued: Optional[Callable[[QueueTicket], Awaitable[None] | None]] = None,
     ) -> T:
         await self._ensure_started()
+        submit_started_at = time.perf_counter()
 
         reserved_user_slot = False
         queued = False
@@ -172,6 +175,14 @@ class AdaptiveDownloadQueue:
             self._queue.put_nowait(job)
             queued = True
             self._last_non_empty_queue = time.monotonic()
+            logging.event(
+                "queue_job_queued",
+                source=source or "generic",
+                user_id=user_id,
+                request_id=request_id,
+                queue_depth=self._queue.qsize(),
+                priority=int(priority),
+            )
             await self._maybe_autotune()
 
             if on_queued:
@@ -192,7 +203,15 @@ class AdaptiveDownloadQueue:
                         exc,
                     )
 
-            return await future
+            result = await future
+            logging.perf(
+                "queue_job_total",
+                duration_ms=(time.perf_counter() - submit_started_at) * 1000.0,
+                source=source or "generic",
+                user_id=user_id,
+                request_id=request_id,
+            )
+            return result
         except Exception:
             if user_id is not None and not queued:
                 if request_key is not None:
@@ -250,11 +269,11 @@ class AdaptiveDownloadQueue:
             for _ in range(self.min_workers):
                 self._spawn_worker_locked()
             self._started = True
-            logging.info(
-                "Download queue started: workers=%s max_workers=%s queue_cap=%s",
-                self.min_workers,
-                self.max_workers,
-                self.max_queue_size,
+            logging.event(
+                "queue_started",
+                workers=self.min_workers,
+                max_workers=self.max_workers,
+                queue_cap=self.max_queue_size,
             )
 
     def _spawn_worker_locked(self) -> None:
@@ -355,19 +374,27 @@ class AdaptiveDownloadQueue:
 
         if self._completed_jobs % 25 == 0:
             snap = self._build_global_snapshot()
-            logging.info(
-                (
-                    "Queue metrics: jobs=%s workers=%s depth=%s "
-                    "queue_wait_p50=%.0fms queue_wait_p95=%.0fms "
-                    "processing_p50=%.0fms processing_p95=%.0fms"
+            logging.perf(
+                "queue_metrics_snapshot",
+                duration_ms=snap.processing_p95_ms,
+                jobs=self._completed_jobs,
+                workers=self.active_workers,
+                depth=self._queue.qsize(),
+                queue_wait_p50_ms=round(snap.queue_wait_p50_ms, 2),
+                queue_wait_p95_ms=round(snap.queue_wait_p95_ms, 2),
+                processing_p50_ms=round(snap.processing_p50_ms, 2),
+                processing_p95_ms=round(snap.processing_p95_ms, 2),
+                message=(
+                    "Queue metrics snapshot: jobs=%s workers=%s depth=%s "
+                    "queue_wait_p95=%.0fms processing_p95=%.0fms"
+                )
+                % (
+                    self._completed_jobs,
+                    self.active_workers,
+                    self._queue.qsize(),
+                    snap.queue_wait_p95_ms,
+                    snap.processing_p95_ms,
                 ),
-                self._completed_jobs,
-                self.active_workers,
-                self._queue.qsize(),
-                snap.queue_wait_p50_ms,
-                snap.queue_wait_p95_ms,
-                snap.processing_p50_ms,
-                snap.processing_p95_ms,
             )
 
     async def _maybe_autotune(self) -> None:
@@ -397,11 +424,11 @@ class AdaptiveDownloadQueue:
             if scale_up:
                 self._spawn_worker_locked()
                 self._last_scale_action = now
-                logging.info(
-                    "Queue auto-tune scale up: workers=%s depth=%s wait_p95=%.2fs",
-                    len(self._workers),
-                    queue_depth,
-                    wait_p95,
+                logging.event(
+                    "queue_scale_up",
+                    workers=len(self._workers),
+                    depth=queue_depth,
+                    wait_p95_s=round(wait_p95, 2),
                 )
                 return
 
@@ -424,9 +451,10 @@ class AdaptiveDownloadQueue:
                     )
                 )
                 self._last_scale_action = now
-                logging.info(
-                    "Queue auto-tune scale down requested: workers=%s",
-                    max(self.min_workers, current_workers - 1),
+                logging.event(
+                    "queue_scale_down_requested",
+                    workers=max(self.min_workers, current_workers - 1),
+                    idle_for_s=round(idle_for, 2),
                 )
 
     def _enforce_rate_limit(self, user_id: int) -> None:
