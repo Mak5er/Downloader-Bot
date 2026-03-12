@@ -10,5 +10,6 @@ __pycache__
 *.log
 .env
 downloads
-log
+log/*
+!log/logger.py
 tests
