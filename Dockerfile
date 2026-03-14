@@ -4,7 +4,7 @@
 # 1) Builder stage
 # This stage builds Python dependency wheels
 ############################
-FROM python:3.10-slim AS builder
+FROM python:3.14-slim AS builder
 
 # Environment optimizations
 ENV TZ=UTC \
@@ -35,7 +35,7 @@ RUN pip install -U pip setuptools wheel && \
 # 2) Runtime stage
 # Final lightweight image
 ############################
-FROM python:3.10-slim
+FROM python:3.14-slim
 
 ENV TZ=UTC \
     PYTHONDONTWRITEBYTECODE=1 \
