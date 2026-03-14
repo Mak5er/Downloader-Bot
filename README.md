@@ -61,6 +61,8 @@ If you want to rebuild the container locally from the repository `Dockerfile`, u
 
 For the GHCR image you only need `docker-compose.yml` and `.env`.
 For a local build you also need the repository sources and `Dockerfile`.
+You do not need to create `log/` or `downloads/` manually: Docker named volumes are created automatically, and the app also creates these directories on startup when needed.
+
 Notes about performance:
 
 - Docker build is faster with the included `.dockerignore`, because `.venv`, tests, logs and downloads are no longer sent into the build context.
