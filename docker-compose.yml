@@ -1,5 +1,6 @@
 services:
   downloader-bot:
+    image: ghcr.io/mak5er/downloader-bot:latest
     build:
       context: .
       dockerfile: Dockerfile

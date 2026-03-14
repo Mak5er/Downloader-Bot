@@ -50,10 +50,17 @@ Run the script using Python:
 
     python main.py
 
-Or using Docker:
+Or using Docker with the published GHCR image:
 
+    docker compose pull
     docker compose up -d
 
+If you want to rebuild the container locally from the repository `Dockerfile`, use:
+
+    docker compose up -d --build
+
+For the GHCR image you only need `docker-compose.yml` and `.env`.
+For a local build you also need the repository sources and `Dockerfile`.
 Notes about performance:
 
 - Docker build is faster with the included `.dockerignore`, because `.venv`, tests, logs and downloads are no longer sent into the build context.
