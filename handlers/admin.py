@@ -383,17 +383,17 @@ async def send_to_all_message(message: types.Message, state: FSMContext):
                                text=bm.start_mailing(),
                                reply_markup=types.ReplyKeyboardRemove())
 
-        users = await db.all_users()
+        users = await db.get_all_users_info()
         for user in users:
+            user_id = int(user.user_id)
+            user_status = user.status or "inactive"
             try:
-                await bot.copy_message(chat_id=user,
+                await bot.copy_message(chat_id=user_id,
                                        from_chat_id=sender_id,
                                        message_id=message.message_id)
 
-                user_status = await db.status(user)
-
                 if user_status == "inactive":
-                    await db.set_active(user)
+                    await db.set_active(user_id)
 
                 await asyncio.sleep(
                     0.05
@@ -402,10 +402,10 @@ async def send_to_all_message(message: types.Message, state: FSMContext):
             except Exception as e:
 
                 if str(e) == "Forbidden: bots can't send messages to bots":
-                    await db.delete_user(user)
+                    await db.delete_user(user_id)
 
                 if "blocked" or "Chat not found" in str(e):
-                    await db.set_inactive(user)
+                    await db.set_inactive(user_id)
                 continue
 
         await bot.send_message(chat_id=message.chat.id,

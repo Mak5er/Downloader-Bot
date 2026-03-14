@@ -1,12 +1,13 @@
 import asyncio
 import html
+import json
 import os
 import re
 import time
 from typing import Optional
 from urllib.parse import urlsplit
 
-import requests
+import aiohttp
 from aiogram import Router, F, types
 from aiogram.types import FSInputFile
 from aiogram.utils.media_group import MediaGroupBuilder
@@ -49,10 +50,12 @@ from services.inline_video_requests import (
     create_inline_video_request,
     reset_inline_video_request,
 )
+from utils.http_client import get_http_session
 
 logging = logging.bind(service="twitter")
 
 MAX_FILE_SIZE = int(1.5 * 1024 * 1024 * 1024)  # 1.5 GB
+_TWITTER_HTTP_TIMEOUT = aiohttp.ClientTimeout(total=10)
 
 router = Router()
 
@@ -69,17 +72,26 @@ twitter_downloader = ResilientDownloader(
 )
 
 
-def extract_tweet_ids(text):
+async def extract_tweet_ids_async(text: str) -> Optional[list[str]]:
     expanded_links: list[str] = []
     short_links = re.findall(r't\.co\/[a-zA-Z0-9]+', text)
     if short_links:
-        with requests.Session() as session:
-            for link in short_links:
-                try:
-                    response = session.get(f'https://{link}', allow_redirects=True, timeout=5)
-                    expanded_links.append(response.url)
-                except requests.RequestException as exc:
-                    logging.error("Failed to expand t.co URL: url=%s error=%s", link, exc)
+        session = await get_http_session()
+
+        async def _expand_short_link(link: str) -> Optional[str]:
+            try:
+                async with session.get(
+                    f"https://{link}",
+                    allow_redirects=True,
+                    timeout=5,
+                ) as response:
+                    return str(response.url)
+            except (aiohttp.ClientError, asyncio.TimeoutError) as exc:
+                logging.error("Failed to expand t.co URL: url=%s error=%s", link, exc)
+                return None
+
+        expanded_results = await asyncio.gather(*(_expand_short_link(link) for link in short_links))
+        expanded_links = [item for item in expanded_results if item]
 
     combined_text = '\n'.join([text, *expanded_links]) if expanded_links else text
     tweet_ids = re.findall(
@@ -89,16 +101,22 @@ def extract_tweet_ids(text):
     return list(dict.fromkeys(tweet_ids)) if tweet_ids else None
 
 
-def scrape_media(tweet_id):
-    r = requests.get(f'https://api.vxtwitter.com/Twitter/status/{tweet_id}')
-    r.raise_for_status()
+async def scrape_media_async(tweet_id: str) -> dict:
+    session = await get_http_session()
+    async with session.get(
+        f"https://api.vxtwitter.com/Twitter/status/{tweet_id}",
+        timeout=_TWITTER_HTTP_TIMEOUT,
+    ) as response:
+        response.raise_for_status()
+        payload = await response.text()
+
     try:
-        return r.json()
-    except requests.exceptions.JSONDecodeError:
-        if match := re.search(r'<meta content="(.*?)" property="og:description" />', r.text):
+        return json.loads(payload)
+    except json.JSONDecodeError:
+        if match := re.search(r'<meta content="(.*?)" property="og:description" />', payload):
             error_message = html.unescape(match.group(1))
             logging.error("Twitter API returned error: tweet_id=%s error=%s", tweet_id, error_message)
-            raise Exception(f'API returned error: {error_message}')
+            raise Exception(f"API returned error: {error_message}")
         logging.error("Failed to parse Twitter API response JSON: tweet_id=%s", tweet_id)
         raise
     except Exception as e:
@@ -106,13 +124,13 @@ def scrape_media(tweet_id):
         raise
 
 
-def _extract_single_inline_tweet_media(source_url: str) -> tuple[str, dict, dict] | None:
-    tweet_ids = extract_tweet_ids(source_url)
+async def _extract_single_inline_tweet_media_async(source_url: str) -> tuple[str, dict, dict] | None:
+    tweet_ids = await extract_tweet_ids_async(source_url)
     if not tweet_ids:
         return None
 
     tweet_id = tweet_ids[0]
-    tweet_media = scrape_media(tweet_id)
+    tweet_media = await scrape_media_async(tweet_id)
     items = [item for item in tweet_media.get("media_extended", []) if item.get("url") and item.get("type")]
     if len(items) != 1:
         return None
@@ -340,7 +358,7 @@ async def handle_tweet_links(message, direct_url: Optional[str] = None):
     user_settings = await db.user_settings(resolve_settings_target_id(message))
 
     try:
-        tweet_ids = await asyncio.to_thread(extract_tweet_ids, text)
+        tweet_ids = await extract_tweet_ids_async(text)
         if tweet_ids:
             logging.info("Twitter links parsed: user_id=%s count=%s", message.from_user.id, len(tweet_ids))
             await send_chat_action_if_needed(bot, message.chat.id, "typing", business_id)
@@ -348,7 +366,7 @@ async def handle_tweet_links(message, direct_url: Optional[str] = None):
             for tweet_id in tweet_ids:
                 try:
                     logging.info("Fetching tweet media: tweet_id=%s", tweet_id)
-                    media = await asyncio.to_thread(scrape_media, tweet_id)
+                    media = await scrape_media_async(tweet_id)
                     await reply_media(message, tweet_id, media, bot_url, business_id, user_settings)
                     await maybe_delete_user_message(message, user_settings.get("delete_message"))
                 except Exception as e:
@@ -375,11 +393,11 @@ async def inline_twitter_query(query: types.InlineQuery):
 
         source_url = match.group(0)
         user_settings = await db.user_settings(query.from_user.id)
-        inline_media = await asyncio.to_thread(_extract_single_inline_tweet_media, source_url)
+        inline_media = await _extract_single_inline_tweet_media_async(source_url)
         if not inline_media:
-            tweet_ids = await asyncio.to_thread(extract_tweet_ids, source_url)
+            tweet_ids = await extract_tweet_ids_async(source_url)
             if tweet_ids:
-                tweet_media = await asyncio.to_thread(scrape_media, tweet_ids[0])
+                tweet_media = await scrape_media_async(tweet_ids[0])
                 media_items = [
                     item for item in tweet_media.get("media_extended", [])
                     if item.get("url") and item.get("type")
@@ -484,7 +502,7 @@ async def _send_inline_twitter_media(
 
     try:
         await _edit_inline_status(bm.fetching_info_status())
-        inline_media = await asyncio.to_thread(_extract_single_inline_tweet_media, request.source_url)
+        inline_media = await _extract_single_inline_tweet_media_async(request.source_url)
         if not inline_media:
             complete_inline_video_request(token)
             await _edit_inline_status("Only single photo or single video posts are supported inline.")

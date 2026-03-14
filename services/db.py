@@ -5,7 +5,8 @@ import time
 from typing import Optional
 
 from sqlalchemy import Column, Text, TIMESTAMP, func, select, delete, update, ForeignKey, BigInteger, text
-from sqlalchemy.dialects.postgresql import insert
+from sqlalchemy.dialects.postgresql import insert as pg_insert
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
 from sqlalchemy.orm import declarative_base, relationship
 
@@ -102,6 +103,7 @@ class DataBase:
             pool_pre_ping=True,
             pool_recycle=1800,
         )
+        self._dialect_name = self.engine.dialect.name
         self.SessionLocal = async_sessionmaker(bind=self.engine, expire_on_commit=False, class_=AsyncSession)
         self._settings_cache: dict[int, tuple[float, dict[str, str]]] = {}
         self._file_cache: dict[str, tuple[float, Optional[str]]] = {}
@@ -148,35 +150,55 @@ class DataBase:
         self._status_cache[int(user_id)] = (time.monotonic(), status)
 
     async def upsert_chat(self, user_id, user_name, user_username, chat_type, language=None, status="active"):
+        values = {
+            "user_name": user_name,
+            "user_username": user_username,
+            "chat_type": chat_type,
+            "language": language,
+            "status": status,
+        }
         async with self.SessionLocal() as session:
             async with session.begin():
-                existing = await session.execute(select(User).where(User.user_id == user_id))
-                record = existing.scalar_one_or_none()
-                values = {
-                    "user_name": user_name,
-                    "user_username": user_username,
-                    "chat_type": chat_type,
-                    "language": language,
-                    "status": status,
-                }
-
-                if record:
-                    await session.execute(
-                        update(User)
-                        .where(User.user_id == user_id)
-                        .values(**values)
-                    )
-                else:
-                    session.add(
-                        User(
-                            user_id=user_id,
-                            user_name=user_name,
-                            user_username=user_username,
-                            chat_type=chat_type,
-                            language=language,
-                            status=status,
+                if self._dialect_name == "postgresql":
+                    stmt = (
+                        pg_insert(User)
+                        .values(user_id=user_id, **values)
+                        .on_conflict_do_update(
+                            index_elements=[User.user_id],
+                            set_=values,
                         )
                     )
+                    await session.execute(stmt)
+                elif self._dialect_name == "sqlite":
+                    stmt = (
+                        sqlite_insert(User)
+                        .values(user_id=user_id, **values)
+                        .on_conflict_do_update(
+                            index_elements=[User.user_id],
+                            set_=values,
+                        )
+                    )
+                    await session.execute(stmt)
+                else:
+                    existing = await session.execute(select(User).where(User.user_id == user_id))
+                    record = existing.scalar_one_or_none()
+                    if record:
+                        await session.execute(
+                            update(User)
+                            .where(User.user_id == user_id)
+                            .values(**values)
+                        )
+                    else:
+                        session.add(
+                            User(
+                                user_id=user_id,
+                                user_name=user_name,
+                                user_username=user_username,
+                                chat_type=chat_type,
+                                language=language,
+                                status=status,
+                            )
+                        )
         self._status_cache[int(user_id)] = (time.monotonic(), status)
 
     async def delete_user(self, user_id):
@@ -346,11 +368,20 @@ class DataBase:
     async def add_file(self, url, file_id, file_type):
         async with self.SessionLocal() as session:
             try:
-                stmt = (
-                    insert(DownloadedFile)
-                    .values(url=url, file_id=file_id, file_type=file_type)
-                    .on_conflict_do_nothing(index_elements=[DownloadedFile.url])
-                )
+                if self._dialect_name == "postgresql":
+                    stmt = (
+                        pg_insert(DownloadedFile)
+                        .values(url=url, file_id=file_id, file_type=file_type)
+                        .on_conflict_do_nothing(index_elements=[DownloadedFile.url])
+                    )
+                elif self._dialect_name == "sqlite":
+                    stmt = (
+                        sqlite_insert(DownloadedFile)
+                        .values(url=url, file_id=file_id, file_type=file_type)
+                        .on_conflict_do_nothing(index_elements=[DownloadedFile.url])
+                    )
+                else:
+                    stmt = DownloadedFile.__table__.insert().values(url=url, file_id=file_id, file_type=file_type)
                 await session.execute(stmt)
                 await session.commit()
                 self._file_cache[url] = (time.monotonic(), file_id)

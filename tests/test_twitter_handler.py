@@ -1,28 +1,38 @@
-﻿import os
+import os
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
+from aiohttp.client_exceptions import ClientResponseError
 
 from handlers import twitter
 from utils.download_manager import DownloadMetrics
 
 
 class DummyResponse:
-    def __init__(self, *, url=None, status_code=200, json_data=None, text="", iter_chunks=None):
+    def __init__(self, *, url=None, status_code=200, text=""):
         self.url = url
         self.status_code = status_code
-        self._json_data = json_data
-        self.text = text
-        self._iter_chunks = iter_chunks or [b"data"]
+        self._text = text
 
     def raise_for_status(self):
         if self.status_code >= 400:
-            raise twitter.requests.HTTPError(f"status {self.status_code}")
+            raise ClientResponseError(
+                request_info=SimpleNamespace(real_url=self.url or "https://example.com"),
+                history=(),
+                status=self.status_code,
+                message=f"status {self.status_code}",
+                headers=None,
+            )
 
-    def json(self):
-        if isinstance(self._json_data, Exception):
-            raise self._json_data
-        return self._json_data
+    async def text(self):
+        return self._text
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb):
+        return False
 
 
 class DummySession:
@@ -32,35 +42,32 @@ class DummySession:
     def get(self, *args, **kwargs):
         return self._handler(*args, **kwargs)
 
-    def close(self):
-        return None
 
-    def __enter__(self):
-        return self
-
-    def __exit__(self, exc_type, exc, tb):
-        self.close()
-        return False
-
-
-def test_extract_tweet_ids_expands_short_links(monkeypatch):
+@pytest.mark.asyncio
+async def test_extract_tweet_ids_expands_short_links(monkeypatch):
     def fake_get(url, allow_redirects=True, timeout=5):
         return DummyResponse(url="https://twitter.com/user/status/1234567890")
 
-    monkeypatch.setattr(twitter.requests, "Session", lambda: DummySession(fake_get))
-    result = twitter.extract_tweet_ids("Check this https://t.co/abc123")
+    monkeypatch.setattr(twitter, "get_http_session", AsyncMock(return_value=DummySession(fake_get)))
+    result = await twitter.extract_tweet_ids_async("Check this https://t.co/abc123")
     assert result == ["1234567890"]
 
 
-def test_extract_tweet_ids_none(monkeypatch):
-    monkeypatch.setattr(twitter.requests, "Session", lambda: DummySession(lambda *a, **k: DummyResponse()))
-    assert twitter.extract_tweet_ids("No twitter links here") is None
+@pytest.mark.asyncio
+async def test_extract_tweet_ids_none(monkeypatch):
+    monkeypatch.setattr(twitter, "get_http_session", AsyncMock(return_value=DummySession(lambda *a, **k: DummyResponse())))
+    assert await twitter.extract_tweet_ids_async("No twitter links here") is None
 
 
-def test_scrape_media_success(monkeypatch):
+@pytest.mark.asyncio
+async def test_scrape_media_success(monkeypatch):
     sample_json = {"tweetURL": "https://twitter.com/user/status/1"}
-    monkeypatch.setattr(twitter.requests, "get", lambda url: DummyResponse(json_data=sample_json))
-    result = twitter.scrape_media("1")
+    monkeypatch.setattr(
+        twitter,
+        "get_http_session",
+        AsyncMock(return_value=DummySession(lambda url, timeout=None: DummyResponse(text=twitter.json.dumps(sample_json)))),
+    )
+    result = await twitter.scrape_media_async("1")
     assert result == sample_json
 
 

@@ -65,19 +65,14 @@ class ChatTrackerMiddleware(BaseMiddleware):
         if cached and now - cached[0] <= self._touch_ttl_seconds and cached[1] == signature:
             return
 
-        if await self._db.user_exist(user_id):
-            await self._db.user_update_name(user_id, full_name, username)
-        else:
-            await self._db.add_user(
-                user_id=user_id,
-                user_name=full_name,
-                user_username=username,
-                chat_type=chat_type_value,
-                language=language,
-                status="active",
-            )
-
-        await self._db.set_active(user_id)
+        await self._db.upsert_chat(
+            user_id=user_id,
+            user_name=full_name,
+            user_username=username,
+            chat_type=chat_type_value,
+            language=language,
+            status="active",
+        )
         self._user_touch_cache[user_id] = (now, signature)
 
     async def _ensure_group(self, chat: Chat) -> None:
@@ -111,5 +106,4 @@ class ChatTrackerMiddleware(BaseMiddleware):
             language=language,
             status="active",
         )
-        await self._db.set_active(chat_id)
         self._group_touch_cache[chat_id] = (now, signature)

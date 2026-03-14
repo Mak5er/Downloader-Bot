@@ -26,10 +26,7 @@ class DummyMessage:
 @pytest.mark.asyncio
 async def test_update_info_adds_new_user(monkeypatch):
     fake_db = SimpleNamespace(
-        user_exist=AsyncMock(return_value=False),
-        add_user=AsyncMock(),
-        user_update_name=AsyncMock(),
-        set_active=AsyncMock(),
+        upsert_chat=AsyncMock(),
     )
 
     monkeypatch.setattr(user, "db", fake_db)
@@ -37,10 +34,13 @@ async def test_update_info_adds_new_user(monkeypatch):
     message = DummyMessage(user_id=42)
     await user.update_info(message)
 
-    fake_db.user_exist.assert_awaited_once_with(42)
-    fake_db.add_user.assert_awaited_once()
-    fake_db.user_update_name.assert_not_awaited()
-    fake_db.set_active.assert_awaited_once_with(42)
+    fake_db.upsert_chat.assert_awaited_once()
+    _, kwargs = fake_db.upsert_chat.await_args
+    assert kwargs["user_id"] == 42
+    assert kwargs["user_name"] == "Tester"
+    assert kwargs["user_username"] == "tester"
+    assert kwargs["chat_type"] == "private"
+    assert kwargs["status"] == "active"
 
 
 @pytest.mark.asyncio

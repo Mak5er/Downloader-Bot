@@ -10,16 +10,31 @@ from services.inline_video_requests import create_inline_video_request, get_inli
 @pytest.fixture(autouse=True)
 def stub_user_agent(monkeypatch):
     monkeypatch.setattr(tiktok, "UserAgent", lambda: SimpleNamespace(random="Agent"))
-    if hasattr(tiktok, "_expand_tiktok_url_cached"):
-        tiktok._expand_tiktok_url_cached.cache_clear()
+    tiktok._expanded_tiktok_url_cache.clear()
 
 
 class DummyResponse:
     def __init__(self, url=None):
         self.url = url
 
+    async def __aenter__(self):
+        return self
 
-def test_process_tiktok_url_expands_short_links(monkeypatch):
+    async def __aexit__(self, exc_type, exc, tb):
+        return False
+
+
+class DummySession:
+    def __init__(self, *, head_handler=None):
+        self._head_handler = head_handler
+
+    def head(self, *args, **kwargs):
+        assert self._head_handler is not None
+        return self._head_handler(*args, **kwargs)
+
+
+@pytest.mark.asyncio
+async def test_process_tiktok_url_expands_short_links(monkeypatch):
     expected_url = "https://www.tiktok.com/@user/video/123456"
 
     def fake_head(url, allow_redirects, headers, timeout=None):
@@ -27,30 +42,32 @@ def test_process_tiktok_url_expands_short_links(monkeypatch):
         assert "User-Agent" in headers
         return DummyResponse(url=expected_url)
 
-    monkeypatch.setattr(tiktok.requests, "head", fake_head)
-    result = tiktok.process_tiktok_url("https://vm.tiktok.com/ABC123/")
+    monkeypatch.setattr(tiktok, "get_http_session", AsyncMock(return_value=DummySession(head_handler=fake_head)))
+    result = await tiktok.process_tiktok_url_async("https://vm.tiktok.com/ABC123/")
     assert result == expected_url
 
 
-def test_process_tiktok_url_returns_original_on_error(monkeypatch):
+@pytest.mark.asyncio
+async def test_process_tiktok_url_returns_original_on_error(monkeypatch):
     original_url = "https://vm.tiktok.com/ABC123/"
 
     def boom(*_a, **_k):
-        raise tiktok.requests.RequestException("fail")
+        raise tiktok.aiohttp.ClientError("fail")
 
-    monkeypatch.setattr(tiktok.requests, "head", boom)
-    result = tiktok.process_tiktok_url(original_url)
+    monkeypatch.setattr(tiktok, "get_http_session", AsyncMock(return_value=DummySession(head_handler=boom)))
+    result = await tiktok.process_tiktok_url_async(original_url)
     assert result == original_url
 
 
-def test_process_tiktok_url_strips_query(monkeypatch):
+@pytest.mark.asyncio
+async def test_process_tiktok_url_strips_query(monkeypatch):
     expanded_url = "https://www.tiktok.com/@user/video/123456"
 
-    def fake_head(url, allow_redirects, headers):
+    def fake_head(url, allow_redirects, headers, timeout=None):
         return DummyResponse(url=f"{expanded_url}?is_from_webapp=1&sender_device=pc")
 
-    monkeypatch.setattr(tiktok.requests, "head", fake_head)
-    result = tiktok.process_tiktok_url(f"{expanded_url}?is_from_webapp=1&sender_device=pc")
+    monkeypatch.setattr(tiktok, "get_http_session", AsyncMock(return_value=DummySession(head_handler=fake_head)))
+    result = await tiktok.process_tiktok_url_async(f"{expanded_url}?is_from_webapp=1&sender_device=pc")
     assert result == expanded_url
 
 

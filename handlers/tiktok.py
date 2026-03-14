@@ -1,15 +1,14 @@
 import asyncio
+from collections import OrderedDict
 import datetime
 import os
 import re
 import time
 from dataclasses import dataclass
-import functools
 from typing import Optional
 from urllib.parse import urlparse, urlunparse
 
 import aiohttp
-import requests
 from aiogram import types, Router, F
 from aiogram.types import FSInputFile, InlineQueryResultArticle
 from aiogram.utils.media_group import MediaGroupBuilder
@@ -103,18 +102,9 @@ router = Router()
 
 _SHORT_HOSTS = {"vm.tiktok.com", "vt.tiktok.com", "vn.tiktok.com"}
 _URL_EXPAND_TIMEOUT = 4  # seconds
-
-
-@functools.lru_cache(maxsize=2048)
-def _expand_tiktok_url_cached(url: str) -> str:
-    headers = {"User-Agent": _get_user_agent()}
-    response = requests.head(
-        url,
-        allow_redirects=True,
-        headers=headers,
-        timeout=_URL_EXPAND_TIMEOUT,
-    )
-    return response.url or url
+_URL_EXPAND_CACHE_MAXSIZE = 2048
+_expanded_tiktok_url_cache: "OrderedDict[str, str]" = OrderedDict()
+_expanded_tiktok_url_lock = asyncio.Lock()
 
 
 def strip_tiktok_tracking(url: str) -> str:
@@ -125,30 +115,54 @@ def strip_tiktok_tracking(url: str) -> str:
     return urlunparse((parsed.scheme, parsed.netloc, parsed.path, parsed.params, "", ""))
 
 
-def process_tiktok_url(text: str) -> str:
-    def strip_tracking(url: str) -> str:
-        return strip_tiktok_tracking(url)
+async def _expand_tiktok_url_cached_async(url: str) -> str:
+    cached = _expanded_tiktok_url_cache.get(url)
+    if cached is not None:
+        _expanded_tiktok_url_cache.move_to_end(url)
+        return cached
 
-    def expand_tiktok_url(short_url: str) -> str:
-        try:
-            parsed = urlparse(short_url)
-            host = (parsed.netloc or "").lower()
-            if host in _SHORT_HOSTS:
-                expanded = _expand_tiktok_url_cached(short_url)
-                logging.debug("TikTok short URL expanded: raw=%s expanded=%s", short_url, expanded)
-                return strip_tracking(expanded)
-            return strip_tracking(short_url)
-        except requests.RequestException as e:
-            logging.error("Error expanding TikTok URL: url=%s error=%s", short_url, e)
-            return strip_tracking(short_url)
+    session = await get_http_session()
+    headers = {"User-Agent": _get_user_agent()}
+    async with _expanded_tiktok_url_lock:
+        cached = _expanded_tiktok_url_cache.get(url)
+        if cached is not None:
+            _expanded_tiktok_url_cache.move_to_end(url)
+            return cached
 
+        async with session.head(
+            url,
+            allow_redirects=True,
+            headers=headers,
+            timeout=aiohttp.ClientTimeout(total=_URL_EXPAND_TIMEOUT),
+        ) as response:
+            expanded = str(response.url) or url
+
+        _expanded_tiktok_url_cache[url] = expanded
+        _expanded_tiktok_url_cache.move_to_end(url)
+        if len(_expanded_tiktok_url_cache) > _URL_EXPAND_CACHE_MAXSIZE:
+            _expanded_tiktok_url_cache.popitem(last=False)
+        return expanded
+
+
+async def process_tiktok_url_async(text: str) -> str:
     def extract_tiktok_url(input_text: str) -> str:
         match = re.search(r"(https?://(?:www\.|vm\.|vt\.|vn\.)?tiktok\.com/\S+)", input_text)
         return match.group(0) if match else input_text
 
-    url = strip_tracking(extract_tiktok_url(text))
+    url = strip_tiktok_tracking(extract_tiktok_url(text))
     logging.debug("TikTok URL extracted: raw=%s extracted=%s", text, url)
-    return expand_tiktok_url(url)
+
+    try:
+        parsed = urlparse(url)
+        host = (parsed.netloc or "").lower()
+        if host in _SHORT_HOSTS:
+            expanded = await _expand_tiktok_url_cached_async(url)
+            logging.debug("TikTok short URL expanded: raw=%s expanded=%s", url, expanded)
+            return strip_tiktok_tracking(expanded)
+        return strip_tiktok_tracking(url)
+    except (aiohttp.ClientError, asyncio.TimeoutError) as e:
+        logging.error("Error expanding TikTok URL: url=%s error=%s", url, e)
+        return strip_tiktok_tracking(url)
 
 
 def get_video_id_from_url(url: str) -> str:
@@ -272,7 +286,7 @@ async def fetch_tiktok_data_with_retry(video_url: str, *, on_retry=None) -> dict
     base_url = strip_tiktok_tracking(video_url)
     data = await _fetch_with_retry(base_url)
     if is_invalid_tiktok_payload(data) and urlparse(base_url).netloc.lower() in _SHORT_HOSTS:
-        resolved_url = await asyncio.wait_for(asyncio.to_thread(process_tiktok_url, base_url), timeout=6.0)
+        resolved_url = await asyncio.wait_for(process_tiktok_url_async(base_url), timeout=6.0)
         if resolved_url != base_url:
             return await _fetch_with_retry(resolved_url)
     return data
@@ -401,24 +415,21 @@ class TikTokService:
 
     async def fetch_user_info(self, username: str) -> Optional[TikTokUser]:
         """Return high level stats for a TikTok user."""
-        return await asyncio.to_thread(self._fetch_user_info_sync, username)
-
-    def _fetch_user_info_sync(self, username: str) -> Optional[TikTokUser]:
         max_retries = 10
         retry_delay = 1.5
         exist_data: dict | None = None
+        session = await get_http_session()
+        headers = {"User-Agent": _get_user_agent()}
+        exist_url = f"https://countik.com/api/exist/{username}"
 
         try:
-            headers = {"User-Agent": _get_user_agent()}
-            exist_url = f"https://countik.com/api/exist/{username}"
-
             sec_user_id = None
             for attempt in range(max_retries):
                 try:
-                    exist_response = requests.get(exist_url, headers=headers, timeout=10)
-                    exist_response.raise_for_status()
-                    exist_data = exist_response.json()
-                    sec_user_id = exist_data.get("sec_uid")
+                    async with session.get(exist_url, headers=headers, timeout=10) as exist_response:
+                        exist_response.raise_for_status()
+                        exist_data = await exist_response.json(content_type=None)
+                    sec_user_id = exist_data.get("sec_uid") if isinstance(exist_data, dict) else None
                     if sec_user_id:
                         break
                 except Exception as exc:
@@ -428,7 +439,7 @@ class TikTokService:
                         username,
                         exc,
                     )
-                    time.sleep(retry_delay)
+                    await asyncio.sleep(retry_delay)
             else:
                 logging.error("Failed to get TikTok user data after %s attempts: username=%s", max_retries, username)
                 return None
@@ -438,9 +449,14 @@ class TikTokService:
                 return None
 
             api_url = f"https://countik.com/api/userinfo?sec_user_id={sec_user_id}"
-            api_response = requests.get(api_url, headers=headers, timeout=10, allow_redirects=True)
-            api_response.raise_for_status()
-            data = api_response.json()
+            async with session.get(
+                api_url,
+                headers=headers,
+                timeout=10,
+                allow_redirects=True,
+            ) as api_response:
+                api_response.raise_for_status()
+                data = await api_response.json(content_type=None)
 
             exist_data = exist_data or {}
             return TikTokUser(
@@ -454,7 +470,6 @@ class TikTokService:
         except Exception as exc:
             logging.error("Error fetching TikTok user info: username=%s error=%s", username, exc)
             return None
-
 
 tiktok_service = TikTokService(OUTPUT_DIR)
 

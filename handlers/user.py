@@ -70,12 +70,14 @@ async def update_info(message: types.Message):
         if cached[1] == user_name and cached[2] == user_username:
             return
 
-    result = await db.user_exist(user_id)
-    if result:
-        await db.user_update_name(user_id, user_name, user_username)
-    else:
-        await db.add_user(user_id, user_name, user_username, "private", "uk", 'active')
-    await db.set_active(user_id)
+    await db.upsert_chat(
+        user_id=user_id,
+        user_name=user_name,
+        user_username=user_username,
+        chat_type="private",
+        language="uk",
+        status="active",
+    )
     _update_info_cache[user_id] = (now, user_name, user_username)
 
 

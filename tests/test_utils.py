@@ -1,5 +1,6 @@
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
+
 import messages as bm
 import pytest
 
@@ -47,12 +48,28 @@ async def test_get_bot_url(monkeypatch):
     monkeypatch.setattr(utils, "_bot_username", None)
     monkeypatch.setattr(utils, "_bot_id", None)
     bot = SimpleNamespace(
-        get_me=AsyncMock(return_value=SimpleNamespace(username="downloader_bot"))
+        get_me=AsyncMock(return_value=SimpleNamespace(username="downloader_bot", id=777))
     )
 
     url = await utils.get_bot_url(bot)
 
     assert url == "t.me/downloader_bot"
+    bot.get_me.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_get_bot_url_and_id_share_identity_fetch(monkeypatch):
+    monkeypatch.setattr(utils, "_bot_username", None)
+    monkeypatch.setattr(utils, "_bot_id", None)
+    bot = SimpleNamespace(
+        get_me=AsyncMock(return_value=SimpleNamespace(username="downloader_bot", id=999))
+    )
+
+    url = await utils.get_bot_url(bot)
+    bot_id = await utils._get_bot_id(bot)
+
+    assert url == "t.me/downloader_bot"
+    assert bot_id == 999
     bot.get_me.assert_awaited_once()
 
 
@@ -76,7 +93,8 @@ async def test_remove_file_ignores_missing(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_send_chat_action_if_needed_triggers(monkeypatch):
+async def test_send_chat_action_if_needed_triggers():
+    utils._chat_action_cache.clear()
     bot = SimpleNamespace(send_chat_action=AsyncMock())
 
     await utils.send_chat_action_if_needed(bot, chat_id=1, action="typing", business_id=None)
@@ -86,11 +104,23 @@ async def test_send_chat_action_if_needed_triggers(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_send_chat_action_if_needed_skips_for_business():
+    utils._chat_action_cache.clear()
     bot = SimpleNamespace(send_chat_action=AsyncMock())
 
     await utils.send_chat_action_if_needed(bot, chat_id=1, action="typing", business_id=123)
 
     bot.send_chat_action.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_send_chat_action_if_needed_throttles_duplicates():
+    utils._chat_action_cache.clear()
+    bot = SimpleNamespace(send_chat_action=AsyncMock())
+
+    await utils.send_chat_action_if_needed(bot, chat_id=1, action="typing", business_id=None)
+    await utils.send_chat_action_if_needed(bot, chat_id=1, action="typing", business_id=None)
+
+    bot.send_chat_action.assert_awaited_once_with(1, "typing")
 
 
 @pytest.mark.asyncio
@@ -101,7 +131,7 @@ async def test_react_to_message_skips_for_business(monkeypatch):
     )
     monkeypatch.setattr(utils.types, "ReactionTypeEmoji", lambda emoji: ("emoji", emoji))
 
-    await utils.react_to_message(message, "🔥")
+    await utils.react_to_message(message, "fire")
 
     message.react.assert_not_awaited()
 
@@ -114,7 +144,7 @@ async def test_react_to_message_handles_errors(monkeypatch):
     )
     monkeypatch.setattr(utils.types, "ReactionTypeEmoji", lambda emoji: ("emoji", emoji))
 
-    await utils.react_to_message(message, "🔥", skip_if_business=False)
+    await utils.react_to_message(message, "fire", skip_if_business=False)
 
     message.react.assert_awaited_once()
 
@@ -125,11 +155,11 @@ async def test_send_with_reaction_invokes_reply(monkeypatch):
     monkeypatch.setattr(utils, "react_to_message", mock_react)
     message = SimpleNamespace(reply=AsyncMock())
 
-    await utils._send_with_reaction(message, "hello", emoji="🔥", business_id=7, skip_if_business=False)
+    await utils._send_with_reaction(message, "hello", emoji="fire", business_id=7, skip_if_business=False)
 
     mock_react.assert_awaited_once_with(
         message,
-        "🔥",
+        "fire",
         business_id=7,
         skip_if_business=False,
     )
@@ -174,3 +204,35 @@ async def test_handle_video_too_large_uses_predefined_text(monkeypatch):
     assert await_args.kwargs["emoji"] == "👎"
     assert await_args.kwargs["business_id"] == 11
     assert await_args.kwargs["skip_if_business"] is False
+
+
+@pytest.mark.asyncio
+async def test_safe_edit_text_skips_identical_payloads():
+    utils._message_edit_cache.clear()
+    message = SimpleNamespace(
+        chat=SimpleNamespace(id=123),
+        message_id=456,
+        edit_text=AsyncMock(),
+    )
+
+    await utils.safe_edit_text(message, "same text", parse_mode="HTML")
+    await utils.safe_edit_text(message, "same text", parse_mode="HTML")
+
+    message.edit_text.assert_awaited_once_with("same text", parse_mode="HTML")
+
+
+@pytest.mark.asyncio
+async def test_safe_edit_inline_text_skips_identical_payloads():
+    utils._message_edit_cache.clear()
+    bot = SimpleNamespace(edit_message_text=AsyncMock())
+
+    first = await utils.safe_edit_inline_text(bot, "inline-1", "same text", parse_mode="HTML")
+    second = await utils.safe_edit_inline_text(bot, "inline-1", "same text", parse_mode="HTML")
+
+    assert first is True
+    assert second is True
+    bot.edit_message_text.assert_awaited_once_with(
+        text="same text",
+        inline_message_id="inline-1",
+        parse_mode="HTML",
+    )

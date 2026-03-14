@@ -7,6 +7,7 @@ from typing import Any, Awaitable, Callable, Optional, TypeVar
 
 from contextlib import contextmanager
 from functools import wraps
+from collections import OrderedDict
 from pathlib import Path
 
 from aiogram import Bot, types
@@ -25,6 +26,12 @@ _bot_avatar_file_id: Optional[str] = None
 _bot_avatar_path: Optional[str] = None
 _bot_username: Optional[str] = None
 _bot_id: Optional[int] = None
+_bot_identity_lock = asyncio.Lock()
+_chat_action_cache: "OrderedDict[tuple[int, str], float]" = OrderedDict()
+_chat_action_cache_maxsize = 2048
+_chat_action_ttl_seconds = 4.0
+_message_edit_cache: "OrderedDict[tuple[Any, ...], tuple[str, tuple[tuple[str, str], ...]]]" = OrderedDict()
+_message_edit_cache_maxsize = 4096
 
 T = TypeVar("T")
 FAsync = TypeVar("FAsync", bound=Callable[..., Awaitable[Any]])
@@ -337,22 +344,30 @@ async def maybe_delete_user_message(message: types.Message, delete_flag) -> bool
 
 async def get_bot_url(bot: Bot) -> str:
     global _bot_username
-    if _bot_username:
-        return f"t.me/{_bot_username}"
-
-    bot_data = await bot.get_me()
-    _bot_username = bot_data.username or ""
+    if _bot_username is None:
+        await _ensure_bot_identity(bot)
     return f"t.me/{_bot_username}"
 
 
 async def _get_bot_id(bot: Bot) -> int:
     global _bot_id
-    if _bot_id is not None:
-        return _bot_id
-
-    bot_data = await bot.get_me()
-    _bot_id = bot_data.id
+    if _bot_id is None:
+        await _ensure_bot_identity(bot)
     return _bot_id
+
+
+async def _ensure_bot_identity(bot: Bot) -> None:
+    global _bot_username, _bot_id
+    if _bot_username is not None and _bot_id is not None:
+        return
+
+    async with _bot_identity_lock:
+        if _bot_username is not None and _bot_id is not None:
+            return
+
+        bot_data = await bot.get_me()
+        _bot_username = bot_data.username or ""
+        _bot_id = bot_data.id
 
 
 async def get_bot_avatar_file_id(bot: Bot) -> Optional[str]:
@@ -410,8 +425,21 @@ async def remove_file(path: Optional[str]) -> None:
 
 
 async def send_chat_action_if_needed(bot: Bot, chat_id: int, action: str, business_id: Optional[int]) -> None:
-    if business_id is None:
-        await bot.send_chat_action(chat_id, action)
+    if business_id is not None:
+        return
+
+    cache_key = (int(chat_id), str(action))
+    now = time.monotonic()
+    cached = _chat_action_cache.get(cache_key)
+    if cached is not None and now - cached < _chat_action_ttl_seconds:
+        _chat_action_cache.move_to_end(cache_key)
+        return
+
+    await bot.send_chat_action(chat_id, action)
+    _chat_action_cache[cache_key] = now
+    _chat_action_cache.move_to_end(cache_key)
+    while len(_chat_action_cache) > _chat_action_cache_maxsize:
+        _chat_action_cache.popitem(last=False)
 
 
 def resolve_settings_target_id(message: types.Message) -> int:
@@ -425,8 +453,17 @@ async def safe_edit_text(message: Optional[types.Message], text: str, **kwargs) 
     """Best-effort edit of a bot message (status/progress)."""
     if not message:
         return
+    cache_key = _build_message_edit_cache_key(message)
+    payload = (text, _normalize_edit_kwargs(kwargs))
+    cached = _message_edit_cache.get(cache_key)
+    if cached == payload:
+        return
     try:
         await message.edit_text(text, **kwargs)
+        _message_edit_cache[cache_key] = payload
+        _message_edit_cache.move_to_end(cache_key)
+        while len(_message_edit_cache) > _message_edit_cache_maxsize:
+            _message_edit_cache.popitem(last=False)
     except Exception:
         return
 
@@ -435,8 +472,17 @@ async def safe_edit_inline_text(bot: Bot, inline_message_id: Optional[str], text
     """Best-effort edit of an inline message text by inline_message_id."""
     if not inline_message_id:
         return False
+    cache_key = ("inline", inline_message_id)
+    payload = (text, _normalize_edit_kwargs(kwargs))
+    cached = _message_edit_cache.get(cache_key)
+    if cached == payload:
+        return True
     try:
         await bot.edit_message_text(text=text, inline_message_id=inline_message_id, **kwargs)
+        _message_edit_cache[cache_key] = payload
+        _message_edit_cache.move_to_end(cache_key)
+        while len(_message_edit_cache) > _message_edit_cache_maxsize:
+            _message_edit_cache.popitem(last=False)
         return True
     except Exception:
         return False
@@ -461,6 +507,22 @@ async def safe_delete_message(message: Optional[types.Message]) -> None:
         await message.delete()
     except Exception:
         return
+
+
+def _build_message_edit_cache_key(message: types.Message) -> tuple[Any, ...]:
+    chat = getattr(message, "chat", None)
+    chat_id = getattr(chat, "id", None)
+    message_id = getattr(message, "message_id", None)
+    if chat_id is not None and message_id is not None:
+        return ("message", chat_id, message_id)
+    return ("message_obj", id(message))
+
+
+def _normalize_edit_kwargs(kwargs: dict[str, Any]) -> tuple[tuple[str, str], ...]:
+    normalized: list[tuple[str, str]] = []
+    for key, value in sorted(kwargs.items()):
+        normalized.append((str(key), repr(value)))
+    return tuple(normalized)
 
 
 def _format_bytes(num_bytes: int) -> str:
