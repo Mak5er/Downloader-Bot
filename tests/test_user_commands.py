@@ -18,9 +18,26 @@ class DummyMessage:
         self._replies = []
         self.reply = AsyncMock(side_effect=self._collect_reply)
         self.answer = AsyncMock(side_effect=self._collect_reply)
+        self.answer_photo = AsyncMock(side_effect=self._collect_reply)
 
     def _collect_reply(self, *args, **kwargs):
         self._replies.append((args, kwargs))
+
+
+class DummyCallbackMessage:
+    def __init__(self):
+        self.chat = SimpleNamespace(id=100, type="private")
+        self.answer_photo = AsyncMock()
+        self.edit_media = AsyncMock()
+        self.delete = AsyncMock()
+
+
+class DummyCallback:
+    def __init__(self, data="stats:Week:total"):
+        self.data = data
+        self.message = DummyCallbackMessage()
+        self.from_user = SimpleNamespace(id=1)
+        self.answer = AsyncMock()
 
 
 @pytest.mark.asyncio
@@ -109,3 +126,67 @@ async def test_settings_menu_group(monkeypatch):
 
     message.reply.assert_awaited_once()
     fake_db.user_settings.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_stats_command_sends_photo(monkeypatch):
+    monkeypatch.setattr(user, "_render_stats", AsyncMock(return_value=(b"chart", "<b>Caption</b>")))
+    monkeypatch.setattr(user.kb, "stats_keyboard", lambda period, mode: ("keyboard", period, mode))
+
+    message = DummyMessage()
+    await user.stats_command(message)
+
+    message.answer_photo.assert_awaited_once()
+    _, kwargs = message.answer_photo.await_args
+    assert kwargs["caption"] == "<b>Caption</b>"
+    assert kwargs["reply_markup"] == ("keyboard", "Week", "total")
+
+
+@pytest.mark.asyncio
+async def test_switch_stats_edits_existing_message(monkeypatch):
+    monkeypatch.setattr(user, "_render_stats", AsyncMock(return_value=(b"chart", "<b>Caption</b>")))
+    monkeypatch.setattr(user.kb, "stats_keyboard", lambda period, mode: ("keyboard", period, mode))
+
+    call = DummyCallback("stats:Month:split")
+    await user.switch_stats(call)
+
+    call.message.edit_media.assert_awaited_once()
+    _, kwargs = call.message.edit_media.await_args
+    assert kwargs["reply_markup"] == ("keyboard", "Month", "split")
+    media = kwargs["media"]
+    assert media.caption == "<b>Caption</b>"
+    call.answer.assert_awaited_once_with()
+    call.message.answer_photo.assert_not_awaited()
+    call.message.delete.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_switch_stats_falls_back_when_edit_media_fails(monkeypatch):
+    class FakeTelegramError(Exception):
+        pass
+
+    monkeypatch.setattr(user, "TelegramBadRequest", FakeTelegramError)
+    monkeypatch.setattr(user, "TelegramAPIError", FakeTelegramError)
+    monkeypatch.setattr(user, "_render_stats", AsyncMock(return_value=(b"chart", "<b>Caption</b>")))
+    monkeypatch.setattr(user.kb, "stats_keyboard", lambda period, mode: ("keyboard", period, mode))
+
+    call = DummyCallback("stats:Year:total")
+    call.message.edit_media.side_effect = FakeTelegramError("broken")
+
+    await user.switch_stats(call)
+
+    call.message.answer_photo.assert_awaited_once()
+    call.message.delete.assert_awaited_once()
+    call.answer.assert_awaited_once_with()
+
+
+@pytest.mark.asyncio
+async def test_switch_period_uses_total_mode(monkeypatch):
+    monkeypatch.setattr(user, "_render_stats", AsyncMock(return_value=(b"chart", "<b>Caption</b>")))
+    monkeypatch.setattr(user.kb, "stats_keyboard", lambda period, mode: ("keyboard", period, mode))
+
+    call = DummyCallback("date_Month")
+    await user.switch_period(call)
+
+    _, kwargs = call.message.edit_media.await_args
+    assert kwargs["reply_markup"] == ("keyboard", "Month", "total")

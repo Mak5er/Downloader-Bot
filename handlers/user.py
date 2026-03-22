@@ -1,24 +1,26 @@
 import datetime
+import io
 import re
-from collections import defaultdict
-from pathlib import Path
-from typing import Dict, List, Optional, Tuple
 import time
+from collections import defaultdict
+from typing import Dict, List, Optional, Tuple
 
 import matplotlib.pyplot as plt
 from aiogram import types, Router, F
 from aiogram.enums import ChatMemberStatus, ChatType
+from aiogram.exceptions import TelegramAPIError, TelegramBadRequest
 from aiogram.filters import Command
-from aiogram.types import FSInputFile, ChatMemberUpdated
+from aiogram.types import BufferedInputFile, ChatMemberUpdated, InputMediaPhoto
 from matplotlib.ticker import MaxNLocator
 
 import keyboards as kb
 import messages as bm
-from handlers.utils import get_message_text, remove_file
+from handlers.utils import get_message_text
 from log.logger import logger as logging
 
 logging = logging.bind(service="user")
 from main import db, send_analytics, bot
+from services.db import StatsSnapshot
 from services.inline_album_links import get_inline_album_request
 from services.pending_requests import pop_pending
 
@@ -26,6 +28,9 @@ router = Router()
 
 _UPDATE_INFO_TTL_SECONDS = 120.0
 _update_info_cache: dict[int, tuple[float, str, Optional[str]]] = {}
+_STATS_CACHE_TTL_SECONDS = 60.0
+_stats_snapshot_cache: dict[str, tuple[float, StatsSnapshot]] = {}
+_stats_chart_cache: dict[tuple[str, str], tuple[float, bytes]] = {}
 
 SERVICE_ORDER = ["Instagram", "TikTok", "YouTube", "SoundCloud", "Pinterest", "Twitter", "Other"]
 SERVICE_COLORS = ["#6C5DD3", "#FF6B6B", "#28C76F", "#FF8800", "#E60023", "#00CFE8", "#FFA500"]
@@ -38,6 +43,8 @@ SERVICE_EMOJI = {
     "Twitter": "🐦",
     "Other": "📦",
 }
+VALID_STATS_PERIODS = {"Week", "Month", "Year"}
+VALID_STATS_MODES = {"total", "split"}
 
 
 def _admin_statuses() -> set[ChatMemberStatus]:
@@ -354,41 +361,32 @@ def _decimate_series(
 
 
 def _prepare_series_for_period(data: dict[str, int], period: str) -> tuple[list[datetime.datetime], list[int]]:
-    series = _prepare_series(data)
-    if not series:
-        now = datetime.datetime.now()
-        return [now], [0]
+    return _build_series_for_period(data, period)
 
-    dates = [dt for dt, _ in series]
-    counts = [count for _, count in series]
 
-    if period == 'Week':
-        dates = dates[-7:]
-        counts = counts[-7:]
-    elif period == 'Month':
-        dates = dates[-30:]
-        counts = counts[-30:]
-        dates, counts = _decimate_series(dates, counts, max_points=12)
-    elif period == 'Year':
-        monthly_data = defaultdict(int)
-        for dt, count in series:
-            month_key = dt.strftime("%Y-%m")
-            monthly_data[month_key] += count
-        all_months = sorted(set(monthly_data.keys()))
-        if len(all_months) > 12:
-            all_months = all_months[-12:]
-        dates = [datetime.datetime.strptime(month, "%Y-%m") for month in all_months]
-        counts = [monthly_data[month] for month in all_months]
+def _shift_month(dt: datetime.datetime, months: int) -> datetime.datetime:
+    month_index = (dt.year * 12 + (dt.month - 1)) + months
+    year = month_index // 12
+    month = (month_index % 12) + 1
+    return datetime.datetime(year, month, 1)
 
-    return dates, counts
+
+def _build_period_axis(period: str) -> list[datetime.datetime]:
+    today = datetime.datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+    if period == "Week":
+        return [today - datetime.timedelta(days=offset) for offset in range(6, -1, -1)]
+    if period == "Month":
+        return [today - datetime.timedelta(days=offset) for offset in range(29, -1, -1)]
+
+    month_start = today.replace(day=1)
+    return [_shift_month(month_start, -offset) for offset in range(11, -1, -1)]
 
 
 def _aggregate_monthly(data: dict[str, int]) -> dict[datetime.datetime, int]:
     monthly: dict[datetime.datetime, int] = defaultdict(int)
     for date_str, count in data.items():
         dt = datetime.datetime.strptime(date_str, "%Y-%m-%d")
-        month_key = datetime.datetime(dt.year, dt.month, 1)
-        monthly[month_key] += count
+        monthly[datetime.datetime(dt.year, dt.month, 1)] += count
     return monthly
 
 
@@ -402,221 +400,332 @@ def _decimate_dates(dates: list[datetime.datetime], max_points: int) -> list[dat
     return sampled
 
 
-def create_and_save_chart(data: dict[str, int], period: str, per_service: Optional[Dict[str, Dict[str, int]]] = None):
-    filename = datetime.datetime.now().strftime("%Y_%m_%d_%H_%M_%S") + "_chart.png"
-    charts_dir = Path("downloads")
-    charts_dir.mkdir(parents=True, exist_ok=True)
-    file_path = charts_dir / filename
+def _build_series_for_period(data: dict[str, int], period: str) -> tuple[list[datetime.datetime], list[int]]:
+    axis_dates = _build_period_axis(period)
+    if period == "Year":
+        monthly = _aggregate_monthly(data)
+        return axis_dates, [monthly.get(dt, 0) for dt in axis_dates]
 
-    plt.style.use('dark_background')
-    fig, ax = plt.subplots(figsize=(10, 5), facecolor='#0E1117')
-    ax.set_facecolor('#0E1117')
+    daily = {
+        datetime.datetime.strptime(date_str, "%Y-%m-%d"): count for date_str, count in data.items()
+    }
+    return axis_dates, [daily.get(dt, 0) for dt in axis_dates]
+
+
+def _format_stats_bucket(period: str, bucket: datetime.datetime) -> str:
+    if period == "Year":
+        return bucket.strftime("%b %Y")
+    return bucket.strftime("%b %d")
+
+
+def _stats_bucket_name(period: str) -> str:
+    return "month" if period == "Year" else "day"
+
+
+def _is_cache_fresh(timestamp: float, ttl_seconds: float = _STATS_CACHE_TTL_SECONDS) -> bool:
+    return time.monotonic() - timestamp <= ttl_seconds
+
+
+def _clear_chart_cache_for_period(period: str) -> None:
+    stale_keys = [key for key in _stats_chart_cache if key[0] == period]
+    for key in stale_keys:
+        _stats_chart_cache.pop(key, None)
+
+
+async def fetch_stats_snapshot(period: str) -> StatsSnapshot:
+    cached = _stats_snapshot_cache.get(period)
+    if cached and _is_cache_fresh(cached[0]):
+        return cached[1]
+
+    snapshot = await db.get_download_stats(period)
+    _stats_snapshot_cache[period] = (time.monotonic(), snapshot)
+    _clear_chart_cache_for_period(period)
+    return snapshot
+
+
+def render_stats_chart(snapshot: StatsSnapshot, period: str, mode: str) -> bytes:
+    cache_key = (period, mode)
+    cached = _stats_chart_cache.get(cache_key)
+    if cached and _is_cache_fresh(cached[0]):
+        return cached[1]
+
+    total_dates, total_counts = _build_series_for_period(snapshot.totals_by_date, period)
+    plt.style.use("dark_background")
+    fig, ax = plt.subplots(figsize=(11, 6), facecolor="#08111F")
+    fig.subplots_adjust(left=0.08, right=0.97, bottom=0.16, top=0.74)
+    ax.set_facecolor("#0F1B2D")
 
     def _plot_series(
-            dates: list[datetime.datetime],
-            counts: list[int],
-            color: str,
-            label: str,
-            *,
-            annotate_last: bool,
-            marker_size: int = 36,
-            highlight_size: int = 60,
-    ):
-        ax.plot(dates, counts, color=color, linewidth=2.3, label=label)
-        ax.fill_between(dates, counts, color=color, alpha=0.18)
-        ax.scatter(dates, counts, color=color, s=marker_size, zorder=3)
+        dates: list[datetime.datetime],
+        counts: list[int],
+        color: str,
+        label: str,
+        *,
+        annotate_last: bool = False,
+        fill_alpha: float = 0.16,
+        marker_size: int = 0,
+    ) -> None:
+        ax.plot(dates, counts, color=color, linewidth=2.4, label=label, solid_capstyle="round")
+        if fill_alpha > 0:
+            ax.fill_between(dates, counts, color=color, alpha=fill_alpha)
+        if marker_size:
+            ax.scatter(dates, counts, color=color, s=marker_size, zorder=3)
         if annotate_last and dates and counts:
-            ax.scatter(dates[-1], counts[-1], color='#FF9F43', s=highlight_size, zorder=4)
+            ax.scatter(dates[-1], counts[-1], color="#F59E0B", s=54, zorder=4)
             ax.annotate(
-                f"{counts[-1]}",
+                str(counts[-1]),
                 (dates[-1], counts[-1]),
                 textcoords="offset points",
                 xytext=(0, 10),
-                ha='center',
-                color='#FF9F43',
+                ha="center",
+                color="#FBBF24",
                 fontsize=10,
-                fontweight='bold'
+                fontweight="bold",
             )
 
-    if per_service:
-        # Build a shared axis so services drop to zero instead of stopping early.
-        axis_dates: list[datetime.datetime] = []
-        if period == "Year":
-            total_map = _aggregate_monthly(data)
-            axis_dates = list(total_map.keys())
-            for service_data in per_service.values():
-                axis_dates.extend(_aggregate_monthly(service_data).keys())
-            axis_dates = sorted(set(axis_dates))
-            if len(axis_dates) > 12:
-                axis_dates = axis_dates[-12:]
-            axis_dates = _decimate_dates(axis_dates, 12)
-        else:
-            axis_dates = [datetime.datetime.strptime(k, "%Y-%m-%d") for k in data.keys()]
-            for service_data in per_service.values():
-                axis_dates.extend(datetime.datetime.strptime(k, "%Y-%m-%d") for k in service_data.keys())
-            axis_dates = sorted(set(axis_dates))
-            window = 7 if period == "Week" else 30
-            axis_dates = axis_dates[-window:] if axis_dates else [datetime.datetime.now()]
-            if period == "Month":
-                axis_dates = _decimate_dates(axis_dates, 12)
+    bucket_name = _stats_bucket_name(period)
+    peak_count = max(total_counts) if total_counts else 0
+    peak_bucket = _format_stats_bucket(period, total_dates[total_counts.index(peak_count)]) if total_dates else "-"
+    average_value = snapshot.total_downloads / len(total_counts) if total_counts else 0.0
+    mode_label = "Overall activity" if mode == "total" else "Platform comparison"
 
-        # Plot each service aligned to the shared axis with zeros for missing points.
+    fig.text(
+        0.08,
+        0.92,
+        "Downloads Overview",
+        color="#F8FAFC",
+        fontsize=20,
+        fontweight="bold",
+        ha="left",
+    )
+    fig.text(
+        0.08,
+        0.875,
+        f"{period} view | {mode_label}",
+        color="#94A3B8",
+        fontsize=11,
+        ha="left",
+    )
+
+    chip_style = dict(boxstyle="round,pad=0.45", facecolor="#0D1728", edgecolor="#22324A", linewidth=1.0)
+    chip_positions = [0.66, 0.81, 0.96]
+    chip_titles = ["Total", f"Peak {bucket_name}", "Average"]
+    chip_values = [str(snapshot.total_downloads), f"{peak_bucket} | {peak_count}", f"{average_value:.1f} / {bucket_name}"]
+    for x_pos, title, value in zip(chip_positions, chip_titles, chip_values):
+        fig.text(
+            x_pos,
+            0.81,
+            f"{title}\n{value}",
+            color="#E2E8F0",
+            fontsize=10.0,
+            ha="right",
+            va="top",
+            linespacing=1.45,
+            bbox=chip_style,
+        )
+
+    if mode == "split":
+        plotted_any = False
         for idx, service in enumerate(SERVICE_ORDER):
-            raw_service = per_service.get(service)
-            if not raw_service:
-                continue
-            if period == "Year":
-                service_map = _aggregate_monthly(raw_service)
-            else:
-                service_map = {
-                    datetime.datetime.strptime(k, "%Y-%m-%d"): v for k, v in raw_service.items()
-                }
-            counts = [service_map.get(dt, 0) for dt in axis_dates]
-            color = SERVICE_COLORS[idx % len(SERVICE_COLORS)]
-            _plot_series(
-                axis_dates,
-                counts,
-                color,
-                service,
-                annotate_last=False,
-                marker_size=30,
-                highlight_size=40,
-            )
-
-        if not ax.lines:
-            dates, counts = _prepare_series_for_period(data, period)
-            _plot_series(dates, counts, "#6C5DD3", "Downloads", annotate_last=False, marker_size=30, highlight_size=40)
-        ax.legend(facecolor='#0E1117', edgecolor='#2C3142', labelcolor='#F9FAFC')
-    else:
-        dates, counts = _prepare_series_for_period(data, period)
-        _plot_series(dates, counts, "#6C5DD3", "Downloads", annotate_last=True)
-
-    ax.set_title('Downloads Overview', fontsize=18, color='#F9FAFC', pad=16)
-    ax.set_xlabel('Date', fontsize=12, color='#A1A5B7')
-    ax.set_ylabel('Downloads', fontsize=12, color='#A1A5B7')
-
-    if period == 'Week':
-        ax.xaxis.set_major_locator(MaxNLocator(7))
-    elif period == 'Month':
-        ax.xaxis.set_major_locator(MaxNLocator(8))
-    elif period == 'Year':
-        ax.xaxis.set_major_locator(MaxNLocator(12))
-
-    if period == 'Year':
-        import matplotlib.dates as mdates
-        ax.xaxis.set_major_locator(mdates.MonthLocator())
-        ax.xaxis.set_major_formatter(mdates.DateFormatter('%Y-%m'))
-
-    ax.grid(color='#1E2233', linestyle='--', linewidth=0.8, alpha=0.6)
-    for spine in ax.spines.values():
-        spine.set_color('#2C3142')
-    ax.tick_params(axis='x', colors='#D0D3F9')
-    ax.tick_params(axis='y', colors='#D0D3F9')
-    ax.set_ylim(bottom=0)
-
-    fig.savefig(file_path, bbox_inches='tight', facecolor=fig.get_facecolor())
-    plt.close(fig)
-
-    return str(file_path)
-
-
-def build_stats_caption(
-        period: str,
-        data: dict[str, int],
-        per_service: Optional[dict[str, dict[str, int]]] = None,
-) -> str:
-    header = f"<b>Statistics for {period}</b>"
-
-    if not data:
-        return f"{header}\n\nNo downloads recorded for this period."
-
-    total = sum(data.values())
-    days_tracked = len(data)
-    top_day, top_value = max(data.items(), key=lambda item: item[1])
-    average = total / days_tracked if days_tracked else 0
-
-    summary_lines = [
-        f"Total downloads: <b>{total}</b>",
-        f"Peak day: <b>{top_day}</b> - <b>{top_value}</b>",
-        f"Average per day: <b>{average:.1f}</b>",
-    ]
-
-    if per_service:
-        summary_lines.append("")
-        summary_lines.append("<b>By platform:</b>")
-        for service in SERVICE_ORDER:
-            service_data = per_service.get(service)
+            service_data = snapshot.by_service.get(service)
             if not service_data:
                 continue
-            service_total = sum(service_data.values())
-            emoji = SERVICE_EMOJI.get(service, "*")
-            summary_lines.append(f"{emoji} {service}: <b>{service_total}</b>")
+            dates, counts = _build_series_for_period(service_data, period)
+            if not any(counts):
+                continue
+            _plot_series(
+                dates,
+                counts,
+                SERVICE_COLORS[idx % len(SERVICE_COLORS)],
+                service,
+                fill_alpha=0.08,
+            )
+            plotted_any = True
 
-    return f"{header}\n\n" + "\n".join(summary_lines)
+        if plotted_any:
+            legend = ax.legend(
+                facecolor="#0D1728",
+                edgecolor="#22324A",
+                labelcolor="#F8FAFC",
+                fontsize=9,
+                ncol=2,
+                loc="upper left",
+                bbox_to_anchor=(0.0, 1.02),
+            )
+            legend.get_frame().set_alpha(0.95)
+        else:
+            _plot_series(total_dates, total_counts, "#6C5DD3", "Downloads", marker_size=18)
+    else:
+        _plot_series(total_dates, total_counts, "#38BDF8", "Downloads", annotate_last=True, marker_size=22, fill_alpha=0.18)
+
+    if snapshot.total_downloads <= 0:
+        ax.text(
+            0.5,
+            0.5,
+            "No downloads yet for this period",
+            transform=ax.transAxes,
+            ha="center",
+            va="center",
+            color="#94A3B8",
+            fontsize=14,
+            bbox=dict(boxstyle="round,pad=0.6", facecolor="#0D1728", edgecolor="#22324A"),
+        )
+
+    ax.set_xlabel("Date", fontsize=11, color="#94A3B8", labelpad=12)
+    ax.set_ylabel("Downloads", fontsize=11, color="#94A3B8", labelpad=10)
+    ax.yaxis.set_major_locator(MaxNLocator(integer=True))
+
+    if total_dates:
+        ax.set_xlim(total_dates[0], total_dates[-1])
+
+    if period == "Year":
+        import matplotlib.dates as mdates
+
+        ax.xaxis.set_major_locator(mdates.MonthLocator(interval=1))
+        ax.xaxis.set_major_formatter(mdates.DateFormatter("%b"))
+    elif period == "Week":
+        ax.set_xticks(total_dates)
+        ax.set_xticklabels([dt.strftime("%a") for dt in total_dates])
+    else:
+        visible_dates = _decimate_dates(total_dates, 8)
+        ax.set_xticks(visible_dates)
+        ax.set_xticklabels([dt.strftime("%b %d") for dt in visible_dates], rotation=20, ha="right")
+
+    ax.grid(axis="y", color="#22324A", linestyle="--", linewidth=0.8, alpha=0.75)
+    ax.grid(axis="x", color="#142033", linestyle="-", linewidth=0.5, alpha=0.2)
+    ax.spines["top"].set_visible(False)
+    ax.spines["right"].set_visible(False)
+    ax.spines["left"].set_color("#2B3B52")
+    ax.spines["bottom"].set_color("#2B3B52")
+    ax.tick_params(axis="x", colors="#CBD5E1", labelsize=10)
+    ax.tick_params(axis="y", colors="#CBD5E1", labelsize=10)
+    ax.set_ylim(bottom=0)
+    ax.margins(x=0.02)
+
+    output = io.BytesIO()
+    fig.savefig(output, format="png", bbox_inches="tight", facecolor=fig.get_facecolor())
+    plt.close(fig)
+    chart_bytes = output.getvalue()
+    _stats_chart_cache[cache_key] = (time.monotonic(), chart_bytes)
+    return chart_bytes
+
+
+def build_stats_caption(period: str, snapshot: StatsSnapshot, mode: str = "total") -> str:
+    header = f"<b>Statistics for {period}</b>"
+    if snapshot.total_downloads <= 0:
+        return f"{header}\n\nNo downloads recorded for this period yet."
+
+    dates, counts = _build_series_for_period(snapshot.totals_by_date, period)
+    peak_index = max(range(len(counts)), key=counts.__getitem__)
+    peak_bucket = _format_stats_bucket(period, dates[peak_index])
+    peak_count = counts[peak_index]
+    bucket_name = _stats_bucket_name(period)
+    average = snapshot.total_downloads / len(counts) if counts else 0.0
+
+    lines = [
+        header,
+        "",
+        f"Total downloads: <b>{snapshot.total_downloads}</b>",
+        f"Peak {bucket_name}: <b>{peak_bucket}</b> - <b>{peak_count}</b>",
+        f"Average per {bucket_name}: <b>{average:.1f}</b>",
+    ]
+
+    if mode == "split" and snapshot.service_totals:
+        top_services = sorted(
+            snapshot.service_totals.items(),
+            key=lambda item: (-item[1], SERVICE_ORDER.index(item[0]) if item[0] in SERVICE_ORDER else len(SERVICE_ORDER)),
+        )[:3]
+        if top_services:
+            lines.extend(["", "<b>Top platforms</b>"])
+            for service, count in top_services:
+                share = (count / snapshot.total_downloads) * 100 if snapshot.total_downloads else 0.0
+                emoji = SERVICE_EMOJI.get(service, "")
+                prefix = f"{emoji} " if emoji else ""
+                lines.append(f"{prefix}{service}: <b>{count}</b> ({share:.0f}%)")
+
+    return "\n".join(lines)
+
+
+async def _render_stats(period: str, mode: str) -> tuple[bytes, str]:
+    snapshot = await fetch_stats_snapshot(period)
+    chart_bytes = render_stats_chart(snapshot, period, mode)
+    caption = build_stats_caption(period, snapshot, mode)
+    return chart_bytes, caption
+
+
+def _build_stats_photo(chart_bytes: bytes, period: str, mode: str) -> BufferedInputFile:
+    return BufferedInputFile(chart_bytes, filename=f"stats_{period.lower()}_{mode}.png")
+
+
+async def _send_stats_photo(target_message: types.Message, period: str, mode: str, chart_bytes: bytes, caption: str) -> None:
+    await target_message.answer_photo(
+        _build_stats_photo(chart_bytes, period, mode),
+        caption=caption,
+        parse_mode="HTML",
+        reply_markup=kb.stats_keyboard(period, mode),
+    )
+
+
+async def _edit_stats_message(call: types.CallbackQuery, period: str, mode: str, chart_bytes: bytes, caption: str) -> None:
+    media = InputMediaPhoto(
+        media=_build_stats_photo(chart_bytes, period, mode),
+        caption=caption,
+        parse_mode="HTML",
+    )
+    try:
+        await call.message.edit_media(media=media, reply_markup=kb.stats_keyboard(period, mode))
+    except (TelegramBadRequest, TelegramAPIError) as error:
+        logging.warning(
+            "Stats edit_media failed; falling back to send/delete: period=%s mode=%s error=%s",
+            period,
+            mode,
+            error,
+        )
+        await _send_stats_photo(call.message, period, mode, chart_bytes, caption)
+        try:
+            await call.message.delete()
+        except TelegramAPIError:
+            logging.warning("Failed to delete stale stats message after fallback")
 
 
 @router.message(Command("stats"))
 async def stats_command(message: types.Message):
+    period = "Week"
+    mode = "total"
     try:
-        period = "Week"
-        mode = "total"
-        filename, caption = await _render_stats(period, mode)
-
-        chart_input_file = FSInputFile(filename)
-        await message.answer_photo(
-            chart_input_file,
-            caption=caption,
-            reply_markup=kb.stats_keyboard(period, mode),
-        )
-
-        await remove_file(filename)
+        chart_bytes, caption = await _render_stats(period, mode)
+        await _send_stats_photo(message, period, mode, chart_bytes, caption)
     except Exception:
         await message.answer(bm.stats_temporarily_unavailable())
         logging.exception("Error handling /stats")
 
 
-async def _render_stats(payload_period: str, mode: str) -> tuple[str, str]:
-    data = await db.get_downloaded_files_count(payload_period)
-    per_service = await db.get_downloaded_files_by_service(payload_period) if mode == "split" else None
-    filename = create_and_save_chart(data, payload_period, per_service)
-    caption = build_stats_caption(payload_period, data, per_service)
-    return filename, caption
+async def _handle_stats_update(call: types.CallbackQuery, period: str, mode: str) -> None:
+    if period not in VALID_STATS_PERIODS or mode not in VALID_STATS_MODES:
+        await call.answer()
+        return
+
+    try:
+        chart_bytes, caption = await _render_stats(period, mode)
+        await _edit_stats_message(call, period, mode, chart_bytes, caption)
+        await call.answer()
+    except Exception:
+        logging.exception("Error updating /stats: period=%s mode=%s", period, mode)
+        await call.answer(bm.stats_temporarily_unavailable(), show_alert=True)
 
 
-@router.callback_query(F.data.startswith('stats:'))
+@router.callback_query(F.data.startswith("stats:"))
 async def switch_stats(call: types.CallbackQuery):
-    await call.message.delete()
-
     parts = call.data.split(":")
     if len(parts) != 3:
+        await call.answer()
         return
+
     _, period, mode = parts
-
-    filename, caption = await _render_stats(period, mode)
-
-    chart_input_file = FSInputFile(filename)
-    await call.message.answer_photo(
-        chart_input_file,
-        caption=caption,
-        reply_markup=kb.stats_keyboard(period, mode),
-    )
-
-    await remove_file(filename)
+    await _handle_stats_update(call, period, mode)
 
 
-@router.callback_query(F.data.startswith('date_'))
+@router.callback_query(F.data.startswith("date_"))
 async def switch_period(call: types.CallbackQuery):
-    # Backward compatibility for older stats keyboards without mode toggle
-    await call.message.delete()
-
     period = call.data.split("_")[1]
-    filename, caption = await _render_stats(period, "total")
-
-    chart_input_file = FSInputFile(filename)
-    await call.message.answer_photo(
-        chart_input_file,
-        caption=caption,
-        reply_markup=kb.stats_keyboard(period, "total"),
-    )
-
-    await remove_file(filename)
+    await _handle_stats_update(call, period, "total")

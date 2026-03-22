@@ -1,3 +1,4 @@
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from collections import defaultdict
 import re
@@ -16,6 +17,15 @@ from log.logger import logger as logging
 logging = logging.bind(service="db")
 
 Base = declarative_base()
+NON_DOWNLOAD_ACTIONS = ("start", "settings")
+
+
+@dataclass(slots=True)
+class StatsSnapshot:
+    totals_by_date: dict[str, int] = field(default_factory=dict)
+    by_service: dict[str, dict[str, int]] = field(default_factory=dict)
+    service_totals: dict[str, int] = field(default_factory=dict)
+    total_downloads: int = 0
 
 
 class DownloadedFile(Base):
@@ -441,36 +451,60 @@ class DataBase:
                 logging.error("Error in get_file_id: %s", e)
                 return None
 
-    async def get_downloaded_files_count(self, period: str):
-        async with self.SessionLocal() as session:
-            start_date = datetime.now()
-            if period == "Week":
-                start_date -= timedelta(weeks=1)
-            elif period == "Month":
-                start_date -= timedelta(days=30)
-            elif period == "Year":
-                start_date -= timedelta(days=365)
+    @staticmethod
+    def _stats_period_start(period: str) -> datetime:
+        start_date = datetime.now()
+        if period == "Week":
+            start_date -= timedelta(weeks=1)
+        elif period == "Month":
+            start_date -= timedelta(days=30)
+        elif period == "Year":
+            start_date -= timedelta(days=365)
+        return start_date
 
+    @staticmethod
+    def _normalize_stats_date(date_val) -> str:
+        if isinstance(date_val, str):
+            return datetime.strptime(date_val, "%Y-%m-%d").strftime("%Y-%m-%d")
+        return date_val.strftime("%Y-%m-%d")
+
+    async def get_download_stats(self, period: str) -> StatsSnapshot:
+        async with self.SessionLocal() as session:
+            start_date = self._stats_period_start(period)
             result = await session.execute(
-                select(func.date(AnalyticsEvent.created_at), func.count())
+                select(func.date(AnalyticsEvent.created_at), AnalyticsEvent.action_name, func.count())
                 .where(
                     AnalyticsEvent.created_at >= start_date,
-                    AnalyticsEvent.action_name.notin_(["start", "settings"])
+                    AnalyticsEvent.action_name.notin_(NON_DOWNLOAD_ACTIONS),
                 )
-                .group_by(func.date(AnalyticsEvent.created_at))
+                .group_by(func.date(AnalyticsEvent.created_at), AnalyticsEvent.action_name)
                 .order_by(func.date(AnalyticsEvent.created_at))
             )
 
-            counts: dict[str, int] = {}
-            for row in result.all():
-                date_val = row[0]
-                if isinstance(date_val, str):
-                    normalized = datetime.strptime(date_val, "%Y-%m-%d").strftime("%Y-%m-%d")
-                else:
-                    normalized = date_val.strftime("%Y-%m-%d")
-                counts[normalized] = row[1]
+            totals_by_date: dict[str, int] = defaultdict(int)
+            by_service: dict[str, dict[str, int]] = defaultdict(dict)
+            service_totals: dict[str, int] = defaultdict(int)
+            total_downloads = 0
 
-            return counts
+            for date_val, action_name, count in result.all():
+                normalized = self._normalize_stats_date(date_val)
+                service = self._map_action_to_service(action_name)
+
+                totals_by_date[normalized] += count
+                by_service[service][normalized] = by_service[service].get(normalized, 0) + count
+                service_totals[service] += count
+                total_downloads += count
+
+            return StatsSnapshot(
+                totals_by_date=dict(totals_by_date),
+                by_service={service: dict(values) for service, values in by_service.items()},
+                service_totals=dict(service_totals),
+                total_downloads=total_downloads,
+            )
+
+    async def get_downloaded_files_count(self, period: str):
+        snapshot = await self.get_download_stats(period)
+        return snapshot.totals_by_date
 
     @staticmethod
     def _map_action_to_service(action_name: str) -> str:
@@ -490,33 +524,5 @@ class DataBase:
         return "Other"
 
     async def get_downloaded_files_by_service(self, period: str) -> dict[str, dict[str, int]]:
-        async with self.SessionLocal() as session:
-            start_date = datetime.now()
-            if period == "Week":
-                start_date -= timedelta(weeks=1)
-            elif period == "Month":
-                start_date -= timedelta(days=30)
-            elif period == "Year":
-                start_date -= timedelta(days=365)
-
-            result = await session.execute(
-                select(func.date(AnalyticsEvent.created_at), AnalyticsEvent.action_name, func.count())
-                .where(
-                    AnalyticsEvent.created_at >= start_date,
-                    AnalyticsEvent.action_name.notin_(["start", "settings"])
-                )
-                .group_by(func.date(AnalyticsEvent.created_at), AnalyticsEvent.action_name)
-                .order_by(func.date(AnalyticsEvent.created_at))
-            )
-
-            by_service: dict[str, dict[str, int]] = defaultdict(dict)
-            for date_val, action_name, count in result.all():
-                if isinstance(date_val, str):
-                    normalized = datetime.strptime(date_val, "%Y-%m-%d").strftime("%Y-%m-%d")
-                else:
-                    normalized = date_val.strftime("%Y-%m-%d")
-
-                service = self._map_action_to_service(action_name)
-                by_service[service][normalized] = by_service[service].get(normalized, 0) + count
-
-            return dict(by_service)
+        snapshot = await self.get_download_stats(period)
+        return snapshot.by_service

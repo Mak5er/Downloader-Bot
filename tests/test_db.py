@@ -228,9 +228,13 @@ async def test_downloaded_files_count(database):
                 )
             )
 
+    snapshot = await database.get_download_stats("Year")
     week_counts = await database.get_downloaded_files_count("Week")
     year_counts = await database.get_downloaded_files_count("Year")
 
+    assert snapshot.total_downloads == 2
+    assert snapshot.totals_by_date[today.strftime("%Y-%m-%d")] == 1
+    assert snapshot.totals_by_date[older.strftime("%Y-%m-%d")] == 1
     assert sum(week_counts.values()) == 1
     assert sum(year_counts.values()) == 2
 
@@ -283,7 +287,14 @@ async def test_downloaded_files_by_service(database):
                 )
             )
 
+    snapshot = await database.get_download_stats("Year")
     by_service = await database.get_downloaded_files_by_service("Year")
+    assert snapshot.total_downloads == 5
+    assert snapshot.service_totals["Instagram"] == 1
+    assert snapshot.service_totals["TikTok"] == 1
+    assert snapshot.service_totals["SoundCloud"] == 1
+    assert snapshot.service_totals["Pinterest"] == 1
+    assert snapshot.service_totals["Other"] == 1
     assert by_service["Instagram"][today_str] == 1
     assert by_service["TikTok"][today_str] == 1
     assert by_service["SoundCloud"][today_str] == 1

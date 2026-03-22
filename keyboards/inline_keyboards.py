@@ -52,6 +52,29 @@ def return_settings_keyboard():
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
+def stats_keyboard(current_period: str = "Week", mode: str = "total"):
+    periods = ["Week", "Month", "Year"]
+    period_buttons = [
+        InlineKeyboardButton(
+            text=f"[{period}]" if period == current_period else period,
+            callback_data=f"stats:{period}:{mode}",
+        )
+        for period in periods
+    ]
+
+    toggle_target = "split" if mode == "total" else "total"
+    toggle_label = "View: By platform" if mode == "total" else "View: Overall"
+
+    buttons = [
+        period_buttons,
+        [InlineKeyboardButton(text=toggle_label, callback_data=f"stats:{current_period}:{toggle_target}")],
+    ]
+
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
+
+
 def admin_keyboard():
     buttons = [
         [InlineKeyboardButton(text="👥 Check Active Users", callback_data="check_active_users")],
@@ -218,7 +241,7 @@ def return_video_info_keyboard(views, likes, comments, shares, music_play_url, v
     return builder.as_markup()
 
 
-def stats_keyboard(current_period: str = "Week", mode: str = "total"):
+def _stats_keyboard_legacy_bottom(current_period: str = "Week", mode: str = "total"):
     periods = ["Week", "Month", "Year"]
     period_buttons = [
         InlineKeyboardButton(
