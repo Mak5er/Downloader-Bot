@@ -85,8 +85,8 @@ class DownloadConfig:
     chunk_size: int = 1024 * 1024  # 1 MiB chunks strike good throughput / memory balance
     multipart_threshold: int = 12 * 1024 * 1024  # Split downloads bigger than 12 MiB
     max_workers: int = 6  # Parallel range requests when supported
-    max_concurrent_downloads: int = 3  # Prevent runaway thread creation under load
     head_timeout: float = 8.0
+    probe_max_retries: int = 3
     stream_timeout: tuple[float, float] = (5.0, 60.0)
     max_retries: int = 3
     retry_backoff: float = 0.75
@@ -112,6 +112,8 @@ class ResilientDownloader:
     """
 
     _thread_local: threading.local = threading.local()
+    _inflight_downloads: dict[str, asyncio.Future[DownloadMetrics]] = {}
+    _inflight_lock: asyncio.Lock = asyncio.Lock()
 
     def __init__(
         self,
@@ -157,11 +159,35 @@ class ResilientDownloader:
         loop = asyncio.get_running_loop()
         progress_bridge = self._build_progress_bridge(loop, on_progress)
         headers_map = headers or {}
+        inflight_key = os.path.abspath(os.path.join(self.output_dir, filename))
         use_subprocess = (
             self._subprocess_threshold_bytes > 0
             and (size_hint or 0) >= self._subprocess_threshold_bytes
             and on_progress is None
         )
+        shared_future: asyncio.Future[DownloadMetrics]
+        should_run = False
+
+        async with self._inflight_lock:
+            existing = self._inflight_downloads.get(inflight_key)
+            if existing is None or existing.done():
+                shared_future = loop.create_future()
+                shared_future.add_done_callback(
+                    lambda fut: fut.exception() if fut.done() and not fut.cancelled() else None
+                )
+                self._inflight_downloads[inflight_key] = shared_future
+                should_run = True
+            else:
+                shared_future = existing
+
+        if not should_run:
+            logging.debug(
+                "Joining in-flight download: url=%s path=%s request_id=%s",
+                url,
+                inflight_key,
+                request_id,
+            )
+            return await asyncio.shield(shared_future)
 
         async def runner() -> DownloadMetrics:
             if use_subprocess:
@@ -221,11 +247,26 @@ class ResilientDownloader:
                 url=url,
                 size=metrics.size,
             )
+            if not shared_future.done():
+                shared_future.set_result(metrics)
             return metrics
         except QueueRateLimitError as exc:
+            if not shared_future.done():
+                shared_future.set_exception(DownloadRateLimitError(exc.retry_after))
             raise DownloadRateLimitError(exc.retry_after) from exc
         except QueueBackpressureError as exc:
+            if not shared_future.done():
+                shared_future.set_exception(DownloadQueueBusyError(exc.position))
             raise DownloadQueueBusyError(exc.position) from exc
+        except Exception as exc:
+            if not shared_future.done():
+                shared_future.set_exception(exc)
+            raise
+        finally:
+            async with self._inflight_lock:
+                current = self._inflight_downloads.get(inflight_key)
+                if current is shared_future:
+                    self._inflight_downloads.pop(inflight_key, None)
 
     @staticmethod
     def _resolve_priority(*, priority: Optional[int], size_hint: Optional[int]) -> int:
@@ -288,8 +329,8 @@ class ResilientDownloader:
                 "chunk_size": self.config.chunk_size,
                 "multipart_threshold": self.config.multipart_threshold,
                 "max_workers": self.config.max_workers,
-                "max_concurrent_downloads": self.config.max_concurrent_downloads,
                 "head_timeout": self.config.head_timeout,
+                "probe_max_retries": self.config.probe_max_retries,
                 "stream_timeout": list(self.config.stream_timeout),
                 "max_retries": self.config.max_retries,
                 "retry_backoff": self.config.retry_backoff,
@@ -471,6 +512,7 @@ class ResilientDownloader:
     def _probe(self, url: str, headers: Mapping[str, str]) -> tuple[int, bool]:
         """Issue a HEAD request to discover content length and Range support."""
         attempt = 0
+        max_probe_retries = max(0, int(self.config.probe_max_retries))
         while True:
             session = self._get_session()
             try:
@@ -495,7 +537,7 @@ class ResilientDownloader:
                 return total_size, supports_range
             except Exception as exc:
                 attempt += 1
-                if attempt > self.config.max_retries:
+                if attempt > max_probe_retries:
                     logging.warning(
                         "Probe failed, falling back to conservative download: url=%s error=%s",
                         url,

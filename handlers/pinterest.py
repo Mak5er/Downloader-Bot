@@ -15,6 +15,7 @@ import messages as bm
 from config import CHANNEL_ID, COBALT_API_KEY, COBALT_API_URL, OUTPUT_DIR
 from handlers.user import update_info
 from handlers.utils import (
+    build_inline_album_result,
     build_request_id,
     build_progress_status,
     build_queue_busy_text,
@@ -31,6 +32,7 @@ from handlers.utils import (
     safe_edit_text,
     safe_edit_inline_media,
     safe_edit_inline_text,
+    safe_answer_inline_query,
     send_chat_action_if_needed,
     resolve_settings_target_id,
     with_callback_logging,
@@ -53,6 +55,7 @@ from utils.download_manager import (
     ResilientDownloader,
     log_download_metrics,
 )
+from utils.media_cache import build_media_cache_key
 from services.inline_album_links import create_inline_album_request
 from services.inline_service_icons import get_inline_service_icon
 from services.inline_video_requests import (
@@ -106,6 +109,22 @@ class PinterestPost:
     media_list: list[PinterestMedia]
 
 
+def _extract_pinterest_thumb(source: dict) -> Optional[str]:
+    for key in ("thumb", "thumbnail", "poster", "preview", "cover"):
+        value = source.get(key)
+        if isinstance(value, str) and value:
+            return value
+    return None
+
+
+def _get_pinterest_preview_url(media: Optional[PinterestMedia]) -> Optional[str]:
+    if not media:
+        return None
+    if media.type == "photo":
+        return media.thumb or media.url
+    return media.thumb or None
+
+
 def parse_pinterest_post(data: dict) -> Optional[PinterestPost]:
     if not isinstance(data, dict):
         return None
@@ -138,6 +157,7 @@ def parse_pinterest_post(data: dict) -> Optional[PinterestPost]:
                         media_url,
                         filename=data.get("filename"),
                     ),
+                    thumb=_extract_pinterest_thumb(data),
                 )
             )
     elif status == "picker":
@@ -154,7 +174,7 @@ def parse_pinterest_post(data: dict) -> Optional[PinterestPost]:
                         media_url,
                         declared_type=item.get("type"),
                     ),
-                    thumb=item.get("thumb") if isinstance(item.get("thumb"), str) else None,
+                    thumb=_extract_pinterest_thumb(item),
                 )
             )
     elif status == "local-processing":
@@ -172,6 +192,7 @@ def parse_pinterest_post(data: dict) -> Optional[PinterestPost]:
                         filename=output.get("filename"),
                         mime_type=output.get("type"),
                     ),
+                    thumb=_extract_pinterest_thumb(data) or _extract_pinterest_thumb(output),
                 )
             )
     else:
@@ -199,7 +220,6 @@ class PinterestService:
             chunk_size=1024 * 1024,
             multipart_threshold=16 * 1024 * 1024,
             max_workers=6,
-            max_concurrent_downloads=3,
             retry_backoff=0.8,
         )
         self._downloader = ResilientDownloader(output_dir, config=config, source="pinterest")
@@ -329,30 +349,31 @@ async def process_pinterest_single_video(
     business_id: Optional[int],
 ):
     media = post.media_list[0]
-    db_file_id = await db.get_file_id(source_url)
-    if db_file_id:
-        await send_chat_action_if_needed(bot, message.chat.id, "upload_video", business_id)
-        await message.answer_video(
-            video=db_file_id,
-            caption=bm.captions(user_settings["captions"], post.description, bot_url),
-            reply_markup=kb.return_video_info_keyboard(
-                None, None, None, None, None, source_url, user_settings,
-                audio_callback_data=None,
-            ),
-            parse_mode="HTML",
-        )
-        await maybe_delete_user_message(message, user_settings["delete_message"])
-        return
-
     status_message: Optional[types.Message] = None
     if business_id is None:
         status_message = await message.answer(bm.downloading_video_status())
+    db_file_id = await db.get_file_id(source_url)
     progress_state = {"last": 0.0}
     download_path: Optional[str] = None
     timestamp = datetime.datetime.now().strftime("%Y%m%d%H%M%S")
     download_name = f"{post.id}_{timestamp}_pinterest_video.mp4"
 
     try:
+        if db_file_id:
+            await safe_edit_text(status_message, bm.uploading_status())
+            await send_chat_action_if_needed(bot, message.chat.id, "upload_video", business_id)
+            await message.reply_video(
+                video=db_file_id,
+                caption=bm.captions(user_settings["captions"], post.description, bot_url),
+                reply_markup=kb.return_video_info_keyboard(
+                    None, None, None, None, None, source_url, user_settings,
+                    audio_callback_data=None,
+                ),
+                parse_mode="HTML",
+            )
+            await maybe_delete_user_message(message, user_settings["delete_message"])
+            return
+
         async def on_progress(progress: DownloadProgress):
             now = time.monotonic()
             if not progress.done and now - progress_state["last"] < 1.0:
@@ -385,7 +406,7 @@ async def process_pinterest_single_video(
 
         await safe_edit_text(status_message, bm.uploading_status())
         await send_chat_action_if_needed(bot, message.chat.id, "upload_video", business_id)
-        sent = await message.answer_video(
+        sent = await message.reply_video(
             video=FSInputFile(download_path),
             caption=bm.captions(user_settings["captions"], post.description, bot_url),
             reply_markup=kb.return_video_info_keyboard(
@@ -422,41 +443,47 @@ async def process_pinterest_single_photo(
 ):
     media = post.media_list[0]
     cache_key = f"{source_url}#photo"
+    status_message: Optional[types.Message] = None
+    metrics: Optional[DownloadMetrics] = None
+    if business_id is None:
+        status_message = await message.answer(bm.downloading_video_status())
     db_file_id = await db.get_file_id(cache_key)
-    if db_file_id:
-        await send_chat_action_if_needed(bot, message.chat.id, "upload_photo", business_id)
-        await message.answer_photo(
-            photo=db_file_id,
-            caption=bm.captions(user_settings["captions"], post.description, bot_url),
-            reply_markup=kb.return_video_info_keyboard(
-                None, None, None, None, None, source_url, user_settings,
-                audio_callback_data=None,
-            ),
-            parse_mode="HTML",
-        )
-        await maybe_delete_user_message(message, user_settings["delete_message"])
-        return
-
-    ext = "jpg"
-    low_url = media.url.lower().split("?", 1)[0]
-    if low_url.endswith(".png"):
-        ext = "png"
-    timestamp = datetime.datetime.now().strftime("%Y%m%d%H%M%S")
-    filename = f"{post.id}_{timestamp}_pinterest_photo.{ext}"
-    metrics = await pinterest_service.download_media(
-        media.url,
-        filename,
-        user_id=message.from_user.id,
-        request_id=f"pinterest_photo:{message.chat.id}:{message.message_id}:{post.id}",
-    )
-    if not metrics:
-        await handle_download_error(message, business_id=business_id)
-        return
-
-    log_download_metrics("pinterest_photo", metrics)
     try:
+        if db_file_id:
+            await safe_edit_text(status_message, bm.uploading_status())
+            await send_chat_action_if_needed(bot, message.chat.id, "upload_photo", business_id)
+            await message.reply_photo(
+                photo=db_file_id,
+                caption=bm.captions(user_settings["captions"], post.description, bot_url),
+                reply_markup=kb.return_video_info_keyboard(
+                    None, None, None, None, None, source_url, user_settings,
+                    audio_callback_data=None,
+                ),
+                parse_mode="HTML",
+            )
+            await maybe_delete_user_message(message, user_settings["delete_message"])
+            return
+
+        ext = "jpg"
+        low_url = media.url.lower().split("?", 1)[0]
+        if low_url.endswith(".png"):
+            ext = "png"
+        timestamp = datetime.datetime.now().strftime("%Y%m%d%H%M%S")
+        filename = f"{post.id}_{timestamp}_pinterest_photo.{ext}"
+        metrics = await pinterest_service.download_media(
+            media.url,
+            filename,
+            user_id=message.from_user.id,
+            request_id=f"pinterest_photo:{message.chat.id}:{message.message_id}:{post.id}",
+        )
+        if not metrics:
+            await handle_download_error(message, business_id=business_id)
+            return
+
+        log_download_metrics("pinterest_photo", metrics)
+        await safe_edit_text(status_message, bm.uploading_status())
         await send_chat_action_if_needed(bot, message.chat.id, "upload_photo", business_id)
-        sent = await message.answer_photo(
+        sent = await message.reply_photo(
             photo=FSInputFile(metrics.path),
             caption=bm.captions(user_settings["captions"], post.description, bot_url),
             reply_markup=kb.return_video_info_keyboard(
@@ -469,7 +496,9 @@ async def process_pinterest_single_photo(
         if sent.photo:
             await db.add_file(cache_key, sent.photo[-1].file_id, "photo")
     finally:
-        await remove_file(metrics.path)
+        await safe_delete_message(status_message)
+        if metrics:
+            await remove_file(metrics.path)
 
 
 async def process_pinterest_media_group(
@@ -480,12 +509,34 @@ async def process_pinterest_media_group(
     user_settings: dict,
     business_id: Optional[int],
 ):
+    status_message: Optional[types.Message] = None
+    if business_id is None:
+        status_message = await message.answer(bm.downloading_video_status())
     await send_chat_action_if_needed(bot, message.chat.id, "upload_photo", business_id)
     downloaded_paths: list[str] = []
-    media_items: list[dict[str, str]] = []
+    media_items: list[dict[str, object]] = []
     request_id = f"pinterest_group:{message.chat.id}:{message.message_id}:{post.id}"
 
-    async def _download_item(index: int, item: PinterestMedia):
+    def _extract_sent_file_id(sent_message: types.Message, media_kind: str) -> str | None:
+        if media_kind == "video" and sent_message.video:
+            return sent_message.video.file_id
+        if media_kind == "photo" and sent_message.photo:
+            return sent_message.photo[-1].file_id
+        return None
+
+    async def _resolve_item(index: int, item: PinterestMedia):
+        cache_key = build_media_cache_key(source_url, item_index=index, item_kind=item.type)
+        cached_file_id = await db.get_file_id(cache_key)
+        if cached_file_id:
+            return {
+                "index": index,
+                "type": item.type,
+                "cache_key": cache_key,
+                "file_id": cached_file_id,
+                "path": None,
+                "cached": True,
+            }
+
         ext = "mp4" if item.type == "video" else "jpg"
         filename = f"pin_{post.id}_{index}.{ext}"
         metrics = await pinterest_service.download_media(
@@ -497,20 +548,27 @@ async def process_pinterest_media_group(
         if not metrics:
             return None
         log_download_metrics("pinterest_group", metrics)
-        return index, item.type, metrics.path
+        return {
+            "index": index,
+            "type": item.type,
+            "cache_key": cache_key,
+            "file_id": None,
+            "path": metrics.path,
+            "cached": False,
+        }
 
     tasks = [
-        asyncio.create_task(_download_item(index, item))
+        asyncio.create_task(_resolve_item(index, item))
         for index, item in enumerate(post.media_list[:10])
     ]
     results = await asyncio.gather(*tasks, return_exceptions=True)
     for result in sorted(
         (r for r in results if not isinstance(r, Exception) and r is not None),
-        key=lambda value: value[0],
+        key=lambda value: int(value["index"]),
     ):
-        _, media_type, media_path = result
-        downloaded_paths.append(media_path)
-        media_items.append({"path": media_path, "type": media_type})
+        if result["path"]:
+            downloaded_paths.append(str(result["path"]))
+        media_items.append(result)
 
     for result in results:
         if isinstance(result, Exception):
@@ -521,14 +579,28 @@ async def process_pinterest_media_group(
         return
 
     try:
+        has_sent_media = False
         if len(media_items) > 1:
             media_group = MediaGroupBuilder()
-            for item in media_items[:-1]:
+            batch = media_items[:-1]
+            for item in batch:
+                media_ref = item["file_id"] if item["file_id"] else FSInputFile(str(item["path"]))
                 if item["type"] == "video":
-                    media_group.add_video(media=FSInputFile(item["path"]))
+                    media_group.add_video(media=media_ref)
                 else:
-                    media_group.add_photo(media=FSInputFile(item["path"]))
-            await message.answer_media_group(media=media_group.build())
+                    media_group.add_photo(media=media_ref)
+            await safe_edit_text(status_message, bm.uploading_status())
+            send_kwargs = {"media": media_group.build()}
+            if not has_sent_media:
+                send_kwargs["reply_to_message_id"] = message.message_id
+            sent_group = await message.answer_media_group(**send_kwargs)
+            has_sent_media = True
+            for sent_message, item in zip(sent_group, batch):
+                if item["cached"]:
+                    continue
+                file_id = _extract_sent_file_id(sent_message, str(item["type"]))
+                if file_id:
+                    await db.add_file(str(item["cache_key"]), file_id, str(item["type"]))
 
         last_item = media_items[-1]
         caption = bm.captions(user_settings["captions"], post.description, bot_url)
@@ -537,21 +609,30 @@ async def process_pinterest_media_group(
             audio_callback_data=None,
         )
         if last_item["type"] == "video":
-            await message.answer_video(
-                video=FSInputFile(last_item["path"]),
+            await safe_edit_text(status_message, bm.uploading_status())
+            send_video = message.answer_video if has_sent_media else message.reply_video
+            sent_message = await send_video(
+                video=last_item["file_id"] if last_item["file_id"] else FSInputFile(str(last_item["path"])),
                 caption=caption,
                 reply_markup=keyboard,
                 parse_mode="HTML",
             )
         else:
-            await message.answer_photo(
-                photo=FSInputFile(last_item["path"]),
+            await safe_edit_text(status_message, bm.uploading_status())
+            send_photo = message.answer_photo if has_sent_media else message.reply_photo
+            sent_message = await send_photo(
+                photo=last_item["file_id"] if last_item["file_id"] else FSInputFile(str(last_item["path"])),
                 caption=caption,
                 reply_markup=keyboard,
                 parse_mode="HTML",
             )
+        if not last_item["cached"]:
+            file_id = _extract_sent_file_id(sent_message, str(last_item["type"]))
+            if file_id:
+                await db.add_file(str(last_item["cache_key"]), file_id, str(last_item["type"]))
         await maybe_delete_user_message(message, user_settings["delete_message"])
     finally:
+        await safe_delete_message(status_message)
         for path in downloaded_paths:
             await remove_file(path)
 
@@ -578,54 +659,61 @@ async def inline_pinterest_query(query: types.InlineQuery):
         if not post or not post.media_list:
             await query.answer([], cache_time=1, is_personal=True)
             return
+        first = post.media_list[0]
         photo_items = [item for item in post.media_list if item.type == "photo"]
         first_photo = photo_items[0] if photo_items else None
 
         if len(post.media_list) == 1 and first_photo:
-            preview_url = first_photo.thumb or first_photo.url
+            cache_key = f"{source_url}#photo"
+            db_id = await db.get_file_id(cache_key)
+            if not db_id and not CHANNEL_ID:
+                logging.error("CHANNEL_ID is not configured; Pinterest inline photo send is disabled")
+                await query.answer([], cache_time=1, is_personal=True)
+                return
+
+            token = create_inline_video_request("pinterest", source_url, query.from_user.id, user_settings)
+            preview_url = _get_pinterest_preview_url(first_photo)
             results = [
-                types.InlineQueryResultPhoto(
-                    id=f"pinterest_photo_{post.id}",
-                    photo_url=first_photo.url,
+                types.InlineQueryResultArticle(
+                    id=f"pinterest_inline:{token}",
+                    title="Pinterest Photo",
+                    description=post.description or "Press the button to send this photo inline.",
                     thumbnail_url=preview_url,
-                    title=bm.inline_photo_title("Pinterest"),
-                    description=post.description or bm.inline_photo_description(),
-                    caption=bm.captions(user_settings["captions"], post.description, bot_url),
-                    reply_markup=kb.return_video_info_keyboard(
-                        None, None, None, None, None, source_url, user_settings,
-                        audio_callback_data=None,
+                    input_message_content=types.InputTextMessageContent(
+                        message_text="Pinterest photo is being prepared...\nIf it does not start automatically, tap the button below.",
                     ),
-                    parse_mode="HTML",
+                    reply_markup=kb.inline_send_media_keyboard(
+                        "Send photo inline",
+                        f"inline:pinterest:{token}",
+                    ),
                 )
             ]
-            await query.answer(results, cache_time=10, is_personal=True)
+            await safe_answer_inline_query(query, results, cache_time=10, is_personal=True)
             return
 
-        if len(post.media_list) != 1 or post.media_list[0].type != "video":
-            if first_photo and len(photo_items) > 1:
-                token = create_inline_album_request(query.from_user.id, "pinterest", source_url)
-                deep_link = build_start_deeplink_url(bot_url, f"album_{token}")
-                preview_url = first_photo.thumb or first_photo.url
-                results = [
-                    types.InlineQueryResultPhoto(
-                        id=f"pinterest_album_{post.id}",
-                        photo_url=first_photo.url,
-                        thumbnail_url=preview_url,
-                        title=bm.inline_album_title("Pinterest"),
-                        description=bm.inline_album_description(),
-                        caption=bm.captions(user_settings["captions"], post.description, bot_url),
-                        reply_markup=types.InlineKeyboardMarkup(
-                            inline_keyboard=[[
-                                types.InlineKeyboardButton(text=bm.inline_open_full_album_button(), url=deep_link)
-                            ]]
-                        ),
-                        parse_mode="HTML",
-                    )
-                ]
-                await query.answer(results, cache_time=10, is_personal=True)
-                return
+        if len(post.media_list) > 1:
+            token = create_inline_album_request(query.from_user.id, "pinterest", source_url)
+            deep_link = build_start_deeplink_url(bot_url, f"album_{token}")
+            first_preview = _get_pinterest_preview_url(first_photo) or next(
+                (_get_pinterest_preview_url(item) for item in post.media_list if _get_pinterest_preview_url(item)),
+                None,
+            )
+            results = [
+                build_inline_album_result(
+                    result_id=f"pinterest_album_{post.id}",
+                    service_name="Pinterest",
+                    deep_link=deep_link,
+                    message_text=bm.captions(user_settings["captions"], post.description, bot_url),
+                    preview_url=first_preview,
+                    thumbnail_url=first_preview or get_inline_service_icon("pinterest"),
+                )
+            ]
+            await safe_answer_inline_query(query, results, cache_time=10, is_personal=True)
+            return
+
+        if first.type != "video":
             if first_photo:
-                preview_url = first_photo.thumb or first_photo.url
+                preview_url = _get_pinterest_preview_url(first_photo)
                 results = [
                     types.InlineQueryResultPhoto(
                         id=f"pinterest_photo_{post.id}",
@@ -641,7 +729,7 @@ async def inline_pinterest_query(query: types.InlineQuery):
                         parse_mode="HTML",
                     )
                 ]
-                await query.answer(results, cache_time=10, is_personal=True)
+                await safe_answer_inline_query(query, results, cache_time=10, is_personal=True)
                 return
 
             results = [
@@ -654,16 +742,17 @@ async def inline_pinterest_query(query: types.InlineQuery):
                     ),
                 )
             ]
-            await query.answer(results, cache_time=10, is_personal=True)
+            await safe_answer_inline_query(query, results, cache_time=10, is_personal=True)
             return
 
         token = create_inline_video_request("pinterest", source_url, query.from_user.id, user_settings)
+        preview_url = _get_pinterest_preview_url(first) or get_inline_service_icon("pinterest")
         results = [
             types.InlineQueryResultArticle(
                 id=f"pinterest_inline:{token}",
                 title="Pinterest Video",
                 description=post.description or "Press the button to send this video inline.",
-                thumbnail_url=get_inline_service_icon("pinterest"),
+                thumbnail_url=preview_url,
                 input_message_content=types.InputTextMessageContent(
                     message_text=bm.inline_send_video_prompt("Pinterest"),
                 ),
@@ -673,7 +762,7 @@ async def inline_pinterest_query(query: types.InlineQuery):
                 ),
             )
         ]
-        await query.answer(results, cache_time=10, is_personal=True)
+        await safe_answer_inline_query(query, results, cache_time=10, is_personal=True)
         return
     except Exception as exc:
         logging.exception(
@@ -700,18 +789,81 @@ async def _send_inline_pinterest_video(
 
     download_path: Optional[str] = None
 
-    async def _edit_inline_status(text: str, *, with_retry_button: bool = False) -> None:
+    async def _edit_inline_status(
+        text: str,
+        *,
+        with_retry_button: bool = False,
+        media_kind: str = "video",
+    ) -> None:
+        button_text = "Send photo inline" if media_kind == "photo" else "Send video inline"
         reply_markup = (
-            kb.inline_send_media_keyboard("Send video inline", f"inline:pinterest:{token}")
+            kb.inline_send_media_keyboard(button_text, f"inline:pinterest:{token}")
             if with_retry_button
             else None
         )
         await safe_edit_inline_text(bot, inline_message_id, text, reply_markup=reply_markup)
 
     try:
-        await _edit_inline_status(bm.fetching_info_status())
         post = await pinterest_service.fetch_post(request.source_url)
-        if not post or len(post.media_list) != 1 or post.media_list[0].type != "video":
+        if not post or len(post.media_list) != 1:
+            complete_inline_video_request(token)
+            await _edit_inline_status(bm.inline_photos_not_supported("Pinterest"))
+            return
+
+        first_item = post.media_list[0]
+        if first_item.type == "photo":
+            cache_key = f"{request.source_url}#photo"
+            db_id = await db.get_file_id(cache_key)
+            if not db_id:
+                if not CHANNEL_ID:
+                    reset_inline_video_request(token)
+                    await _edit_inline_status(bm.something_went_wrong(), with_retry_button=True, media_kind="photo")
+                    return
+
+                await _edit_inline_status(bm.uploading_status(), media_kind="photo")
+                sent = await bot.send_photo(
+                    chat_id=CHANNEL_ID,
+                    photo=first_item.url,
+                    caption=f"Pinterest Photo from {actor_name}",
+                )
+                if not sent.photo:
+                    reset_inline_video_request(token)
+                    await _edit_inline_status(bm.something_went_wrong(), with_retry_button=True, media_kind="photo")
+                    return
+                db_id = sent.photo[-1].file_id
+                await db.add_file(cache_key, db_id, "photo")
+            else:
+                await _edit_inline_status(bm.uploading_status(), media_kind="photo")
+
+            bot_url = await get_bot_url(bot)
+            edited = await safe_edit_inline_media(
+                bot,
+                inline_message_id,
+                types.InputMediaPhoto(
+                    media=db_id,
+                    caption=bm.captions(request.user_settings["captions"], post.description, bot_url),
+                    parse_mode="HTML",
+                ),
+                reply_markup=kb.return_video_info_keyboard(
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    request.source_url,
+                    request.user_settings,
+                    audio_callback_data=None,
+                ),
+            )
+            if edited:
+                complete_inline_video_request(token)
+                return
+
+            reset_inline_video_request(token)
+            await _edit_inline_status(bm.something_went_wrong(), with_retry_button=True, media_kind="photo")
+            return
+
+        if first_item.type != "video":
             complete_inline_video_request(token)
             await _edit_inline_status(bm.inline_photos_not_supported("Pinterest"))
             return
@@ -736,7 +888,7 @@ async def _send_inline_pinterest_video(
                 await _edit_inline_status(build_progress_status("Pinterest video", progress))
 
             metrics = await pinterest_service.download_media(
-                post.media_list[0].url,
+                first_item.url,
                 filename,
                 user_id=request.owner_user_id,
                 request_id=f"pinterest_inline:{request.owner_user_id}:{request_event_id}:{post.id}",

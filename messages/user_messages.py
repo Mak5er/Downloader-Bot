@@ -99,9 +99,6 @@ def downloading_video_status():
     return "<tg-emoji emoji-id='5375464961822695044'>🎬</tg-emoji> Downloading video..."
 
 
-def fetching_info_status():
-    return "<tg-emoji emoji-id='5188217332748527444'>🔎</tg-emoji> Fetching info..."
-
 
 def uploading_status():
     return "☁️ Uploading file to Telegram..."

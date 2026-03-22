@@ -4,7 +4,8 @@ from unittest.mock import AsyncMock
 import pytest
 
 from handlers import pinterest
-from services.inline_video_requests import get_inline_video_request
+from services.inline_album_links import get_inline_album_request
+from services.inline_video_requests import create_inline_video_request, get_inline_video_request
 from utils.download_manager import DownloadMetrics
 
 
@@ -157,3 +158,255 @@ async def test_inline_pinterest_query_returns_send_button(monkeypatch):
     request = get_inline_video_request(token)
     assert request is not None
     assert request.source_url == "https://www.pinterest.com/pin/123456789/"
+
+
+@pytest.mark.asyncio
+async def test_inline_pinterest_query_prefers_video_thumb(monkeypatch):
+    settings = {
+        "captions": "on",
+        "delete_message": "off",
+        "info_buttons": "on",
+        "url_button": "on",
+        "audio_button": "on",
+    }
+    query = SimpleNamespace(
+        from_user=SimpleNamespace(id=42),
+        chat_type="inline",
+        query="https://www.pinterest.com/pin/123456789/",
+        answer=AsyncMock(),
+    )
+    post = pinterest.PinterestPost(
+        id="pin-124",
+        description="Pin video",
+        media_list=[pinterest.PinterestMedia(url="https://cdn.example.com/video.mp4", type="video", thumb="https://cdn.example.com/video.jpg")],
+    )
+
+    monkeypatch.setattr(pinterest, "CHANNEL_ID", -1001234567890)
+    monkeypatch.setattr(pinterest, "send_analytics", AsyncMock())
+    monkeypatch.setattr(pinterest.db, "user_settings", AsyncMock(return_value=settings))
+    monkeypatch.setattr(pinterest, "get_bot_url", AsyncMock(return_value="https://t.me/maxloadbot"))
+    monkeypatch.setattr(pinterest.pinterest_service, "fetch_post", AsyncMock(return_value=post))
+
+    await pinterest.inline_pinterest_query(query)
+
+    results = query.answer.await_args.args[0]
+    assert len(results) == 1
+    assert results[0].thumbnail_url == "https://cdn.example.com/video.jpg"
+
+
+@pytest.mark.asyncio
+async def test_pinterest_media_group_uses_cached_file_ids(monkeypatch):
+    status_message = SimpleNamespace(delete=AsyncMock())
+    message = SimpleNamespace(
+        from_user=SimpleNamespace(id=1),
+        chat=SimpleNamespace(id=10, type="private"),
+        message_id=20,
+        answer=AsyncMock(return_value=status_message),
+        answer_media_group=AsyncMock(return_value=[SimpleNamespace(photo=[SimpleNamespace(file_id="cached-photo-id")])]),
+        answer_video=AsyncMock(return_value=SimpleNamespace(video=SimpleNamespace(file_id="cached-video-id"))),
+        answer_photo=AsyncMock(),
+        reply_video=AsyncMock(return_value=SimpleNamespace(video=SimpleNamespace(file_id="cached-video-id"))),
+        reply_photo=AsyncMock(),
+    )
+    post = pinterest.PinterestPost(
+        id="pin-1",
+        description="caption",
+        media_list=[
+            pinterest.PinterestMedia(url="https://cdn.example.com/1.jpg", type="photo"),
+            pinterest.PinterestMedia(url="https://cdn.example.com/2.mp4", type="video"),
+        ],
+    )
+
+    monkeypatch.setattr(pinterest, "send_chat_action_if_needed", AsyncMock())
+    monkeypatch.setattr(pinterest, "safe_edit_text", AsyncMock(return_value=True))
+    monkeypatch.setattr(pinterest, "safe_delete_message", AsyncMock())
+    monkeypatch.setattr(pinterest, "maybe_delete_user_message", AsyncMock())
+    monkeypatch.setattr(pinterest.db, "get_file_id", AsyncMock(side_effect=["cached-photo-id", "cached-video-id"]))
+    monkeypatch.setattr(pinterest.db, "add_file", AsyncMock())
+    monkeypatch.setattr(pinterest.pinterest_service, "download_media", AsyncMock())
+
+    await pinterest.process_pinterest_media_group(
+        message,
+        post,
+        "https://www.pinterest.com/pin/123456789/",
+        "https://t.me/maxloadbot",
+        {"captions": "on", "delete_message": "off", "info_buttons": "off", "url_button": "off", "audio_button": "off"},
+        None,
+    )
+
+    assert pinterest.pinterest_service.download_media.await_count == 0
+    assert message.answer_media_group.await_count == 1
+    assert message.answer_media_group.await_args.kwargs["reply_to_message_id"] == 20
+    assert message.answer_video.await_args.kwargs["video"] == "cached-video-id"
+    assert message.reply_video.await_count == 0
+
+
+@pytest.mark.asyncio
+async def test_pinterest_media_group_replies_only_on_first_sent_message(monkeypatch):
+    status_message = SimpleNamespace(delete=AsyncMock())
+    message = SimpleNamespace(
+        from_user=SimpleNamespace(id=1),
+        chat=SimpleNamespace(id=10, type="private"),
+        message_id=20,
+        answer=AsyncMock(return_value=status_message),
+        answer_media_group=AsyncMock(return_value=[SimpleNamespace(photo=[SimpleNamespace(file_id="sent-photo-id")])]),
+        answer_video=AsyncMock(return_value=SimpleNamespace(video=SimpleNamespace(file_id="sent-video-id"))),
+        answer_photo=AsyncMock(),
+        reply_video=AsyncMock(),
+        reply_photo=AsyncMock(),
+    )
+    post = pinterest.PinterestPost(
+        id="pin-1",
+        description="caption",
+        media_list=[
+            pinterest.PinterestMedia(url="https://cdn.example.com/1.jpg", type="photo"),
+            pinterest.PinterestMedia(url="https://cdn.example.com/2.mp4", type="video"),
+        ],
+    )
+
+    monkeypatch.setattr(pinterest, "send_chat_action_if_needed", AsyncMock())
+    monkeypatch.setattr(pinterest, "safe_edit_text", AsyncMock(return_value=True))
+    monkeypatch.setattr(pinterest, "safe_delete_message", AsyncMock())
+    monkeypatch.setattr(pinterest, "maybe_delete_user_message", AsyncMock())
+    monkeypatch.setattr(pinterest.db, "get_file_id", AsyncMock(return_value=None))
+    monkeypatch.setattr(pinterest.db, "add_file", AsyncMock())
+    monkeypatch.setattr(
+        pinterest.pinterest_service,
+        "download_media",
+        AsyncMock(side_effect=[SimpleNamespace(path="/tmp/1.jpg"), SimpleNamespace(path="/tmp/2.mp4")]),
+    )
+
+    await pinterest.process_pinterest_media_group(
+        message,
+        post,
+        "https://www.pinterest.com/pin/123456789/",
+        "https://t.me/maxloadbot",
+        {"captions": "on", "delete_message": "off", "info_buttons": "off", "url_button": "off", "audio_button": "off"},
+        None,
+    )
+
+    assert message.answer_media_group.await_args.kwargs["reply_to_message_id"] == 20
+    assert "reply_to_message_id" not in message.answer_video.await_args.kwargs
+    assert message.answer_video.await_args.kwargs["video"].path == "/tmp/2.mp4"
+    assert message.reply_video.await_count == 0
+    assert message.reply_photo.await_count == 0
+
+
+@pytest.mark.asyncio
+async def test_inline_pinterest_query_returns_album_deeplink_for_multi_video_post(monkeypatch):
+    settings = {
+        "captions": "on",
+        "delete_message": "off",
+        "info_buttons": "on",
+        "url_button": "on",
+        "audio_button": "on",
+    }
+    query = SimpleNamespace(
+        from_user=SimpleNamespace(id=42),
+        chat_type="inline",
+        query="https://www.pinterest.com/pin/123456789/",
+        answer=AsyncMock(),
+    )
+    post = pinterest.PinterestPost(
+        id="pin-inline-1",
+        description="multi video pin",
+        media_list=[
+            pinterest.PinterestMedia(url="https://cdn.example.com/1.mp4", type="video"),
+            pinterest.PinterestMedia(url="https://cdn.example.com/2.mp4", type="video"),
+        ],
+    )
+
+    monkeypatch.setattr(pinterest, "send_analytics", AsyncMock())
+    monkeypatch.setattr(pinterest.db, "user_settings", AsyncMock(return_value=settings))
+    monkeypatch.setattr(pinterest, "get_bot_url", AsyncMock(return_value="https://t.me/maxloadbot"))
+    monkeypatch.setattr(pinterest.pinterest_service, "fetch_post", AsyncMock(return_value=post))
+
+    await pinterest.inline_pinterest_query(query)
+
+    results = query.answer.await_args.args[0]
+    assert len(results) == 1
+    result = results[0]
+    assert result.title == pinterest.bm.inline_album_title("Pinterest")
+    assert result.thumbnail_url == pinterest.get_inline_service_icon("pinterest")
+    deep_link = result.reply_markup.inline_keyboard[0][0].url
+    token = deep_link.split("?start=album_", 1)[1]
+    request = get_inline_album_request(token)
+    assert request is not None
+    assert request.service == "pinterest"
+    assert request.url == "https://www.pinterest.com/pin/123456789/"
+
+
+@pytest.mark.asyncio
+async def test_inline_pinterest_query_returns_send_button_for_single_photo(monkeypatch):
+    settings = {
+        "captions": "on",
+        "delete_message": "off",
+        "info_buttons": "on",
+        "url_button": "on",
+        "audio_button": "on",
+    }
+    query = SimpleNamespace(
+        from_user=SimpleNamespace(id=42),
+        chat_type="inline",
+        query="https://www.pinterest.com/pin/123456789/",
+        answer=AsyncMock(),
+    )
+    post = pinterest.PinterestPost(
+        id="pin-photo-inline",
+        description="single photo pin",
+        media_list=[pinterest.PinterestMedia(url="https://cdn.example.com/photo.jpg", type="photo")],
+    )
+
+    monkeypatch.setattr(pinterest, "CHANNEL_ID", 12345)
+    monkeypatch.setattr(pinterest, "send_analytics", AsyncMock())
+    monkeypatch.setattr(pinterest.db, "user_settings", AsyncMock(return_value=settings))
+    monkeypatch.setattr(pinterest.db, "get_file_id", AsyncMock(return_value=None))
+    monkeypatch.setattr(pinterest, "get_bot_url", AsyncMock(return_value="https://t.me/maxloadbot"))
+    monkeypatch.setattr(pinterest.pinterest_service, "fetch_post", AsyncMock(return_value=post))
+
+    await pinterest.inline_pinterest_query(query)
+
+    results = query.answer.await_args.args[0]
+    assert len(results) == 1
+    result = results[0]
+    assert result.title == "Pinterest Photo"
+    assert result.reply_markup.inline_keyboard[0][0].text == "Send photo inline"
+    assert result.thumbnail_url == "https://cdn.example.com/photo.jpg"
+
+
+@pytest.mark.asyncio
+async def test_chosen_inline_pinterest_result_edits_inline_photo(monkeypatch):
+    settings = {
+        "captions": "on",
+        "delete_message": "off",
+        "info_buttons": "on",
+        "url_button": "on",
+        "audio_button": "on",
+    }
+    token = create_inline_video_request(
+        "pinterest",
+        "https://www.pinterest.com/pin/123456789/",
+        42,
+        settings,
+    )
+    result = SimpleNamespace(
+        result_id=f"pinterest_inline:{token}",
+        inline_message_id="inline-pin-photo",
+        from_user=SimpleNamespace(full_name="Inline User"),
+    )
+    post = pinterest.PinterestPost(
+        id="pin-photo-inline",
+        description="single photo pin",
+        media_list=[pinterest.PinterestMedia(url="https://cdn.example.com/photo.jpg", type="photo")],
+    )
+
+    monkeypatch.setattr(pinterest.pinterest_service, "fetch_post", AsyncMock(return_value=post))
+    monkeypatch.setattr(pinterest.db, "get_file_id", AsyncMock(return_value="cached-photo-id"))
+    monkeypatch.setattr(pinterest, "get_bot_url", AsyncMock(return_value="https://t.me/maxloadbot"))
+    monkeypatch.setattr(pinterest, "safe_edit_inline_text", AsyncMock(return_value=True))
+    monkeypatch.setattr(pinterest, "safe_edit_inline_media", AsyncMock(return_value=True))
+
+    await pinterest.chosen_inline_pinterest_result(result)
+
+    media = pinterest.safe_edit_inline_media.await_args.args[2]
+    assert media.media == "cached-photo-id"

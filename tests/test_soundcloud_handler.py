@@ -185,3 +185,39 @@ async def test_inline_soundcloud_uses_bot_avatar_thumbnail(monkeypatch, tmp_path
     send_kwargs = soundcloud.bot.send_audio.await_args.kwargs
     assert send_kwargs["thumbnail"] is bot_avatar
     assert soundcloud.soundcloud_service.download_media.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_inline_soundcloud_query_prefers_track_thumbnail(monkeypatch):
+    settings = {
+        "captions": "on",
+        "delete_message": "off",
+        "info_buttons": "on",
+        "url_button": "on",
+        "audio_button": "on",
+    }
+    query = SimpleNamespace(
+        from_user=SimpleNamespace(id=42),
+        chat_type="inline",
+        query="https://soundcloud.com/artist/track",
+        answer=AsyncMock(),
+    )
+    track = soundcloud.SoundCloudTrack(
+        id="track-1",
+        source_url="https://soundcloud.com/artist/track",
+        audio_url="https://cdn.example.com/audio.mp3",
+        title="Track Title",
+        artist="Artist Name",
+        thumbnail_url="https://cdn.example.com/cover.jpg",
+    )
+
+    monkeypatch.setattr(soundcloud, "CHANNEL_ID", -1001234567890)
+    monkeypatch.setattr(soundcloud, "send_analytics", AsyncMock())
+    monkeypatch.setattr(soundcloud.db, "user_settings", AsyncMock(return_value=settings))
+    monkeypatch.setattr(soundcloud.soundcloud_service, "fetch_track", AsyncMock(return_value=track))
+
+    await soundcloud.inline_soundcloud_query(query)
+
+    results = query.answer.await_args.args[0]
+    assert len(results) == 1
+    assert results[0].thumbnail_url == "https://cdn.example.com/cover.jpg"

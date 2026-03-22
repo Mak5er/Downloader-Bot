@@ -29,6 +29,7 @@ from handlers.utils import (
     safe_edit_text,
     safe_edit_inline_media,
     safe_edit_inline_text,
+    safe_answer_inline_query,
     send_chat_action_if_needed,
     resolve_settings_target_id,
     with_callback_logging,
@@ -190,7 +191,6 @@ class SoundCloudService:
             chunk_size=1024 * 1024,
             multipart_threshold=16 * 1024 * 1024,
             max_workers=6,
-            max_concurrent_downloads=3,
             retry_backoff=0.8,
         )
         self._downloader = ResilientDownloader(output_dir, config=config, source="soundcloud")
@@ -284,10 +284,13 @@ async def process_soundcloud(message: types.Message):
         user_settings = await get_user_settings(message)
         bot_url = await get_bot_url(bot)
         bot_avatar = await get_bot_avatar_thumbnail(bot)
+        if show_service_status:
+            status_message = await message.answer(bm.downloading_audio_status())
 
         cache_key = f"{source_url}#audio"
         db_file_id = await db.get_file_id(cache_key)
         if db_file_id:
+            await safe_edit_text(status_message, bm.uploading_status())
             await send_chat_action_if_needed(bot, message.chat.id, "upload_audio", business_id)
             send_kwargs = {
                 "audio": db_file_id,
@@ -296,14 +299,11 @@ async def process_soundcloud(message: types.Message):
             }
             if bot_avatar:
                 send_kwargs["thumbnail"] = bot_avatar
-            await message.answer_audio(
+            await message.reply_audio(
                 **send_kwargs,
             )
             await maybe_delete_user_message(message, user_settings["delete_message"])
             return
-
-        if show_service_status:
-            status_message = await message.answer(bm.downloading_audio_status())
 
         track = await soundcloud_service.fetch_track(source_url)
         if not track:
@@ -361,12 +361,12 @@ async def process_soundcloud(message: types.Message):
             send_kwargs["thumbnail"] = bot_avatar
 
         try:
-            sent = await message.answer_audio(**send_kwargs)
+            sent = await message.reply_audio(**send_kwargs)
         except Exception as exc:
             if bot_avatar:
                 logging.warning("SoundCloud bot avatar upload failed, retrying without thumbnail: error=%s", exc)
                 send_kwargs.pop("thumbnail", None)
-                sent = await message.answer_audio(**send_kwargs)
+                sent = await message.reply_audio(**send_kwargs)
             else:
                 raise
 
@@ -434,7 +434,7 @@ async def inline_soundcloud_query(query: types.InlineQuery):
                 id=f"soundcloud_inline:{token}",
                 title="SoundCloud Audio",
                 description=track.title or "Press the button to send this audio inline.",
-                thumbnail_url=get_inline_service_icon("soundcloud"),
+                thumbnail_url=track.thumbnail_url or get_inline_service_icon("soundcloud"),
                 input_message_content=types.InputTextMessageContent(
                     message_text=bm.inline_send_audio_prompt("SoundCloud"),
                 ),
@@ -444,7 +444,7 @@ async def inline_soundcloud_query(query: types.InlineQuery):
                 ),
             )
         ]
-        await query.answer(results, cache_time=10, is_personal=True)
+        await safe_answer_inline_query(query, results, cache_time=10, is_personal=True)
         return
 
     except Exception as exc:
@@ -481,7 +481,6 @@ async def _send_inline_soundcloud_audio(
         await safe_edit_inline_text(bot, inline_message_id, text, reply_markup=reply_markup)
 
     try:
-        await _edit_inline_status(bm.fetching_info_status())
         source_url = request.source_url
         cache_key = f"{source_url}#audio"
         track = await soundcloud_service.fetch_track(source_url)

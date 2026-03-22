@@ -109,7 +109,8 @@ class DataBase:
         self._file_cache: dict[str, tuple[float, Optional[str]]] = {}
         self._status_cache: dict[int, tuple[float, Optional[str]]] = {}
         self._settings_ttl_seconds = 120.0
-        self._file_ttl_seconds = 3600.0
+        self._file_cache_hit_ttl_seconds: Optional[float] = None
+        self._file_cache_miss_ttl_seconds = 15.0
         self._status_ttl_seconds = 20.0
 
     async def init_db(self):
@@ -372,17 +373,50 @@ class DataBase:
                     stmt = (
                         pg_insert(DownloadedFile)
                         .values(url=url, file_id=file_id, file_type=file_type)
-                        .on_conflict_do_nothing(index_elements=[DownloadedFile.url])
+                        .on_conflict_do_update(
+                            index_elements=[DownloadedFile.url],
+                            set_={
+                                "file_id": file_id,
+                                "file_type": file_type,
+                                "date_added": func.now(),
+                            },
+                        )
                     )
                 elif self._dialect_name == "sqlite":
                     stmt = (
                         sqlite_insert(DownloadedFile)
                         .values(url=url, file_id=file_id, file_type=file_type)
-                        .on_conflict_do_nothing(index_elements=[DownloadedFile.url])
+                        .on_conflict_do_update(
+                            index_elements=[DownloadedFile.url],
+                            set_={
+                                "file_id": file_id,
+                                "file_type": file_type,
+                                "date_added": func.now(),
+                            },
+                        )
                     )
                 else:
-                    stmt = DownloadedFile.__table__.insert().values(url=url, file_id=file_id, file_type=file_type)
-                await session.execute(stmt)
+                    existing = await session.execute(select(DownloadedFile).where(DownloadedFile.url == url))
+                    record = existing.scalar_one_or_none()
+                    if record:
+                        await session.execute(
+                            update(DownloadedFile)
+                            .where(DownloadedFile.url == url)
+                            .values(
+                                file_id=file_id,
+                                file_type=file_type,
+                                date_added=func.now(),
+                            )
+                        )
+                        stmt = None
+                    else:
+                        stmt = DownloadedFile.__table__.insert().values(
+                            url=url,
+                            file_id=file_id,
+                            file_type=file_type,
+                        )
+                if stmt is not None:
+                    await session.execute(stmt)
                 await session.commit()
                 self._file_cache[url] = (time.monotonic(), file_id)
             except Exception as e:
@@ -392,8 +426,10 @@ class DataBase:
     async def get_file_id(self, url):
         now = time.monotonic()
         cached = self._file_cache.get(url)
-        if cached and now - cached[0] <= self._file_ttl_seconds:
-            return cached[1]
+        if cached:
+            ttl_seconds = self._file_cache_hit_ttl_seconds if cached[1] is not None else self._file_cache_miss_ttl_seconds
+            if ttl_seconds is None or now - cached[0] <= ttl_seconds:
+                return cached[1]
 
         async with self.SessionLocal() as session:
             try:

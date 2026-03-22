@@ -31,6 +31,7 @@ from handlers.utils import (
     safe_edit_text,
     safe_edit_inline_media,
     safe_edit_inline_text,
+    safe_answer_inline_query,
     send_chat_action_if_needed,
     retry_async_operation,
     resolve_settings_target_id,
@@ -52,6 +53,7 @@ from utils.download_manager import (
     ResilientDownloader,
     log_download_metrics,
 )
+from utils.media_cache import build_media_cache_key
 from services.inline_service_icons import get_inline_service_icon
 from services.inline_video_requests import (
     claim_inline_video_request_for_send,
@@ -88,7 +90,6 @@ youtube_downloader = ResilientDownloader(
         chunk_size=2 * 1024 * 1024,          # Larger chunks for higher throughput
         multipart_threshold=8 * 1024 * 1024,  # Split earlier to parallelize medium files
         max_workers=10,                      # More concurrent range requests
-        max_concurrent_downloads=3,          # Prevent thread explosion under multi-user load
         retry_backoff=0.6,                   # Slightly faster retry ramp-up
     ),
     source="youtube",
@@ -110,6 +111,25 @@ def _extract_youtube_url(text: str, pattern: str) -> Optional[str]:
     if not url.lower().startswith(("http://", "https://")):
         url = f"https://{url}"
     return url
+
+
+def _get_youtube_thumbnail_url(yt: Optional[dict[str, Any]]) -> Optional[str]:
+    if not yt:
+        return None
+    thumbnail = yt.get("thumbnail")
+    if isinstance(thumbnail, str) and thumbnail:
+        return thumbnail
+    thumbnails = yt.get("thumbnails")
+    if isinstance(thumbnails, list):
+        for item in reversed(thumbnails):
+            if isinstance(item, dict):
+                url = item.get("url")
+                if isinstance(url, str) and url:
+                    return url
+    video_id = yt.get("id")
+    if isinstance(video_id, str) and video_id:
+        return f"https://i.ytimg.com/vi/{video_id}/hqdefault.jpg"
+    return None
 
 
 async def download_stream(
@@ -369,13 +389,17 @@ async def download_video(message: types.Message):
     try:
         await react_to_message(message, "👾", business_id=business_id)
         if show_service_status:
-            status_message = await message.answer(bm.fetching_info_status())
+            status_message = await message.answer(bm.downloading_video_status())
 
         user_settings = await db.user_settings(resolve_settings_target_id(message))
         user_captions = user_settings["captions"]
         bot_url = await get_bot_url(bot)
 
         yt = await asyncio.wait_for(asyncio.to_thread(get_youtube_video, url), timeout=45.0)
+        if not yt:
+            await safe_delete_message(status_message)
+            await message.reply(bm.nothing_found())
+            return
         video = await asyncio.to_thread(get_video_stream, yt)
 
         if not video:
@@ -396,9 +420,9 @@ async def download_video(message: types.Message):
                 yt['webpage_url'],
                 db_file_id,
             )
-            await safe_delete_message(status_message)
+            await safe_edit_text(status_message, bm.uploading_status())
             await send_chat_action_if_needed(bot, message.chat.id, "upload_video", business_id)
-            await message.answer_video(
+            await message.reply_video(
                 video=db_file_id,
                 caption=bm.captions(user_captions, yt['title'], bot_url),
                 reply_markup=kb.return_video_info_keyboard(
@@ -499,7 +523,7 @@ async def download_video(message: types.Message):
 
         await safe_edit_text(status_message, bm.uploading_status())
         await send_chat_action_if_needed(bot, message.chat.id, "upload_video", business_id)
-        sent_message = await message.answer_video(
+        sent_message = await message.reply_video(
             video=FSInputFile(metrics.path),
             caption=bm.captions(user_captions, yt['title'], bot_url),
             reply_markup=kb.return_video_info_keyboard(
@@ -581,10 +605,28 @@ async def download_music(message: types.Message):
 
         # Get YouTube audio object - run in thread pool
         yt = await asyncio.to_thread(get_youtube_video, url)
+        if not yt:
+            await message.reply(bm.nothing_found())
+            return
         audio = await asyncio.to_thread(get_audio_stream, yt)
 
         if not audio:
             await message.reply(bm.nothing_found())
+            return
+
+        cache_key = build_media_cache_key(yt["webpage_url"], variant="audio")
+        db_file_id = await db.get_file_id(cache_key)
+        if db_file_id:
+            await safe_edit_text(status_message, bm.uploading_status())
+            await send_chat_action_if_needed(bot, message.chat.id, "upload_audio", business_id)
+            await message.reply_audio(
+                audio=db_file_id,
+                title=yt["title"],
+                caption=bm.captions(None, None, bot_url),
+                thumbnail=bot_avatar,
+                parse_mode="HTML",
+            )
+            await maybe_delete_user_message(message, user_settings.get("delete_message"))
             return
 
         audio_ext = audio.get("ext") or "m4a"
@@ -632,7 +674,7 @@ async def download_music(message: types.Message):
         await safe_edit_text(status_message, bm.uploading_status())
         await send_chat_action_if_needed(bot, message.chat.id, "upload_voice", business_id)
 
-        await message.answer_audio(
+        sent_message = await message.reply_audio(
             audio=FSInputFile(metrics.path),
             title=yt['title'],
             caption=bm.captions(None, None, bot_url),
@@ -640,6 +682,7 @@ async def download_music(message: types.Message):
             parse_mode="HTML"
         )
         await maybe_delete_user_message(message, user_settings.get("delete_message"))
+        await db.add_file(cache_key, sent_message.audio.file_id, "audio")
 
         await remove_file(metrics.path)
     except DownloadRateLimitError as e:
@@ -691,16 +734,12 @@ async def download_youtube_mp3_callback(call: types.CallbackQuery):
             await handle_download_error(call.message, business_id=business_id)
             return
 
-        cache_key = f"{yt['webpage_url']}#audio"
+        cache_key = build_media_cache_key(yt["webpage_url"], variant="audio")
         db_file_id = await db.get_file_id(cache_key)
         if db_file_id:
+            await safe_edit_text(status_message, bm.uploading_status())
             await send_chat_action_if_needed(bot, call.message.chat.id, "upload_audio", business_id)
-            try:
-                await status_message.delete()
-                status_message = None
-            except Exception:
-                pass
-            await call.message.answer_audio(
+            await call.message.reply_audio(
                 audio=db_file_id,
                 title=yt.get("title"),
                 caption=bm.captions(None, None, bot_url),
@@ -739,12 +778,8 @@ async def download_youtube_mp3_callback(call: types.CallbackQuery):
             return
 
         await send_chat_action_if_needed(bot, call.message.chat.id, "upload_audio", business_id)
-        try:
-            await status_message.delete()
-            status_message = None
-        except Exception:
-            pass
-        sent_message = await call.message.answer_audio(
+        await safe_edit_text(status_message, bm.uploading_status())
+        sent_message = await call.message.reply_audio(
             audio=FSInputFile(metrics.path),
             title=yt.get("title"),
             caption=bm.captions(None, None, bot_url),
@@ -755,11 +790,7 @@ async def download_youtube_mp3_callback(call: types.CallbackQuery):
 
         await remove_file(metrics.path)
     finally:
-        if status_message:
-            try:
-                await status_message.delete()
-            except Exception:
-                pass
+        await safe_delete_message(status_message)
 
 
 @router.inline_query(F.query.regexp(YOUTUBE_MUSIC_URL_REGEX, mode="search"))
@@ -794,7 +825,7 @@ async def inline_youtube_music_query(query: types.InlineQuery):
                 id=f"ytmusic_inline:{token}",
                 title="YouTube Music",
                 description=yt.get("title") or "Press the button to send this audio inline.",
-                thumbnail_url=get_inline_service_icon("youtube"),
+                thumbnail_url=_get_youtube_thumbnail_url(yt) or get_inline_service_icon("youtube"),
                 input_message_content=types.InputTextMessageContent(
                     message_text=bm.inline_send_audio_prompt("YouTube"),
                 ),
@@ -804,7 +835,7 @@ async def inline_youtube_music_query(query: types.InlineQuery):
                 ),
             )
         ]
-        await query.answer(results, cache_time=10, is_personal=True)
+        await safe_answer_inline_query(query, results, cache_time=10, is_personal=True)
         return
 
     except Exception as e:
@@ -844,7 +875,7 @@ async def inline_youtube_query(query: types.InlineQuery):
                 id=f"youtube_inline:{token}",
                 title="YouTube Video",
                 description=yt.get("title") or "Press the button to send this video inline.",
-                thumbnail_url=get_inline_service_icon("youtube"),
+                thumbnail_url=_get_youtube_thumbnail_url(yt) or get_inline_service_icon("youtube"),
                 input_message_content=types.InputTextMessageContent(
                     message_text=bm.inline_send_video_prompt("YouTube"),
                 ),
@@ -854,7 +885,7 @@ async def inline_youtube_query(query: types.InlineQuery):
                 ),
             )
         ]
-        await query.answer(results, cache_time=10)
+        await safe_answer_inline_query(query, results, cache_time=10)
         return
     except Exception as e:
         logging.error("Error processing inline query: %s", e)
@@ -885,14 +916,13 @@ async def _send_inline_youtube_music(
         await safe_edit_inline_text(bot, inline_message_id, text, reply_markup=reply_markup)
 
     try:
-        await _edit_inline_status(bm.fetching_info_status())
         yt = await asyncio.to_thread(get_youtube_video, request.source_url)
         if not yt:
             reset_inline_video_request(token)
             await _edit_inline_status(bm.something_went_wrong(), with_retry_button=True)
             return
 
-        cache_key = f"{request.source_url}#audio"
+        cache_key = build_media_cache_key(request.source_url, variant="audio")
         db_file_id = await db.get_file_id(cache_key)
         if not db_file_id:
             base_name = f"{yt.get('id', 'youtube_music')}_youtube_music_inline"
@@ -978,7 +1008,6 @@ async def _send_inline_youtube_video(
         await safe_edit_inline_text(bot, inline_message_id, text, reply_markup=reply_markup)
 
     try:
-        await _edit_inline_status(bm.fetching_info_status())
         yt = await asyncio.to_thread(get_youtube_video, request.source_url)
         if not yt:
             reset_inline_video_request(token)

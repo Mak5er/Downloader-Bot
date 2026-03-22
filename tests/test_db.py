@@ -1,8 +1,11 @@
 from datetime import datetime, timedelta
 import os
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 import pytest_asyncio
+from sqlalchemy.dialects import postgresql
 
 from services import db as db_module
 
@@ -123,6 +126,74 @@ async def test_downloaded_files_cache(database):
     await database.add_file("https://example.com/video", "file-id-1", "video")
     file_id = await database.get_file_id("https://example.com/video")
     assert file_id == "file-id-1"
+
+
+@pytest.mark.asyncio
+async def test_add_file_uses_upsert_and_refreshes_cache(monkeypatch):
+    database = db_module.DataBase("postgresql://user:pass@localhost/testdb")
+    session = SimpleNamespace(
+        execute=AsyncMock(),
+        commit=AsyncMock(),
+        rollback=AsyncMock(),
+    )
+
+    class _SessionCtx:
+        async def __aenter__(self):
+            return session
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+    monkeypatch.setattr(database, "SessionLocal", lambda: _SessionCtx())
+    monkeypatch.setattr(database, "_dialect_name", "postgresql")
+
+    await database.add_file("https://example.com/video", "file-id-2", "video")
+
+    stmt = session.execute.await_args.args[0]
+    compiled = str(stmt.compile(dialect=postgresql.dialect()))
+    assert "ON CONFLICT" in compiled
+    assert "DO UPDATE" in compiled
+    assert database._file_cache["https://example.com/video"][1] == "file-id-2"
+
+
+@pytest.mark.asyncio
+async def test_get_file_id_positive_cache_has_no_ttl(monkeypatch):
+    database = db_module.DataBase("postgresql://user:pass@localhost/testdb")
+    database._file_cache["https://example.com/video"] = (0.0, "cached-file-id")
+
+    class _UnusedSessionCtx:
+        async def __aenter__(self):
+            raise AssertionError("DB session should not be used for positive cache hit")
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+    monkeypatch.setattr(database, "SessionLocal", lambda: _UnusedSessionCtx())
+    monkeypatch.setattr(db_module.time, "monotonic", lambda: 10_000.0)
+
+    assert await database.get_file_id("https://example.com/video") == "cached-file-id"
+
+
+@pytest.mark.asyncio
+async def test_get_file_id_negative_cache_expires_quickly(monkeypatch):
+    database = db_module.DataBase("postgresql://user:pass@localhost/testdb")
+    database._file_cache["https://example.com/video"] = (0.0, None)
+
+    result = SimpleNamespace(scalar=lambda: "fresh-file-id")
+    session = SimpleNamespace(execute=AsyncMock(return_value=result))
+
+    class _SessionCtx:
+        async def __aenter__(self):
+            return session
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+    monkeypatch.setattr(database, "SessionLocal", lambda: _SessionCtx())
+    monkeypatch.setattr(db_module.time, "monotonic", lambda: 16.0)
+
+    assert await database.get_file_id("https://example.com/video") == "fresh-file-id"
+    session.execute.assert_awaited_once()
 
 
 @pytest.mark.asyncio
