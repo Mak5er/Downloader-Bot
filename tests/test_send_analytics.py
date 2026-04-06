@@ -1,3 +1,6 @@
+import asyncio
+from unittest.mock import AsyncMock
+
 import pytest
 from aiogram.enums import ChatType
 
@@ -58,6 +61,7 @@ async def test_send_analytics_records_event(monkeypatch):
     dummy_client = DummyAnalyticsClient()
 
     monkeypatch.setattr(main, "db", dummy_db)
+    monkeypatch.setattr(main, "BOT_TOKEN", "test-bot-token")
     monkeypatch.setattr(main, "_analytics_queue", None)
     monkeypatch.setattr(main, "_analytics_http_client", None)
     monkeypatch.setattr(main.httpx, "AsyncClient", lambda *args, **kwargs: dummy_client)
@@ -80,6 +84,53 @@ async def test_send_analytics_records_event(monkeypatch):
     call = dummy_client.calls[0]
     assert call["url"] == "https://www.google-analytics.com/mp/collect?measurement_id=G-TEST&api_secret=secret"
     assert call["timeout"] == 10
-    assert call["json"]["client_id"] == "123"
+    client_id, user_identifier, session_id = main._build_analytics_identity(123)
+    assert call["json"]["client_id"] == client_id
+    assert call["json"]["user_id"] == user_identifier
+    assert call["json"]["events"][0]["params"]["session_id"] == session_id
+    assert call["json"]["client_id"] != "123"
     assert call["json"]["events"][0]["name"] == "start"
     assert call["json"]["events"][0]["params"]["chat_type"] == ChatType.PRIVATE.value
+
+
+def test_build_analytics_identity_is_stable_and_pseudonymous(monkeypatch):
+    monkeypatch.setattr(main, "BOT_TOKEN", "test-bot-token")
+    monkeypatch.setattr(main, "MEASUREMENT_ID", "G-TEST")
+
+    first = main._build_analytics_identity(123)
+    second = main._build_analytics_identity(123)
+
+    assert first == second
+    assert all(first)
+    assert "123" not in first[0]
+    assert "123" not in first[1]
+
+
+@pytest.mark.asyncio
+async def test_flush_analytics_batch_uses_bounded_concurrency(monkeypatch):
+    active = 0
+    max_active = 0
+    persisted = AsyncMock()
+
+    async def fake_send(payload):
+        nonlocal active, max_active
+        active += 1
+        max_active = max(max_active, active)
+        await asyncio.sleep(0.01)
+        active -= 1
+
+    monkeypatch.setattr(main, "_ANALYTICS_SEND_CONCURRENCY", 2)
+    monkeypatch.setattr(main, "_send_to_google_analytics", fake_send)
+    monkeypatch.setattr(main, "_persist_analytics_batch", persisted)
+
+    batch = [
+        main._AnalyticsPayload(user_id=1, chat_type="private", action_name="a"),
+        main._AnalyticsPayload(user_id=2, chat_type="private", action_name="b"),
+        main._AnalyticsPayload(user_id=3, chat_type="private", action_name="c"),
+        main._AnalyticsPayload(user_id=4, chat_type="private", action_name="d"),
+    ]
+
+    await main._flush_analytics_batch(batch)
+
+    assert max_active <= 2
+    persisted.assert_awaited_once_with(batch)

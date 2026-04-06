@@ -1,4 +1,5 @@
 import asyncio
+import hashlib
 import os
 from dataclasses import dataclass
 from typing import Optional
@@ -51,6 +52,7 @@ _ANALYTICS_QUEUE_MAXSIZE = 2048
 _ANALYTICS_WORKERS = 2
 _ANALYTICS_BATCH_SIZE = 25
 _ANALYTICS_BATCH_TIMEOUT = 0.5
+_ANALYTICS_SEND_CONCURRENCY = 8
 
 _analytics_queue: Optional[asyncio.Queue[Optional[_AnalyticsPayload]]] = None
 _analytics_worker_tasks: list[asyncio.Task] = []
@@ -77,18 +79,28 @@ async def _close_analytics_http_client() -> None:
     _analytics_http_client = None
 
 
+def _build_analytics_identity(user_id: int) -> tuple[str, str, str]:
+    salt = f"{BOT_TOKEN}:{MEASUREMENT_ID or 'ga'}"
+    digest = hashlib.sha256(f"{salt}:{int(user_id)}".encode("utf-8")).hexdigest()
+    client_id = digest
+    user_identifier = digest[:32]
+    session_id = str(int(digest[:16], 16))
+    return client_id, user_identifier, session_id
+
+
 async def _send_to_google_analytics(payload: _AnalyticsPayload) -> None:
     if not MEASUREMENT_ID or not API_SECRET:
         return
 
+    client_id, user_identifier, session_id = _build_analytics_identity(payload.user_id)
     params = {
-        "client_id": str(payload.user_id),
-        "user_id": str(payload.user_id),
+        "client_id": client_id,
+        "user_id": user_identifier,
         "events": [{
             "name": payload.action_name,
             "params": {
                 "chat_type": payload.chat_type,
-                "session_id": str(payload.user_id),
+                "session_id": session_id,
                 "engagement_time_msec": "1000",
             },
         }],
@@ -123,16 +135,22 @@ async def _flush_analytics_batch(batch: list[_AnalyticsPayload]) -> None:
         return
 
     started_at = asyncio.get_running_loop().time()
-    for payload in batch:
-        try:
-            await _send_to_google_analytics(payload)
-        except Exception as error:
-            logging.debug(
-                "Failed to send analytics to GA: user_id=%s action=%s error=%s",
-                payload.user_id,
-                payload.action_name,
-                error,
-            )
+
+    semaphore = asyncio.Semaphore(max(1, _ANALYTICS_SEND_CONCURRENCY))
+
+    async def _send_payload(payload: _AnalyticsPayload) -> None:
+        async with semaphore:
+            try:
+                await _send_to_google_analytics(payload)
+            except Exception as error:
+                logging.debug(
+                    "Failed to send analytics to GA: user_id=%s action=%s error=%s",
+                    payload.user_id,
+                    payload.action_name,
+                    error,
+                )
+
+    await asyncio.gather(*(_send_payload(payload) for payload in batch))
 
     await _persist_analytics_batch(batch)
     logging.perf(
