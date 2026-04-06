@@ -30,3 +30,19 @@ def test_create_inline_album_request_returns_different_tokens_for_different_urls
     second = links.create_inline_album_request(1001, "tiktok", "https://www.tiktok.com/@a/video/2")
 
     assert first != second
+
+
+def test_inline_album_request_expires_and_reissues_token(monkeypatch):
+    now = 50.0
+    monkeypatch.setattr(links.time, "monotonic", lambda: now)
+    monkeypatch.setattr(links.secrets, "token_urlsafe", lambda _: f"token-{int(now)}")
+
+    first = links.create_inline_album_request(1001, "instagram", "https://instagram.com/p/abc")
+    assert links.get_inline_album_request(first) is not None
+
+    now = 50.0 + links._INLINE_ALBUM_TTL_SECONDS + 1.0
+
+    assert links.get_inline_album_request(first) is None
+
+    second = links.create_inline_album_request(1001, "instagram", "https://instagram.com/p/abc")
+    assert second != first

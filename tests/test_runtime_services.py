@@ -25,6 +25,24 @@ def test_pending_requests_store_get_and_pop(monkeypatch):
     assert pending_requests.get_pending(42) is None
 
 
+def test_pending_requests_expire_after_ttl(monkeypatch):
+    monkeypatch.setattr(pending_requests, "_pending", {})
+    now = 100.0
+    monkeypatch.setattr(pending_requests.time, "monotonic", lambda: now)
+
+    request = pending_requests.PendingRequest(
+        text="https://youtu.be/demo",
+        notice_chat_id=10,
+        notice_message_id=20,
+    )
+    pending_requests.set_pending(42, request)
+
+    now = 100.0 + pending_requests._PENDING_TTL_SECONDS + 1.0
+
+    assert pending_requests.get_pending(42) is None
+    assert 42 not in pending_requests._pending
+
+
 def test_inline_video_requests_lifecycle(monkeypatch):
     monkeypatch.setattr(inline_video_requests, "_requests", {})
     monkeypatch.setattr(inline_video_requests.secrets, "token_urlsafe", lambda _: "token-123")
@@ -76,6 +94,26 @@ def test_inline_video_requests_lifecycle(monkeypatch):
         )
         is None
     )
+
+
+def test_inline_video_request_expires_after_completion(monkeypatch):
+    monkeypatch.setattr(inline_video_requests, "_requests", {})
+    monkeypatch.setattr(inline_video_requests.secrets, "token_urlsafe", lambda _: "token-123")
+    now = 200.0
+    monkeypatch.setattr(inline_video_requests.time, "monotonic", lambda: now)
+
+    token = inline_video_requests.create_inline_video_request(
+        service="youtube",
+        source_url="https://youtu.be/demo",
+        owner_user_id=99,
+        user_settings={"captions": "on"},
+    )
+    inline_video_requests.complete_inline_video_request(token)
+
+    now = 200.0 + inline_video_requests._COMPLETED_REQUEST_TTL_SECONDS + 1.0
+
+    assert inline_video_requests.get_inline_video_request(token) is None
+    assert token not in inline_video_requests._requests
 
 
 def test_inline_video_request_rejects_non_owner(monkeypatch):

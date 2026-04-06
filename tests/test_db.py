@@ -234,6 +234,35 @@ async def test_user_settings_returns_stale_cache_when_db_lookup_fails(monkeypatc
     assert settings["captions"] == "on"
 
 
+def test_prune_local_caches_removes_expired_and_overflow_entries():
+    database = db_module.DataBase("postgresql://user:pass@localhost/testdb")
+    database._settings_cache_max_entries = 2
+    database._status_cache_max_entries = 2
+    database._file_cache_max_entries = 2
+    database._settings_cache = {
+        1: (0.0, dict(db_module.DEFAULT_USER_SETTINGS)),
+        2: (10.0, dict(db_module.DEFAULT_USER_SETTINGS)),
+        3: (20.0, dict(db_module.DEFAULT_USER_SETTINGS)),
+    }
+    database._status_cache = {
+        1: (0.0, "active"),
+        2: (10.0, "inactive"),
+        3: (20.0, "ban"),
+    }
+    database._file_cache = {
+        "expired-miss": (0.0, None),
+        "old-hit": (5.0, "file-1"),
+        "fresh-hit": (20.0, "file-2"),
+    }
+
+    database._prune_local_caches(now=40.0, force=True)
+
+    assert 1 not in database._settings_cache
+    assert 1 not in database._status_cache
+    assert "expired-miss" not in database._file_cache
+    assert "fresh-hit" in database._file_cache
+
+
 @pytest.mark.asyncio
 async def test_downloaded_files_count(database):
     today = datetime.now()
