@@ -196,7 +196,7 @@ class DataBase:
         )
 
     def _build_alembic_config(self) -> AlembicConfig:
-        services_dir = Path(__file__).resolve().parent
+        services_dir = Path(__file__).resolve().parent.parent
         config = AlembicConfig(str(services_dir / "alembic.ini"))
         config.set_main_option("script_location", str(services_dir / "alembic"))
         config.set_main_option("sqlalchemy.url", self.sync_url)

@@ -3,8 +3,8 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 from handlers import instagram
-from services.inline_album_links import get_inline_album_request
-from services.inline_video_requests import create_inline_video_request
+from services.inline.album_links import get_inline_album_request
+from services.inline.video_requests import create_inline_video_request
 from utils.download_manager import DownloadMetrics
 
 

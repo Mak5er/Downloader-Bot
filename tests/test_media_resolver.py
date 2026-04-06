@@ -3,7 +3,7 @@ from unittest.mock import AsyncMock, Mock
 
 import pytest
 
-from handlers import media_resolver
+from services.media import resolver as media_resolver
 
 
 @pytest.mark.asyncio

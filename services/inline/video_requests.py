@@ -5,7 +5,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Optional
 
-from services.runtime_state_store import load_bucket, save_bucket
+from services.runtime.state_store import load_bucket, save_bucket
 
 
 @dataclass(slots=True)

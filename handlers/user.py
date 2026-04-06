@@ -22,10 +22,10 @@ from log.logger import logger as logging
 
 logging = logging.bind(service="user")
 from app_context import db, send_analytics, bot
-from services.db import StatsSnapshot
-from services.inline_album_links import get_inline_album_request
-from services.link_detection import detect_supported_service
-from services.pending_requests import pop_pending
+from services.storage.db import StatsSnapshot
+from services.inline.album_links import get_inline_album_request
+from services.links.detection import detect_supported_service
+from services.runtime.pending_requests import pop_pending
 
 router = Router()
 

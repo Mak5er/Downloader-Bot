@@ -7,8 +7,8 @@ from aiogram.types import Message
 
 import keyboards as kb
 import messages as bm
-from services.link_detection import detect_supported_service
-from services.pending_requests import PendingRequest, get_pending, set_pending
+from services.links.detection import detect_supported_service
+from services.runtime.pending_requests import PendingRequest, get_pending, set_pending
 
 _bot_username: str | None = None
 

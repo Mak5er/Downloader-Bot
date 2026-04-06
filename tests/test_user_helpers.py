@@ -5,7 +5,7 @@ from unittest.mock import Mock
 import pytest
 
 from handlers import user
-from services.db import StatsSnapshot
+from services.storage.db import StatsSnapshot
 
 
 class FixedDateTime(datetime.datetime):

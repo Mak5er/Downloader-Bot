@@ -11,13 +11,13 @@ from typing import Awaitable, Callable, Mapping, MutableMapping, Optional
 import requests
 
 from log.logger import logger as logging
-from services.download_queue import (
+from services.download.queue import (
     QueueBackpressureError,
     QueueRateLimitError,
     QueueTicket,
     get_download_queue,
 )
-from services.runtime_stats import record_download
+from services.runtime.stats import record_download
 
 logging = logging.bind(service="download_manager")
 
@@ -346,7 +346,7 @@ class ResilientDownloader:
         process = await asyncio.create_subprocess_exec(
             sys.executable,
             "-m",
-            "services.download_worker_cli",
+            "services.download.worker_cli",
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,

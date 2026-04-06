@@ -55,8 +55,8 @@ from utils.download_manager import (
     log_download_metrics,
 )
 from utils.media_cache import build_media_cache_key
-from services.inline_service_icons import get_inline_service_icon
-from services.inline_video_requests import (
+from services.inline.service_icons import get_inline_service_icon
+from services.inline.video_requests import (
     claim_inline_video_request_for_send,
     complete_inline_video_request,
     create_inline_video_request,

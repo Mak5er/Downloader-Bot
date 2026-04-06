@@ -22,8 +22,8 @@ from config import (
     OUTPUT_DIR,
 )
 from log.logger import logger as logging
-from services.db import AnalyticsEvent, DataBase
-from services.download_queue import shutdown_download_queue
+from services.storage.db import AnalyticsEvent, DataBase
+from services.download.queue import shutdown_download_queue
 from utils.http_client import close_http_session
 
 logging = logging.bind(service="main")

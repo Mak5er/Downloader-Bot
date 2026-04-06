@@ -1,6 +1,6 @@
 import pytest
 
-import services.inline_album_links as links
+import services.inline.album_links as links
 from services import runtime_state_store
 
 

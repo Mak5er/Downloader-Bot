@@ -25,8 +25,8 @@ from log.logger import logger as logging
 
 logging = logging.bind(service="admin")
 from app_context import bot, db
-from services.download_queue import get_download_queue
-from services.runtime_stats import get_runtime_snapshot
+from services.download.queue import get_download_queue
+from services.runtime.stats import get_runtime_snapshot
 
 router = Router()
 

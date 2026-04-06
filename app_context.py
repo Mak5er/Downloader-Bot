@@ -5,7 +5,7 @@ from typing import Any, Awaitable, Callable, Optional
 
 from aiogram import Bot
 
-from services.db import DataBase
+from services.storage.db import DataBase
 
 
 AnalyticsSender = Callable[..., Awaitable[Any]]

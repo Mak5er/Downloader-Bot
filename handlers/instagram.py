@@ -14,15 +14,15 @@ from config import (
     COBALT_API_URL,
     COBALT_API_KEY,
 )
-from handlers.media_delivery import send_cached_media_entries
-from services.instagram_media import (
+from services.media.delivery import send_cached_media_entries
+from services.media.resolver import resolve_cached_media_items
+from services.platforms.instagram_media import (
     InstagramMedia,
     InstagramMediaService,
     InstagramVideo,
     get_instagram_preview_url as _get_instagram_preview_url,
     strip_instagram_url,
 )
-from handlers.media_resolver import resolve_cached_media_items
 from handlers.user import update_info
 from handlers.utils import (
     build_inline_album_result,
@@ -64,9 +64,9 @@ from utils.download_manager import (
     log_download_metrics,
 )
 from utils.media_cache import build_media_cache_key
-from services.inline_album_links import create_inline_album_request
-from services.inline_service_icons import get_inline_service_icon
-from services.inline_video_requests import (
+from services.inline.album_links import create_inline_album_request
+from services.inline.service_icons import get_inline_service_icon
+from services.inline.video_requests import (
     claim_inline_video_request_for_send,
     complete_inline_video_request,
     create_inline_video_request,

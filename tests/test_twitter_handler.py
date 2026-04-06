@@ -6,7 +6,7 @@ import pytest
 from aiohttp.client_exceptions import ClientResponseError
 
 from handlers import twitter
-from services.inline_album_links import get_inline_album_request
+from services.inline.album_links import get_inline_album_request
 from utils.download_manager import DownloadMetrics
 
 

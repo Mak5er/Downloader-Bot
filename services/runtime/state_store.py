@@ -7,7 +7,7 @@ from threading import RLock
 from typing import Any, Callable
 
 
-_STATE_FILE = Path(__file__).resolve().parents[1] / ".runtime_state.json"
+_STATE_FILE = Path(__file__).resolve().parents[2] / ".runtime_state.json"
 _STATE_LOCK = RLock()
 
 

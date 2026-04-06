@@ -3,7 +3,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from handlers.media_delivery import send_cached_media_entries
+from services.media.delivery import send_cached_media_entries
 
 
 @pytest.mark.asyncio

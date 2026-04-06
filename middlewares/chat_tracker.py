@@ -6,7 +6,7 @@ from aiogram.enums import ChatType
 from aiogram.types import Chat, Message, User
 
 from app_context import db
-from services.db import DataBase
+from services.storage.db import DataBase
 
 
 class ChatTrackerMiddleware(BaseMiddleware):

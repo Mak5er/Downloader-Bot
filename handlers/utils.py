@@ -20,7 +20,7 @@ from aiogram.exceptions import TelegramAPIError
 
 import messages as bm
 from log.logger import logger as logging
-from services.download_queue import QueueTicket
+from services.download.queue import QueueTicket
 from utils.download_manager import DownloadProgress
 
 logging = logging.bind(service="handlers_utils")
