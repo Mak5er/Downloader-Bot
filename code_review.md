@@ -30,7 +30,6 @@
 
 | Severity | Файл / рядок | Проблема | Рекомендація |
 |---|---|---|---|
-| Medium | `handlers/tiktok.py`, `handlers/instagram.py`, `handlers/pinterest.py`, `handlers/twitter.py`, `handlers/youtube.py`, `handlers/soundcloud.py` | Після винесення shared helpers для resolved user settings, throttled progress updates і retry-status callbacks ще лишається дублювання у media upload/caching та частині inline delivery flow. Воно все ще збільшує вартість змін і ризик роз'їзду поведінки між платформами. | Продовжити уніфікацію навколо спільного upload/cache/send pipeline і менших reusable delivery helper-функцій. |
 | Medium | `handlers/admin.py`, `handlers/user.py`, `handlers/tiktok.py`, `handlers/instagram.py`, `handlers/twitter.py`, `handlers/pinterest.py`, `handlers/soundcloud.py`, `utils/download_manager.py` | По коду багато широких `except Exception`, часто без переведення в чіткий доменний результат. Через це важко відрізнити реальну бізнес-помилку від дефекту в коді. | Залишати broad catch тільки на boundary layer; усередині сервісів ловити конкретні винятки і логувати структуровано. |
 
 ## 3. Потенційні баги
@@ -65,12 +64,9 @@
 ### Бажано
 
 1. Розбити великі platform handlers на менші модулі.
-2. Далі уніфікувати дубльовану логіку upload/caching/delivery flow між платформами.
-
 ## Підсумок
 
 Критичні correctness/security проблеми з першого проходу вже закриті. Поточний backlog тепер здебільшого про:
 
 1. архітектурне розчеплення модулів і залежностей;
-2. подальшу уніфікацію upload/caching/delivery pipeline і зменшення дублювання між платформами;
-3. cleanup технічного боргу навколо залежностей, runtime wiring і startup lifecycle.
+2. cleanup технічного боргу навколо залежностей, runtime wiring і startup lifecycle.

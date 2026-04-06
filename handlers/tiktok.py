@@ -11,12 +11,12 @@ from urllib.parse import urlparse, urlunparse
 import aiohttp
 from aiogram import types, Router, F
 from aiogram.types import FSInputFile, InlineQueryResultArticle
-from aiogram.utils.media_group import MediaGroupBuilder
 from fake_useragent import UserAgent
 
 import keyboards as kb
 import messages as bm
 from config import OUTPUT_DIR, CHANNEL_ID
+from handlers.media_delivery import send_cached_media_entries
 from handlers.user import update_info
 from handlers.utils import (
     build_inline_album_result,
@@ -711,7 +711,6 @@ async def process_tiktok_photos(message: types.Message, data: dict, bot_url: str
 
     try:
         await send_chat_action_if_needed(bot, message.chat.id, "upload_photo", business_id)
-        has_sent_media = False
         media_items = []
         for index, image_url in enumerate(images):
             cache_key = build_media_cache_key(video_url or image_url, item_index=index, item_kind="photo")
@@ -719,6 +718,7 @@ async def process_tiktok_photos(message: types.Message, data: dict, bot_url: str
             media_items.append(
                 {
                     "index": index,
+                    "kind": "photo",
                     "cache_key": cache_key,
                     "file_id": cached_file_id,
                     "url": image_url,
@@ -726,27 +726,10 @@ async def process_tiktok_photos(message: types.Message, data: dict, bot_url: str
                 }
             )
 
-        if len(media_items) > 1:
-            photos_for_album = media_items[:-1]
-            for i in range(0, len(photos_for_album), 10):
-                group = MediaGroupBuilder()
-                batch = photos_for_album[i:i + 10]
-                for item in batch:
-                    group.add_photo(media=item["file_id"] or item["url"], parse_mode="HTML")
-                send_kwargs = {"media": group.build()}
-                if not has_sent_media:
-                    send_kwargs["reply_to_message_id"] = message.message_id
-                sent_group = await message.answer_media_group(**send_kwargs)
-                has_sent_media = True
-                for sent_message, item in zip(sent_group, batch):
-                    if item["cached"] or not sent_message.photo:
-                        continue
-                    await db.add_file(str(item["cache_key"]), sent_message.photo[-1].file_id, "photo")
-
-        last = media_items[-1]
-        send_photo = message.answer_photo if has_sent_media else message.reply_photo
-        sent_message = await send_photo(
-            photo=last["file_id"] or last["url"],
+        await send_cached_media_entries(
+            message,
+            media_items,
+            db_service=db,
             caption=bm.captions(user_settings['captions'], info.description if info else None, bot_url),
             reply_markup=kb.return_video_info_keyboard(
                 info.views if info else None,
@@ -757,10 +740,8 @@ async def process_tiktok_photos(message: types.Message, data: dict, bot_url: str
                 video_url,
                 user_settings,
                 audio_callback_data=audio_callback_data,
-            )
+            ),
         )
-        if not last["cached"] and sent_message.photo:
-            await db.add_file(str(last["cache_key"]), sent_message.photo[-1].file_id, "photo")
         await maybe_delete_user_message(message, user_settings["delete_message"])
     finally:
         await safe_delete_message(status_message)

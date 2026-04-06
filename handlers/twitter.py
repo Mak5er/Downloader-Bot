@@ -11,11 +11,11 @@ from urllib.parse import urlsplit
 import aiohttp
 from aiogram import Router, F, types
 from aiogram.types import FSInputFile
-from aiogram.utils.media_group import MediaGroupBuilder
 
 import keyboards as kb
 import messages as bm
 from config import OUTPUT_DIR, CHANNEL_ID
+from handlers.media_delivery import send_cached_media_entries
 from handlers.utils import (
     build_inline_album_result,
     build_request_id,
@@ -218,20 +218,6 @@ def _build_twitter_media_cache_key(post_url: str, index: int, media_kind: str, t
     if total_items == 1 and media_kind == "video":
         return post_url
     return build_media_cache_key(post_url, item_index=index, item_kind=media_kind)
-
-
-def _extract_sent_file_id(sent_message: types.Message, media_kind: str) -> str | None:
-    if media_kind == "video" and sent_message.video:
-        return sent_message.video.file_id
-    if media_kind == "photo" and sent_message.photo:
-        return sent_message.photo[-1].file_id
-    return None
-
-
-def _media_ref(entry: dict[str, Any]) -> str | FSInputFile:
-    if entry.get("file_id"):
-        return entry["file_id"]
-    return FSInputFile(entry["path"])
 
 
 def _get_twitter_media_preview_url(media: dict[str, Any], tweet_media: dict[str, Any]) -> Optional[str]:
@@ -536,52 +522,13 @@ async def _collect_media_files(
 
 
 async def _send_tweet_media_entries(message, entries, caption, keyboard):
-    if not entries:
-        return
-
-    has_sent_media = False
-    if len(entries) > 1:
-        album_items = entries[:-1]
-        for i in range(0, len(album_items), 10):
-            batch = album_items[i:i + 10]
-            media_group = MediaGroupBuilder()
-            for entry in batch:
-                if entry["kind"] == "video":
-                    media_group.add_video(media=_media_ref(entry))
-                else:
-                    media_group.add_photo(media=_media_ref(entry))
-            send_kwargs = {"media": media_group.build()}
-            if not has_sent_media:
-                send_kwargs["reply_to_message_id"] = message.message_id
-            sent_group = await message.answer_media_group(**send_kwargs)
-            has_sent_media = True
-            for sent_message, entry in zip(sent_group, batch):
-                if entry["cached"]:
-                    continue
-                file_id = _extract_sent_file_id(sent_message, entry["kind"])
-                if file_id:
-                    await db.add_file(entry["cache_key"], file_id, entry["kind"])
-
-    last_entry = entries[-1]
-    if last_entry["kind"] == "video":
-        send_video = message.answer_video if has_sent_media else message.reply_video
-        sent_message = await send_video(
-            video=_media_ref(last_entry),
-            caption=caption,
-            reply_markup=keyboard,
-        )
-    else:
-        send_photo = message.answer_photo if has_sent_media else message.reply_photo
-        sent_message = await send_photo(
-            photo=_media_ref(last_entry),
-            caption=caption,
-            reply_markup=keyboard,
-        )
-
-    if not last_entry["cached"]:
-        file_id = _extract_sent_file_id(sent_message, last_entry["kind"])
-        if file_id:
-            await db.add_file(last_entry["cache_key"], file_id, last_entry["kind"])
+    await send_cached_media_entries(
+        message,
+        entries,
+        db_service=db,
+        caption=caption,
+        reply_markup=keyboard,
+    )
 
 
 async def _cleanup_tweet_dir(tweet_dir):

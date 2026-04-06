@@ -7,7 +7,6 @@ from urllib.parse import urlparse, urlunparse
 
 from aiogram import types, Router, F
 from aiogram.types import FSInputFile
-from aiogram.utils.media_group import MediaGroupBuilder
 
 import keyboards as kb
 import messages as bm
@@ -17,6 +16,7 @@ from config import (
     COBALT_API_URL,
     COBALT_API_KEY,
 )
+from handlers.media_delivery import send_cached_media_entries
 from handlers.user import update_info
 from handlers.utils import (
     build_inline_album_result,
@@ -528,13 +528,6 @@ async def process_instagram_media_group(message: types.Message, data: InstagramV
     if business_id is None:
         status_message = await message.answer(bm.downloading_video_status())
 
-    def _extract_sent_file_id(sent_message: types.Message, media_kind: str) -> str | None:
-        if media_kind == "video" and sent_message.video:
-            return sent_message.video.file_id
-        if media_kind == "photo" and sent_message.photo:
-            return sent_message.photo[-1].file_id
-        return None
-
     async def _resolve_item(index: int, item: InstagramMedia):
         cache_key = build_media_cache_key(original_url, item_index=index, item_kind=item.type)
         cached_file_id = await db.get_file_id(cache_key)
@@ -591,60 +584,19 @@ async def process_instagram_media_group(message: types.Message, data: InstagramV
         return
 
     try:
-        has_sent_media = False
-        if len(media_items) > 1:
-            media_group = MediaGroupBuilder()
-            batch = media_items[:-1]
-            for item in batch:
-                media_ref = item["file_id"] if item["file_id"] else FSInputFile(str(item["path"]))
-                if item["type"] == "video":
-                    media_group.add_video(media=media_ref)
-                else:
-                    media_group.add_photo(media=media_ref)
-            await safe_edit_text(status_message, bm.uploading_status())
-            send_kwargs = {"media": media_group.build()}
-            if not has_sent_media:
-                send_kwargs["reply_to_message_id"] = message.message_id
-            sent_group = await message.answer_media_group(**send_kwargs)
-            has_sent_media = True
-            for sent_message, item in zip(sent_group, batch):
-                if item["cached"]:
-                    continue
-                file_id = _extract_sent_file_id(sent_message, str(item["type"]))
-                if file_id:
-                    await db.add_file(str(item["cache_key"]), file_id, str(item["type"]))
-
-        last_item = media_items[-1]
-        db_video_url = original_url
-
-        if last_item["type"] == "video":
-            await safe_edit_text(status_message, bm.uploading_status())
-            send_video = message.answer_video if has_sent_media else message.reply_video
-            sent_message = await send_video(
-                video=last_item["file_id"] if last_item["file_id"] else FSInputFile(str(last_item["path"])),
-                caption=bm.captions(user_settings["captions"], data.description, bot_url),
-                reply_markup=kb.return_video_info_keyboard(
-                    None, None, None, None, "", db_video_url, user_settings,
-                    audio_callback_data=None,
-                ),
-                parse_mode="HTML"
-            )
-        else:
-            await safe_edit_text(status_message, bm.uploading_status())
-            send_photo = message.answer_photo if has_sent_media else message.reply_photo
-            sent_message = await send_photo(
-                photo=last_item["file_id"] if last_item["file_id"] else FSInputFile(str(last_item["path"])),
-                caption=bm.captions(user_settings["captions"], data.description, bot_url),
-                reply_markup=kb.return_video_info_keyboard(
-                    None, None, None, None, "", db_video_url, user_settings,
-                    audio_callback_data=None,
-                ),
-                parse_mode="HTML"
-            )
-        if not last_item["cached"]:
-            file_id = _extract_sent_file_id(sent_message, str(last_item["type"]))
-            if file_id:
-                await db.add_file(str(last_item["cache_key"]), file_id, str(last_item["type"]))
+        await safe_edit_text(status_message, bm.uploading_status())
+        await send_cached_media_entries(
+            message,
+            media_items,
+            db_service=db,
+            caption=bm.captions(user_settings["captions"], data.description, bot_url),
+            reply_markup=kb.return_video_info_keyboard(
+                None, None, None, None, "", original_url, user_settings,
+                audio_callback_data=None,
+            ),
+            parse_mode="HTML",
+            kind_key="type",
+        )
 
         await maybe_delete_user_message(message, user_settings["delete_message"])
 
