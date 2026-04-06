@@ -3,14 +3,14 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Optional
 
-from aiogram.types import Message
-
 
 @dataclass
 class PendingRequest:
-    message: Message
+    text: str
     notice_chat_id: int
     notice_message_id: int
+    source_chat_id: Optional[int] = None
+    source_message_id: Optional[int] = None
 
 
 _pending: dict[int, PendingRequest] = {}

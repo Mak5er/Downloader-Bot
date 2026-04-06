@@ -662,6 +662,10 @@ async def inline_pinterest_query(query: types.InlineQuery):
         first = post.media_list[0]
         photo_items = [item for item in post.media_list if item.type == "photo"]
         first_photo = photo_items[0] if photo_items else None
+        first_preview = _get_pinterest_preview_url(first) or next(
+            (_get_pinterest_preview_url(item) for item in post.media_list if _get_pinterest_preview_url(item)),
+            None,
+        )
 
         if len(post.media_list) == 1 and first_photo:
             cache_key = f"{source_url}#photo"
@@ -672,13 +676,12 @@ async def inline_pinterest_query(query: types.InlineQuery):
                 return
 
             token = create_inline_video_request("pinterest", source_url, query.from_user.id, user_settings)
-            preview_url = _get_pinterest_preview_url(first_photo)
             results = [
                 types.InlineQueryResultArticle(
                     id=f"pinterest_inline:{token}",
                     title="Pinterest Photo",
                     description=post.description or "Press the button to send this photo inline.",
-                    thumbnail_url=preview_url,
+                    thumbnail_url=first_preview,
                     input_message_content=types.InputTextMessageContent(
                         message_text="Pinterest photo is being prepared...\nIf it does not start automatically, tap the button below.",
                     ),
@@ -692,18 +695,35 @@ async def inline_pinterest_query(query: types.InlineQuery):
             return
 
         if len(post.media_list) > 1:
+            preview_file_id = None
+            if first.type == "photo" and CHANNEL_ID:
+                cache_key = build_media_cache_key(source_url, item_index=0, item_kind="photo")
+                preview_file_id = await db.get_file_id(cache_key)
+                if not preview_file_id:
+                    try:
+                        sent = await bot.send_photo(
+                            chat_id=CHANNEL_ID,
+                            photo=first.url,
+                            caption="Pinterest Album Preview",
+                        )
+                        if sent.photo:
+                            preview_file_id = sent.photo[-1].file_id
+                            await db.add_file(cache_key, preview_file_id, "photo")
+                    except Exception as exc:
+                        logging.warning(
+                            "Failed to cache Pinterest album preview photo: url=%s error=%s",
+                            source_url,
+                            exc,
+                        )
             token = create_inline_album_request(query.from_user.id, "pinterest", source_url)
             deep_link = build_start_deeplink_url(bot_url, f"album_{token}")
-            first_preview = _get_pinterest_preview_url(first_photo) or next(
-                (_get_pinterest_preview_url(item) for item in post.media_list if _get_pinterest_preview_url(item)),
-                None,
-            )
             results = [
                 build_inline_album_result(
                     result_id=f"pinterest_album_{post.id}",
                     service_name="Pinterest",
                     deep_link=deep_link,
                     message_text=bm.captions(user_settings["captions"], post.description, bot_url),
+                    preview_file_id=preview_file_id,
                     preview_url=first_preview,
                     thumbnail_url=first_preview or get_inline_service_icon("pinterest"),
                 )
@@ -780,10 +800,15 @@ async def _send_inline_pinterest_video(
     token: str,
     inline_message_id: str,
     actor_name: str,
+    actor_user_id: int,
     request_event_id: str,
     duplicate_handler: str,
 ) -> None:
-    request = claim_inline_video_request_for_send(token, duplicate_handler=duplicate_handler)
+    request = claim_inline_video_request_for_send(
+        token,
+        duplicate_handler=duplicate_handler,
+        actor_user_id=actor_user_id,
+    )
     if request is None:
         return
 
@@ -969,6 +994,7 @@ async def chosen_inline_pinterest_result(result: types.ChosenInlineResult):
         token=token,
         inline_message_id=result.inline_message_id,
         actor_name=result.from_user.full_name,
+        actor_user_id=getattr(result.from_user, "id", None),
         request_event_id=result.result_id,
         duplicate_handler="chosen",
     )
@@ -988,9 +1014,13 @@ async def send_inline_pinterest_video_callback(call: types.CallbackQuery):
             token=token,
             inline_message_id=call.inline_message_id,
             actor_name=call.from_user.full_name,
+            actor_user_id=call.from_user.id,
             request_event_id=str(call.id),
             duplicate_handler="callback",
         )
+    except PermissionError:
+        await call.answer(bm.something_went_wrong(), show_alert=True)
+        return
     except ValueError as exc:
         if str(exc) == "already_processing":
             await call.answer(bm.inline_video_already_processing(), show_alert=False)

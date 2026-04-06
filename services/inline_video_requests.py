@@ -49,16 +49,23 @@ def claim_inline_video_request_for_send(
     token: str,
     *,
     duplicate_handler: str,
+    actor_user_id: Optional[int] = None,
 ) -> Optional[InlineVideoRequest]:
-    request = claim_inline_video_request(token)
-    if request is not None:
+    request = get_inline_video_request(token)
+    if request is None:
+        return None
+
+    if actor_user_id is not None and int(actor_user_id) != request.owner_user_id:
+        raise PermissionError("token_owner_mismatch")
+
+    if request.state == "pending":
+        request.state = "processing"
         return request
 
     if duplicate_handler == "callback":
-        existing = get_inline_video_request(token)
-        if existing and existing.state == "processing":
+        if request.state == "processing":
             raise ValueError("already_processing")
-        if existing and existing.state == "completed":
+        if request.state == "completed":
             raise ValueError("already_completed")
     return None
 

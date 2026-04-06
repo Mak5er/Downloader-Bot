@@ -51,6 +51,10 @@ class DownloadTooLargeError(DownloadError):
         super().__init__(f"File too large: {self.size} > {self.max_size}")
 
 
+class _ResumeNotSupportedError(Exception):
+    """Raised when a server ignores a Range request during resume."""
+
+
 @dataclass(slots=True)
 class DownloadMetrics:
     """Return information about a completed download."""
@@ -159,7 +163,7 @@ class ResilientDownloader:
         loop = asyncio.get_running_loop()
         progress_bridge = self._build_progress_bridge(loop, on_progress)
         headers_map = headers or {}
-        inflight_key = os.path.abspath(os.path.join(self.output_dir, filename))
+        inflight_key = f"{os.path.abspath(os.path.join(self.output_dir, filename))}::{url}"
         use_subprocess = (
             self._subprocess_threshold_bytes > 0
             and (size_hint or 0) >= self._subprocess_threshold_bytes
@@ -382,6 +386,7 @@ class ResilientDownloader:
         target_path = os.path.join(self.output_dir, filename)
         temp_path = f"{target_path}{self.config.temp_suffix}"
         sync_started_at = time.perf_counter()
+        had_existing_target = os.path.exists(target_path)
 
         if skip_if_exists and os.path.exists(target_path):
             size = os.path.getsize(target_path)
@@ -457,13 +462,35 @@ class ResilientDownloader:
                     progress_state=progress_state,
                 )
             else:
-                self._download_single(
-                    url,
-                    temp_path if resumed else target_path,
-                    headers,
-                    progress_state=progress_state,
-                    max_size_bytes=max_size_bytes,
-                )
+                try:
+                    self._download_single(
+                        url,
+                        temp_path if resumed else target_path,
+                        headers,
+                        progress_state=progress_state,
+                        max_size_bytes=max_size_bytes,
+                    )
+                except _ResumeNotSupportedError:
+                    logging.warning(
+                        "Resume not supported by origin, restarting download from scratch: url=%s path=%s",
+                        url,
+                        target_path,
+                    )
+                    headers.pop("Range", None)
+                    resumed = False
+                    existing_size = 0
+                    if progress_state:
+                        progress_state.downloaded_bytes = 0
+                        progress_state.total_bytes = 0
+                    if os.path.exists(temp_path):
+                        os.remove(temp_path)
+                    self._download_single(
+                        url,
+                        target_path,
+                        headers,
+                        progress_state=progress_state,
+                        max_size_bytes=max_size_bytes,
+                    )
                 if resumed:
                     os.replace(temp_path, target_path)
 
@@ -501,9 +528,12 @@ class ResilientDownloader:
                 used_multipart=use_multipart,
                 resumed=resumed,
             )
+        except DownloadTooLargeError:
+            self._cleanup_partial(temp_path, target_path, remove_target=not had_existing_target)
+            raise
         except Exception as exc:
             logging.error("Download failed: url=%s path=%s error=%s", url, target_path, exc)
-            self._cleanup_partial(temp_path, target_path)
+            self._cleanup_partial(temp_path, target_path, remove_target=not had_existing_target)
             raise DownloadError(str(exc)) from exc
 
     # ----------------------------------------------------------------------------------
@@ -576,6 +606,9 @@ class ResilientDownloader:
                     timeout=self.config.stream_timeout,
                 ) as response:
                     response.raise_for_status()
+                    if "Range" in headers:
+                        if response.status_code != 206 or "Content-Range" not in response.headers:
+                            raise _ResumeNotSupportedError("Range request was not honored by the origin")
                     if progress_state and progress_state.total_bytes <= 0:
                         content_length = response.headers.get("Content-Length") or "0"
                         if content_length.isdigit():
@@ -595,6 +628,8 @@ class ResilientDownloader:
                     if progress_state:
                         self._emit_progress(progress_state, force=True)
                 return
+            except _ResumeNotSupportedError:
+                raise
             except Exception as exc:
                 if attempt > self.config.max_retries:
                     raise
@@ -722,9 +757,12 @@ class ResilientDownloader:
         )
         state.last_emit_at = now
 
-    def _cleanup_partial(self, temp_path: str, target_path: str) -> None:
+    def _cleanup_partial(self, temp_path: str, target_path: str, *, remove_target: bool = True) -> None:
         """Remove temporary files created by a failed download."""
-        for path in (temp_path, target_path):
+        paths = [temp_path]
+        if remove_target:
+            paths.append(target_path)
+        for path in paths:
             if path and os.path.exists(path):
                 try:
                     os.remove(path)

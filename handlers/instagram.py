@@ -863,9 +863,10 @@ async def inline_instagram_query(query: types.InlineQuery):
             await safe_answer_inline_query(query, results, cache_time=10, is_personal=True)
             return
 
+        first_item = data.media_list[0] if data.media_list else None
         photo_items = [item for item in data.media_list if item.type == "photo"]
         first_photo = photo_items[0] if photo_items else None
-        first_preview = _get_instagram_preview_url(first_photo) or next(
+        first_preview = _get_instagram_preview_url(first_item) or next(
             (_get_instagram_preview_url(item) for item in data.media_list if _get_instagram_preview_url(item)),
             None,
         )
@@ -896,6 +897,26 @@ async def inline_instagram_query(query: types.InlineQuery):
             return
 
         if len(data.media_list) > 1:
+            preview_file_id = None
+            if first_item and first_item.type == "photo" and CHANNEL_ID:
+                cache_key = build_media_cache_key(original_url, item_index=0, item_kind="photo")
+                preview_file_id = await db.get_file_id(cache_key)
+                if not preview_file_id:
+                    try:
+                        sent = await bot.send_photo(
+                            chat_id=CHANNEL_ID,
+                            photo=first_item.url,
+                            caption="Instagram Album Preview",
+                        )
+                        if sent.photo:
+                            preview_file_id = sent.photo[-1].file_id
+                            await db.add_file(cache_key, preview_file_id, "photo")
+                    except Exception as exc:
+                        logging.warning(
+                            "Failed to cache Instagram album preview photo: url=%s error=%s",
+                            original_url,
+                            exc,
+                        )
             token = create_inline_album_request(query.from_user.id, "instagram", original_url)
             deep_link = build_start_deeplink_url(bot_url, f"album_{token}")
             results = [
@@ -904,6 +925,7 @@ async def inline_instagram_query(query: types.InlineQuery):
                     service_name="Instagram",
                     deep_link=deep_link,
                     message_text=bm.captions(user_settings["captions"], data.description, bot_url),
+                    preview_file_id=preview_file_id,
                     preview_url=first_preview,
                     thumbnail_url=first_preview or get_inline_service_icon("instagram"),
                 )
@@ -927,10 +949,15 @@ async def _send_inline_instagram_video(
     token: str,
     inline_message_id: str,
     actor_name: str,
+    actor_user_id: int,
     request_event_id: str,
     duplicate_handler: str,
 ) -> None:
-    request = claim_inline_video_request_for_send(token, duplicate_handler=duplicate_handler)
+    request = claim_inline_video_request_for_send(
+        token,
+        duplicate_handler=duplicate_handler,
+        actor_user_id=actor_user_id,
+    )
     if request is None:
         return
 
@@ -1124,6 +1151,7 @@ async def chosen_inline_instagram_result(result: types.ChosenInlineResult):
         token=token,
         inline_message_id=result.inline_message_id,
         actor_name=result.from_user.full_name,
+        actor_user_id=getattr(result.from_user, "id", None),
         request_event_id=result.result_id,
         duplicate_handler="chosen",
     )
@@ -1143,9 +1171,13 @@ async def send_inline_instagram_video_callback(call: types.CallbackQuery):
             token=token,
             inline_message_id=call.inline_message_id,
             actor_name=call.from_user.full_name,
+            actor_user_id=call.from_user.id,
             request_event_id=str(call.id),
             duplicate_handler="callback",
         )
+    except PermissionError:
+        await call.answer(bm.something_went_wrong(), show_alert=True)
+        return
     except ValueError as exc:
         if str(exc) == "already_processing":
             await call.answer(bm.inline_video_already_processing(), show_alert=False)

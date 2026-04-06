@@ -18,6 +18,13 @@ logging = logging.bind(service="db")
 
 Base = declarative_base()
 NON_DOWNLOAD_ACTIONS = ("start", "settings")
+DEFAULT_USER_SETTINGS = {
+    "captions": "off",
+    "delete_message": "off",
+    "info_buttons": "off",
+    "url_button": "off",
+    "audio_button": "off",
+}
 
 
 @dataclass(slots=True)
@@ -281,29 +288,37 @@ class DataBase:
         if cached and now - cached[0] <= self._settings_ttl_seconds:
             return dict(cached[1])
 
-        async with self.SessionLocal() as session:
-            result = await session.execute(select(Settings).where(Settings.user_id == user_id_int))
-            settings = result.scalar_one_or_none()
-            if settings:
-                payload = {
-                    "captions": settings.captions or "off",
-                    "delete_message": settings.delete_message or "off",
-                    "info_buttons": settings.info_buttons or "off",
-                    "url_button": settings.url_button or "off",
-                    "audio_button": settings.audio_button or "off",
-                }
-                self._settings_cache[user_id_int] = (now, payload)
-                return dict(payload)
+        try:
+            async with self.SessionLocal() as session:
+                result = await session.execute(select(Settings).where(Settings.user_id == user_id_int))
+                settings = result.scalar_one_or_none()
+                if settings:
+                    payload = {
+                        "captions": settings.captions or "off",
+                        "delete_message": settings.delete_message or "off",
+                        "info_buttons": settings.info_buttons or "off",
+                        "url_button": settings.url_button or "off",
+                        "audio_button": settings.audio_button or "off",
+                    }
+                    self._settings_cache[user_id_int] = (now, payload)
+                    return dict(payload)
+        except Exception as exc:
+            if cached:
+                logging.warning(
+                    "Failed to fetch user settings, using stale cache: user_id=%s error=%s",
+                    user_id_int,
+                    exc,
+                )
+                return dict(cached[1])
+            logging.warning(
+                "Failed to fetch user settings, using defaults: user_id=%s error=%s",
+                user_id_int,
+                exc,
+            )
 
-            payload = {
-                "captions": "off",
-                "delete_message": "off",
-                "info_buttons": "off",
-                "url_button": "off",
-                "audio_button": "off",
-            }
-            self._settings_cache[user_id_int] = (now, payload)
-            return dict(payload)
+        payload = dict(DEFAULT_USER_SETTINGS)
+        self._settings_cache[user_id_int] = (now, payload)
+        return dict(payload)
 
     async def set_user_setting(self, user_id, field, value):
         user_id_int = int(user_id)

@@ -1,5 +1,6 @@
 import os
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -27,3 +28,55 @@ async def test_clear_downloads_and_notify_removes_files(tmp_path, monkeypatch):
     assert not any(path.is_file() for path in folder.iterdir())
     assert len(sent_messages) == 2
     assert "successfully cleared" in sent_messages[0][1]
+
+
+@pytest.mark.asyncio
+async def test_delete_log_requires_admin(monkeypatch):
+    call = SimpleNamespace(
+        from_user=SimpleNamespace(id=999),
+        answer=AsyncMock(),
+        message=SimpleNamespace(
+            chat=SimpleNamespace(id=1),
+            reply=AsyncMock(),
+        ),
+    )
+    fake_bot = SimpleNamespace(send_chat_action=AsyncMock())
+
+    monkeypatch.setattr(admin, "ADMINS_UID", [1])
+    monkeypatch.setattr(admin, "bot", fake_bot)
+
+    await admin.del_log(call)
+
+    call.answer.assert_awaited_once_with("Admin access required.", show_alert=True)
+    fake_bot.send_chat_action.assert_not_awaited()
+    call.message.reply.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_delete_log_truncates_log_files(monkeypatch, tmp_path):
+    log_dir = tmp_path / "log"
+    log_dir.mkdir()
+    for name in ("bot_log.log", "error_log.log", "events_log.jsonl", "perf_log.jsonl"):
+        (log_dir / name).write_text("data", encoding="utf-8")
+
+    call = SimpleNamespace(
+        from_user=SimpleNamespace(id=1),
+        answer=AsyncMock(),
+        message=SimpleNamespace(
+            chat=SimpleNamespace(id=1),
+            reply=AsyncMock(),
+        ),
+    )
+    fake_bot = SimpleNamespace(send_chat_action=AsyncMock())
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(admin, "ADMINS_UID", [1])
+    monkeypatch.setattr(admin, "bot", fake_bot)
+    monkeypatch.setattr(admin.py_logging, "shutdown", lambda: None)
+
+    await admin.del_log(call)
+
+    fake_bot.send_chat_action.assert_awaited_once_with(1, "typing")
+    for name in ("bot_log.log", "error_log.log", "events_log.jsonl", "perf_log.jsonl"):
+        assert (log_dir / name).read_text(encoding="utf-8") == ""
+    call.message.reply.assert_awaited_once()

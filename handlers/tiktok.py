@@ -1035,6 +1035,30 @@ async def inline_tiktok_query(query: types.InlineQuery):
 
                 token = create_inline_album_request(query.from_user.id, "tiktok", source_url)
                 deep_link = build_start_deeplink_url(bot_url, f"album_{token}")
+                preview_file_id = None
+                if CHANNEL_ID:
+                    preview_cache_key = build_media_cache_key(
+                        build_tiktok_video_url(info) if info else source_url,
+                        item_index=0,
+                        item_kind="photo",
+                    )
+                    preview_file_id = await db.get_file_id(preview_cache_key)
+                    if not preview_file_id:
+                        try:
+                            sent = await bot.send_photo(
+                                chat_id=CHANNEL_ID,
+                                photo=first_photo,
+                                caption="TikTok Album Preview",
+                            )
+                            if sent.photo:
+                                preview_file_id = sent.photo[-1].file_id
+                                await db.add_file(preview_cache_key, preview_file_id, "photo")
+                        except Exception as exc:
+                            logging.warning(
+                                "Failed to cache TikTok album preview photo: url=%s error=%s",
+                                source_url,
+                                exc,
+                            )
                 results.append(build_inline_album_result(
                     result_id=f"tiktok_album_{info.id if info else token}",
                     service_name="TikTok",
@@ -1044,6 +1068,7 @@ async def inline_tiktok_query(query: types.InlineQuery):
                         info.description if info else None,
                         bot_url,
                     ),
+                    preview_file_id=preview_file_id,
                     preview_url=first_photo,
                     thumbnail_url=(info.cover if info and info.cover else first_photo),
                 ))
@@ -1066,10 +1091,15 @@ async def _send_inline_tiktok_video(
     token: str,
     inline_message_id: str,
     actor_name: str,
+    actor_user_id: int,
     request_event_id: str,
     duplicate_handler: str,
 ) -> None:
-    request = claim_inline_video_request_for_send(token, duplicate_handler=duplicate_handler)
+    request = claim_inline_video_request_for_send(
+        token,
+        duplicate_handler=duplicate_handler,
+        actor_user_id=actor_user_id,
+    )
     if request is None:
         return
 
@@ -1304,6 +1334,7 @@ async def chosen_inline_tiktok_result(result: types.ChosenInlineResult):
         token=token,
         inline_message_id=inline_message_id,
         actor_name=result.from_user.full_name,
+        actor_user_id=getattr(result.from_user, "id", None),
         request_event_id=result.result_id,
         duplicate_handler="chosen",
     )
@@ -1324,9 +1355,13 @@ async def send_inline_tiktok_video_callback(call: types.CallbackQuery):
             token=token,
             inline_message_id=inline_message_id,
             actor_name=call.from_user.full_name,
+            actor_user_id=call.from_user.id,
             request_event_id=str(call.id),
             duplicate_handler="callback",
         )
+    except PermissionError:
+        await call.answer(bm.something_went_wrong(), show_alert=True)
+        return
     except ValueError as exc:
         if str(exc) == "already_processing":
             await call.answer(bm.inline_video_already_processing(), show_alert=False)

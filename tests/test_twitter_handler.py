@@ -438,6 +438,7 @@ async def test_inline_twitter_query_supports_multi_photo_mediaurls_payload(monke
     }
 
     monkeypatch.setattr(twitter, "send_analytics", AsyncMock())
+    monkeypatch.setattr(twitter, "CHANNEL_ID", None)
     monkeypatch.setattr(twitter.db, "user_settings", AsyncMock(return_value=settings))
     monkeypatch.setattr(twitter, "get_bot_url", AsyncMock(return_value="https://t.me/maxloadbot"))
     monkeypatch.setattr(twitter, "_get_tweet_context", AsyncMock(return_value=("888", tweet_media)))
@@ -450,3 +451,42 @@ async def test_inline_twitter_query_supports_multi_photo_mediaurls_payload(monke
     assert result.title == twitter.bm.inline_album_title("Twitter")
     assert result.photo_url == "https://cdn.example.com/1.jpg"
     assert result.thumbnail_url == "https://cdn.example.com/1.jpg"
+
+
+@pytest.mark.asyncio
+async def test_inline_twitter_query_uses_first_media_preview_for_mixed_album(monkeypatch):
+    settings = {
+        "captions": "on",
+        "delete_message": "off",
+        "info_buttons": "on",
+        "url_button": "on",
+        "audio_button": "on",
+    }
+    query = SimpleNamespace(
+        from_user=SimpleNamespace(id=42),
+        chat_type="inline",
+        query="https://x.com/user/status/555",
+        answer=AsyncMock(),
+    )
+    tweet_media = {
+        "tweetURL": "https://x.com/user/status/555",
+        "text": "mixed media tweet",
+        "media_extended": [
+            {"type": "video", "url": "https://cdn.example.com/1.mp4", "thumbnail_url": "https://cdn.example.com/1.jpg"},
+            {"type": "image", "url": "https://cdn.example.com/2.jpg", "thumbnail_url": "https://cdn.example.com/2.jpg"},
+        ],
+    }
+
+    monkeypatch.setattr(twitter, "send_analytics", AsyncMock())
+    monkeypatch.setattr(twitter.db, "user_settings", AsyncMock(return_value=settings))
+    monkeypatch.setattr(twitter, "get_bot_url", AsyncMock(return_value="https://t.me/maxloadbot"))
+    monkeypatch.setattr(twitter, "_get_tweet_context", AsyncMock(return_value=("555", tweet_media)))
+
+    await twitter.inline_twitter_query(query)
+
+    results = query.answer.await_args.args[0]
+    assert len(results) == 1
+    result = results[0]
+    assert result.photo_url == "https://cdn.example.com/1.jpg"
+    assert result.thumbnail_url == "https://cdn.example.com/1.jpg"
+    assert result.caption == twitter.bm.captions(settings["captions"], tweet_media["text"], "https://t.me/maxloadbot")

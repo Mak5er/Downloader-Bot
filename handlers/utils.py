@@ -12,7 +12,9 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 from aiogram import Bot, types
+from aiogram.client.default import Default
 from aiogram.enums import ChatType
+from aiogram.methods.base import TelegramMethod
 from aiogram.types import FSInputFile
 from aiogram.exceptions import TelegramAPIError
 
@@ -37,6 +39,20 @@ _message_edit_cache_maxsize = 4096
 T = TypeVar("T")
 FAsync = TypeVar("FAsync", bound=Callable[..., Awaitable[Any]])
 _INLINE_IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".gif"}
+
+
+class RawAnswerInlineQuery(TelegramMethod[bool]):
+    __returning__ = bool
+    __api_method__ = "answerInlineQuery"
+
+    inline_query_id: str
+    results: list[dict[str, Any]]
+    cache_time: int | None = None
+    is_personal: bool | None = None
+    next_offset: str | None = None
+    button: types.InlineQueryResultsButton | None = None
+    switch_pm_parameter: str | None = None
+    switch_pm_text: str | None = None
 
 
 def build_request_id(prefix: str, *parts: Any) -> str:
@@ -110,6 +126,46 @@ def _clone_inline_article(
     else:
         payload.pop("thumbnail_url", None)
     return types.InlineQueryResultArticle(**payload)
+
+
+def _strip_aiogram_defaults(value: Any) -> Any:
+    if isinstance(value, Default):
+        return None
+    if isinstance(value, dict):
+        cleaned: dict[str, Any] = {}
+        for key, item in value.items():
+            prepared = _strip_aiogram_defaults(item)
+            if prepared is not None:
+                cleaned[key] = prepared
+        return cleaned
+    if isinstance(value, list):
+        return [
+            prepared
+            for item in value
+            if (prepared := _strip_aiogram_defaults(item)) is not None
+        ]
+    return value
+
+
+def _serialize_inline_result(result: Any) -> Any:
+    if not isinstance(result, types.TelegramObject):
+        return result
+    payload = result.model_dump(exclude_none=True, warnings=False)
+    return _strip_aiogram_defaults(payload)
+
+
+async def _answer_inline_query(query: types.InlineQuery, results: list[Any], **answer_kwargs: Any) -> None:
+    query_id = getattr(query, "id", None)
+    bot = getattr(query, "bot", None)
+    if query_id and bot is not None and getattr(bot, "session", None) is not None:
+        method = RawAnswerInlineQuery(
+            inline_query_id=query_id,
+            results=[_serialize_inline_result(result) for result in results],
+            **answer_kwargs,
+        )
+        await bot.session.make_request(bot, method)
+        return
+    await query.answer(results, **answer_kwargs)
 
 
 def _build_inline_article_from_photo(
@@ -188,12 +244,17 @@ async def safe_answer_inline_query(
 ) -> None:
     sanitized_results = sanitize_inline_results(results)
     try:
-        await query.answer(sanitized_results, **answer_kwargs)
+        await _answer_inline_query(query, sanitized_results, **answer_kwargs)
     except TelegramAPIError as exc:
-        if "WEBDOCUMENT_URL_INVALID" not in str(exc):
+        error_text = str(exc)
+        has_photo_results = any(
+            isinstance(result, types.InlineQueryResultPhoto)
+            for result in sanitized_results
+        )
+        if "WEBDOCUMENT_URL_INVALID" not in error_text and not has_photo_results:
             raise
         logging.warning(
-            "Retrying inline answer without web preview URLs: user_id=%s query=%s error=%s",
+            "Retrying inline answer with degraded previews: user_id=%s query=%s error=%s",
             getattr(getattr(query, "from_user", None), "id", None),
             getattr(query, "query", None),
             exc,
@@ -202,7 +263,7 @@ async def safe_answer_inline_query(
             sanitized_results,
             force_remove_web_preview_urls=True,
         )
-        await query.answer(degraded_results, **answer_kwargs)
+        await _answer_inline_query(query, degraded_results, **answer_kwargs)
 
 
 @contextmanager
@@ -757,9 +818,10 @@ def build_inline_album_result(
     service_name: str,
     deep_link: str,
     message_text: str,
+    preview_file_id: Optional[str] = None,
     preview_url: Optional[str] = None,
     thumbnail_url: Optional[str] = None,
-) -> types.InlineQueryResultPhoto | types.InlineQueryResultArticle:
+) -> types.InlineQueryResultCachedPhoto | types.InlineQueryResultPhoto | types.InlineQueryResultArticle:
     reply_markup = types.InlineKeyboardMarkup(
         inline_keyboard=[[
             types.InlineKeyboardButton(
@@ -768,6 +830,16 @@ def build_inline_album_result(
             )
         ]]
     )
+    if preview_file_id:
+        return types.InlineQueryResultCachedPhoto(
+            id=result_id,
+            photo_file_id=str(preview_file_id),
+            title=bm.inline_album_title(service_name),
+            description=bm.inline_album_description(),
+            caption=message_text,
+            reply_markup=reply_markup,
+            parse_mode="HTML",
+        )
     if _looks_like_supported_inline_image_url(preview_url):
         return types.InlineQueryResultPhoto(
             id=result_id,

@@ -758,7 +758,8 @@ async def inline_twitter_query(query: types.InlineQuery):
         album_deep_link = build_start_deeplink_url(bot_url, f"album_{album_token}")
         context = await _get_tweet_context(source_url)
         if not context:
-            await query.answer(
+            await safe_answer_inline_query(
+                query,
                 [
                     _build_twitter_open_in_bot_result(
                         result_id="twitter_open_in_bot",
@@ -774,7 +775,36 @@ async def inline_twitter_query(query: types.InlineQuery):
         tweet_id, tweet_media = context
         media_items = _extract_twitter_media_items(tweet_media)
         if len(media_items) > 1:
-            preview_url = next((_get_twitter_media_preview_url(item, tweet_media) for item in media_items if _get_twitter_media_preview_url(item, tweet_media)), None)
+            preview_file_id = None
+            first_media = media_items[0]
+            first_media_kind = _normalize_twitter_media_kind(first_media.get("type"))
+            if first_media_kind == "photo" and CHANNEL_ID:
+                preview_cache_key = _build_twitter_media_cache_key(source_url, 0, "photo", len(media_items))
+                preview_file_id = await db.get_file_id(preview_cache_key)
+                if not preview_file_id:
+                    try:
+                        sent = await bot.send_photo(
+                            chat_id=CHANNEL_ID,
+                            photo=first_media["url"],
+                            caption="X / Twitter Album Preview",
+                        )
+                        if sent.photo:
+                            preview_file_id = sent.photo[-1].file_id
+                            await db.add_file(preview_cache_key, preview_file_id, "photo")
+                    except Exception as exc:
+                        logging.warning(
+                            "Failed to cache Twitter album preview photo: url=%s error=%s",
+                            source_url,
+                            exc,
+                        )
+            preview_url = _get_twitter_media_preview_url(media_items[0], tweet_media) or next(
+                (
+                    _get_twitter_media_preview_url(item, tweet_media)
+                    for item in media_items
+                    if _get_twitter_media_preview_url(item, tweet_media)
+                ),
+                None,
+            )
             results = [
                 build_inline_album_result(
                     result_id=f"twitter_album_{tweet_id}",
@@ -785,6 +815,7 @@ async def inline_twitter_query(query: types.InlineQuery):
                         tweet_media.get("text"),
                         bot_url,
                     ),
+                    preview_file_id=preview_file_id,
                     preview_url=preview_url,
                     thumbnail_url=preview_url or get_inline_service_icon("twitter"),
                 )
@@ -793,7 +824,8 @@ async def inline_twitter_query(query: types.InlineQuery):
             return
 
         if len(media_items) != 1:
-            await query.answer(
+            await safe_answer_inline_query(
+                query,
                 [
                     _build_twitter_open_in_bot_result(
                         result_id=f"twitter_open_{tweet_id}",
@@ -809,7 +841,8 @@ async def inline_twitter_query(query: types.InlineQuery):
         media = media_items[0]
         media_kind = _normalize_twitter_media_kind(media.get("type"))
         if not media_kind:
-            await query.answer(
+            await safe_answer_inline_query(
+                query,
                 [
                     _build_twitter_open_in_bot_result(
                         result_id=f"twitter_open_unknown_{tweet_id}",
@@ -856,10 +889,15 @@ async def _send_inline_twitter_media(
     token: str,
     inline_message_id: str,
     actor_name: str,
+    actor_user_id: int,
     request_event_id: str,
     duplicate_handler: str,
 ) -> None:
-    request = claim_inline_video_request_for_send(token, duplicate_handler=duplicate_handler)
+    request = claim_inline_video_request_for_send(
+        token,
+        duplicate_handler=duplicate_handler,
+        actor_user_id=actor_user_id,
+    )
     if request is None:
         return
 
@@ -1050,6 +1088,7 @@ async def chosen_inline_twitter_result(result: types.ChosenInlineResult):
         token=token,
         inline_message_id=result.inline_message_id,
         actor_name=result.from_user.full_name,
+        actor_user_id=getattr(result.from_user, "id", None),
         request_event_id=result.result_id,
         duplicate_handler="chosen",
     )
@@ -1069,9 +1108,13 @@ async def send_inline_twitter_media_callback(call: types.CallbackQuery):
             token=token,
             inline_message_id=call.inline_message_id,
             actor_name=call.from_user.full_name,
+            actor_user_id=call.from_user.id,
             request_event_id=str(call.id),
             duplicate_handler="callback",
         )
+    except PermissionError:
+        await call.answer(bm.something_went_wrong(), show_alert=True)
+        return
     except ValueError as exc:
         if str(exc) == "already_processing":
             await call.answer(bm.inline_video_already_processing(), show_alert=False)

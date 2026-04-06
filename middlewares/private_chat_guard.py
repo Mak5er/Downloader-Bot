@@ -68,9 +68,11 @@ class PrivateChatGuardMiddleware(BaseMiddleware):
             set_pending(
                 event.from_user.id,
                 PendingRequest(
-                    message=event,
+                    text=text,
                     notice_chat_id=notice.chat.id,
                     notice_message_id=notice.message_id,
+                    source_chat_id=getattr(event.chat, "id", None),
+                    source_message_id=getattr(event, "message_id", None),
                 ),
             )
             return None

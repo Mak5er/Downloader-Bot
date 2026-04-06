@@ -12,9 +12,11 @@ class DummyMessage:
             id=user_id,
             full_name="Tester",
             username="tester",
+            language_code="uk",
         )
         self.chat = SimpleNamespace(id=100, type=chat_type)
         self.text = "payload"
+        self.caption = None
         self._replies = []
         self.reply = AsyncMock(side_effect=self._collect_reply)
         self.answer = AsyncMock(side_effect=self._collect_reply)
@@ -95,6 +97,39 @@ async def test_send_welcome_deeplink_skips_default_welcome(monkeypatch):
     fake_update_info.assert_awaited_once_with(message)
     fake_process_deeplink.assert_awaited_once_with(message, "album_token")
     message.reply.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_send_welcome_replays_pending_request_in_private_context(monkeypatch):
+    fake_send_analytics = AsyncMock()
+    fake_update_info = AsyncMock()
+    fake_process_pending = AsyncMock()
+    fake_bot = SimpleNamespace(delete_message=AsyncMock())
+
+    monkeypatch.setattr(user, "send_analytics", fake_send_analytics)
+    monkeypatch.setattr(user, "update_info", fake_update_info)
+    monkeypatch.setattr(user, "bot", fake_bot)
+    monkeypatch.setattr(user, "_process_pending_message", fake_process_pending)
+    monkeypatch.setattr(
+        user,
+        "pop_pending",
+        lambda _user_id: SimpleNamespace(
+            text="https://youtu.be/demo",
+            notice_chat_id=-100,
+            notice_message_id=555,
+        ),
+    )
+
+    message = DummyMessage()
+    message.text = "/start"
+    await user.send_welcome(message)
+
+    fake_bot.delete_message.assert_awaited_once_with(-100, 555)
+    fake_process_pending.assert_awaited_once()
+    replayed_message = fake_process_pending.await_args.args[0]
+    assert replayed_message.chat.id == message.chat.id
+    assert replayed_message.chat.type == message.chat.type
+    assert replayed_message.text == "https://youtu.be/demo"
 
 
 @pytest.mark.asyncio

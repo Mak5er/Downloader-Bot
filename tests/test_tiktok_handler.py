@@ -337,6 +337,7 @@ async def test_inline_tiktok_query_returns_album_deeplink_for_multi_photo_post(m
     )
 
     monkeypatch.setattr(tiktok, "send_analytics", AsyncMock())
+    monkeypatch.setattr(tiktok, "CHANNEL_ID", None)
     monkeypatch.setattr(tiktok.db, "user_settings", AsyncMock(return_value=settings))
     monkeypatch.setattr(tiktok, "get_bot_url", AsyncMock(return_value="https://t.me/maxloadbot"))
     monkeypatch.setattr(
@@ -372,12 +373,78 @@ async def test_inline_tiktok_query_returns_album_deeplink_for_multi_photo_post(m
     result = results[0]
     assert result.title == tiktok.bm.inline_album_title("TikTok")
     assert result.thumbnail_url == "https://example.com/cover.jpg"
+    assert result.input_message_content.message_text == tiktok.bm.captions(
+        settings["captions"],
+        "Photo set",
+        "https://t.me/maxloadbot",
+    )
     deep_link = result.reply_markup.inline_keyboard[0][0].url
     token = deep_link.split("?start=album_", 1)[1]
     request = get_inline_album_request(token)
     assert request is not None
     assert request.service == "tiktok"
     assert request.url == "https://www.tiktok.com/@creator/video/123"
+
+
+@pytest.mark.asyncio
+async def test_inline_tiktok_query_uses_cached_preview_photo_file_id_for_album(monkeypatch):
+    settings = {
+        "captions": "on",
+        "delete_message": "off",
+        "info_buttons": "on",
+        "url_button": "on",
+        "audio_button": "on",
+    }
+    query = SimpleNamespace(
+        from_user=SimpleNamespace(id=42),
+        chat_type="inline",
+        query="https://www.tiktok.com/@creator/video/123",
+        answer=AsyncMock(),
+    )
+
+    monkeypatch.setattr(tiktok, "send_analytics", AsyncMock())
+    monkeypatch.setattr(tiktok, "CHANNEL_ID", 12345)
+    monkeypatch.setattr(tiktok.db, "user_settings", AsyncMock(return_value=settings))
+    monkeypatch.setattr(tiktok.db, "get_file_id", AsyncMock(return_value="cached-preview-file-id"))
+    monkeypatch.setattr(tiktok, "get_bot_url", AsyncMock(return_value="https://t.me/maxloadbot"))
+    monkeypatch.setattr(
+        tiktok,
+        "fetch_tiktok_data_with_retry",
+        AsyncMock(
+            return_value={
+                "error": None,
+                "code": 0,
+                "data": {
+                    "id": "123",
+                    "title": "Photo set",
+                    "cover": "https://example.com/cover.jpg",
+                    "play_count": 1000,
+                    "digg_count": 100,
+                    "comment_count": 25,
+                    "share_count": 10,
+                    "music_info": {"play": "https://example.com/music.mp3"},
+                    "author": {"unique_id": "creator"},
+                    "images": [
+                        "https://example.com/photo-1.webp",
+                        "https://example.com/photo-2.webp",
+                    ],
+                },
+            }
+        ),
+    )
+
+    await tiktok.inline_tiktok_query(query)
+
+    results = query.answer.await_args.args[0]
+    assert len(results) == 1
+    result = results[0]
+    assert isinstance(result, tiktok.types.InlineQueryResultCachedPhoto)
+    assert result.photo_file_id == "cached-preview-file-id"
+    assert result.caption == tiktok.bm.captions(
+        settings["captions"],
+        "Photo set",
+        "https://t.me/maxloadbot",
+    )
 
 
 @pytest.mark.asyncio

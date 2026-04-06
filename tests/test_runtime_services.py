@@ -11,9 +11,11 @@ from services import runtime_stats
 def test_pending_requests_store_get_and_pop(monkeypatch):
     monkeypatch.setattr(pending_requests, "_pending", {})
     request = pending_requests.PendingRequest(
-        message=SimpleNamespace(message_id=1),
+        text="https://youtu.be/demo",
         notice_chat_id=10,
         notice_message_id=20,
+        source_chat_id=-100,
+        source_message_id=1,
     )
 
     pending_requests.set_pending(42, request)
@@ -74,6 +76,25 @@ def test_inline_video_requests_lifecycle(monkeypatch):
         )
         is None
     )
+
+
+def test_inline_video_request_rejects_non_owner(monkeypatch):
+    monkeypatch.setattr(inline_video_requests, "_requests", {})
+    monkeypatch.setattr(inline_video_requests.secrets, "token_urlsafe", lambda _: "token-123")
+
+    token = inline_video_requests.create_inline_video_request(
+        service="youtube",
+        source_url="https://youtu.be/demo",
+        owner_user_id=99,
+        user_settings={"captions": "on"},
+    )
+
+    with pytest.raises(PermissionError, match="token_owner_mismatch"):
+        inline_video_requests.claim_inline_video_request_for_send(
+            token,
+            duplicate_handler="callback",
+            actor_user_id=100,
+        )
 
 
 def test_get_inline_service_icon_normalizes_service_name():

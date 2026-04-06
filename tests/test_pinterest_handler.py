@@ -375,6 +375,45 @@ async def test_inline_pinterest_query_returns_send_button_for_single_photo(monke
 
 
 @pytest.mark.asyncio
+async def test_inline_pinterest_query_uses_first_media_preview_for_mixed_album(monkeypatch):
+    settings = {
+        "captions": "on",
+        "delete_message": "off",
+        "info_buttons": "on",
+        "url_button": "on",
+        "audio_button": "on",
+    }
+    query = SimpleNamespace(
+        from_user=SimpleNamespace(id=42),
+        chat_type="inline",
+        query="https://www.pinterest.com/pin/987654321/",
+        answer=AsyncMock(),
+    )
+    post = pinterest.PinterestPost(
+        id="pin-inline-mixed",
+        description="mixed media pin",
+        media_list=[
+            pinterest.PinterestMedia(url="https://cdn.example.com/1.mp4", type="video", thumb="https://cdn.example.com/1.jpg"),
+            pinterest.PinterestMedia(url="https://cdn.example.com/2.jpg", type="photo"),
+        ],
+    )
+
+    monkeypatch.setattr(pinterest, "send_analytics", AsyncMock())
+    monkeypatch.setattr(pinterest.db, "user_settings", AsyncMock(return_value=settings))
+    monkeypatch.setattr(pinterest, "get_bot_url", AsyncMock(return_value="https://t.me/maxloadbot"))
+    monkeypatch.setattr(pinterest.pinterest_service, "fetch_post", AsyncMock(return_value=post))
+
+    await pinterest.inline_pinterest_query(query)
+
+    results = query.answer.await_args.args[0]
+    assert len(results) == 1
+    result = results[0]
+    assert result.photo_url == "https://cdn.example.com/1.jpg"
+    assert result.thumbnail_url == "https://cdn.example.com/1.jpg"
+    assert result.caption == pinterest.bm.captions(settings["captions"], post.description, "https://t.me/maxloadbot")
+
+
+@pytest.mark.asyncio
 async def test_chosen_inline_pinterest_result_edits_inline_photo(monkeypatch):
     settings = {
         "captions": "on",

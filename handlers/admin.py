@@ -1,4 +1,5 @@
 import asyncio
+import logging as py_logging
 import os
 from datetime import timedelta
 
@@ -27,6 +28,26 @@ from services.download_queue import get_download_queue
 from services.runtime_stats import get_runtime_snapshot
 
 router = Router()
+
+_ADMIN_ACCESS_REQUIRED = "Admin access required."
+
+
+def _is_admin_user(user_id: int | None) -> bool:
+    return user_id is not None and int(user_id) in ADMINS_UID
+
+
+async def _ensure_admin_callback(call: types.CallbackQuery) -> bool:
+    if _is_admin_user(getattr(getattr(call, "from_user", None), "id", None)):
+        return True
+    await call.answer(_ADMIN_ACCESS_REQUIRED, show_alert=True)
+    return False
+
+
+async def _ensure_admin_message(message: types.Message) -> bool:
+    if _is_admin_user(getattr(getattr(message, "from_user", None), "id", None)):
+        return True
+    await message.answer(_ADMIN_ACCESS_REQUIRED, reply_markup=types.ReplyKeyboardRemove())
+    return False
 
 
 class Mailing(StatesGroup):
@@ -131,15 +152,27 @@ async def session_metrics(message: types.Message):
 
 @router.callback_query(F.data == 'delete_log')
 async def del_log(call: types.CallbackQuery):
+    if not await _ensure_admin_callback(call):
+        return
+
     await bot.send_chat_action(call.message.chat.id, "typing")
-    logging.shutdown()
-    open('log/bot_log.log', 'w').close()
+    py_logging.shutdown()
+    for log_path in (
+        "log/bot_log.log",
+        "log/error_log.log",
+        "log/events_log.jsonl",
+        "log/perf_log.jsonl",
+    ):
+        open(log_path, "w", encoding="utf-8").close()
     await call.message.reply(bm.log_deleted())
     await call.answer()
 
 
 @router.callback_query(F.data == 'download_log')
 async def download_log_handler(call: types.CallbackQuery):
+    if not await _ensure_admin_callback(call):
+        return
+
     await bot.send_chat_action(call.message.chat.id, "typing")
 
     log_files = [
@@ -159,6 +192,9 @@ async def download_log_handler(call: types.CallbackQuery):
 
 @router.callback_query(F.data == 'check_active_users')
 async def check_active_users(call: types.CallbackQuery):
+    if not await _ensure_admin_callback(call):
+        return
+
     await call.answer()
     await bot.send_chat_action(call.message.chat.id, "typing")
 
@@ -226,6 +262,9 @@ async def check_active_users(call: types.CallbackQuery):
 
 @router.callback_query(F.data == 'cancel_action')
 async def cancel_action(call: types.CallbackQuery, state: FSMContext):
+    if not await _ensure_admin_callback(call):
+        return
+
     current_state = await state.get_state()
     if current_state is None:
         await call.answer("Nothing to cancel")
@@ -252,6 +291,9 @@ async def cancel_action(call: types.CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data == 'message_chat_id')
 async def message_chat_id(call: types.CallbackQuery, state: FSMContext):
+    if not await _ensure_admin_callback(call):
+        return
+
     await call.answer()
     await bot.send_chat_action(call.message.chat.id, "typing")
     await call.message.edit_text(
@@ -263,6 +305,10 @@ async def message_chat_id(call: types.CallbackQuery, state: FSMContext):
 
 @router.message(Admin.write_chat_id)
 async def admin_collect_chat_id(message: types.Message, state: FSMContext):
+    if not await _ensure_admin_message(message):
+        await state.clear()
+        return
+
     if message.text == bm.cancel():
         await bot.send_message(message.chat.id, bm.canceled(), reply_markup=types.ReplyKeyboardRemove())
         await state.clear()
@@ -282,6 +328,10 @@ async def admin_collect_chat_id(message: types.Message, state: FSMContext):
 
 @router.message(Admin.write_chat_text)
 async def admin_send_to_chat(message: types.Message, state: FSMContext):
+    if not await _ensure_admin_message(message):
+        await state.clear()
+        return
+
     if message.text == bm.cancel():
         await bot.send_message(message.chat.id, bm.canceled(), reply_markup=types.ReplyKeyboardRemove())
         await state.clear()
@@ -356,12 +406,18 @@ async def admin_send_to_chat(message: types.Message, state: FSMContext):
 
 @router.callback_query(F.data == 'back_to_admin')
 async def back_to_admin(call: types.CallbackQuery):
+    if not await _ensure_admin_callback(call):
+        return
+
     await bot.delete_message(call.message.chat.id, call.message.message_id)
     await admin(call.message)
 
 
 @router.callback_query(F.data == 'send_to_all')
 async def send_to_all_callback(call: types.CallbackQuery, state: FSMContext):
+    if not await _ensure_admin_callback(call):
+        return
+
     await call.message.edit_text(text=bm.mailing_message(),
                                  reply_markup=kb.cancel_keyboard())
     await state.set_state(Mailing.send_to_all_message)
@@ -370,6 +426,10 @@ async def send_to_all_callback(call: types.CallbackQuery, state: FSMContext):
 
 @router.message(Mailing.send_to_all_message)
 async def send_to_all_message(message: types.Message, state: FSMContext):
+    if not await _ensure_admin_message(message):
+        await state.clear()
+        return
+
     sender_id = message.from_user.id
     if message.text == bm.cancel():
         await message.answer(text=bm.canceled(), reply_markup=types.ReplyKeyboardRemove())
@@ -404,7 +464,7 @@ async def send_to_all_message(message: types.Message, state: FSMContext):
                 if str(e) == "Forbidden: bots can't send messages to bots":
                     await db.delete_user(user_id)
 
-                if "blocked" or "Chat not found" in str(e):
+                if "blocked" in str(e) or "Chat not found" in str(e):
                     await db.set_inactive(user_id)
                 continue
 
@@ -416,6 +476,9 @@ async def send_to_all_message(message: types.Message, state: FSMContext):
 
 @router.callback_query(F.data.startswith("write_"))
 async def write_message_handler(call: types.CallbackQuery, state: FSMContext):
+    if not await _ensure_admin_callback(call):
+        return
+
     chat_id = call.data.split("_")[1]
     await call.message.delete_reply_markup()
     await call.message.delete()
@@ -426,6 +489,10 @@ async def write_message_handler(call: types.CallbackQuery, state: FSMContext):
 
 @router.message(Admin.write_message)
 async def write_message(message: types.Message, state: FSMContext):
+    if not await _ensure_admin_message(message):
+        await state.clear()
+        return
+
     answer = message.text
 
     if answer == bm.cancel():

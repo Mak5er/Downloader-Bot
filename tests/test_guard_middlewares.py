@@ -55,14 +55,14 @@ async def test_ban_middleware_caches_status(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_ban_middleware_falls_back_to_active_when_status_lookup_fails(monkeypatch):
+async def test_ban_middleware_fails_closed_when_status_lookup_fails(monkeypatch):
     status = AsyncMock(side_effect=RuntimeError("db offline"))
     monkeypatch.setattr(ban_middleware, "db", SimpleNamespace(status=status))
     monkeypatch.setattr(ban_middleware.time, "monotonic", lambda: 200.0)
 
     middleware = ban_middleware.UserBannedMiddleware()
 
-    assert await middleware._get_status(1) == "active"
+    assert await middleware._get_status(1) == "restricted"
 
 
 @pytest.mark.asyncio
@@ -168,7 +168,7 @@ async def test_private_chat_guard_creates_pending_request_when_user_has_no_dm(mo
     handler = AsyncMock()
     sent_requests = []
     existing_pending = private_chat_guard.PendingRequest(
-        message=SimpleNamespace(message_id=1),
+        text="https://youtu.be/old",
         notice_chat_id=-100,
         notice_message_id=555,
     )
@@ -212,6 +212,6 @@ async def test_private_chat_guard_creates_pending_request_when_user_has_no_dm(mo
     event.reply.assert_awaited_once_with("Open DM", reply_markup="keyboard:maxloadbot")
     handler.assert_not_awaited()
     assert sent_requests[0][0] == 42
-    assert sent_requests[0][1].message is event
+    assert sent_requests[0][1].text == "https://tiktok.com/@demo/video/1"
     assert sent_requests[0][1].notice_chat_id == -200
     assert sent_requests[0][1].notice_message_id == 777

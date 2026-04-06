@@ -2,6 +2,7 @@ import datetime
 import io
 import re
 import time
+from copy import copy
 from collections import defaultdict
 from typing import Dict, List, Optional, Tuple
 
@@ -70,6 +71,7 @@ async def update_info(message: types.Message):
     user_id = message.from_user.id
     user_name = message.from_user.full_name
     user_username = message.from_user.username
+    language = getattr(message.from_user, "language_code", None)
 
     now = time.monotonic()
     cached = _update_info_cache.get(user_id)
@@ -82,7 +84,7 @@ async def update_info(message: types.Message):
         user_name=user_name,
         user_username=user_username,
         chat_type="private",
-        language="uk",
+        language=language,
         status="active",
     )
     _update_info_cache[user_id] = (now, user_name, user_username)
@@ -107,7 +109,17 @@ async def send_welcome(message: types.Message):
                 await bot.delete_message(pending.notice_chat_id, pending.notice_message_id)
             except Exception:
                 pass
-            await _process_pending_message(pending.message)
+            await _process_pending_message(_build_pending_private_message(message, pending.text))
+
+
+def _build_pending_private_message(message: types.Message, pending_text: str) -> types.Message:
+    if hasattr(message, "model_copy"):
+        return message.model_copy(update={"text": pending_text, "caption": None})
+
+    replayed_message = copy(message)
+    replayed_message.text = pending_text
+    replayed_message.caption = None
+    return replayed_message
 
 
 def _extract_start_payload(text: str) -> Optional[str]:

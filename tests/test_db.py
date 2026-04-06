@@ -197,6 +197,44 @@ async def test_get_file_id_negative_cache_expires_quickly(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_user_settings_returns_defaults_when_db_lookup_fails(monkeypatch):
+    database = db_module.DataBase("postgresql://user:pass@localhost/testdb")
+
+    class _SessionCtx:
+        async def __aenter__(self):
+            raise TimeoutError("db timeout")
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+    monkeypatch.setattr(database, "SessionLocal", lambda: _SessionCtx())
+
+    settings = await database.user_settings(42)
+
+    assert settings == db_module.DEFAULT_USER_SETTINGS
+
+
+@pytest.mark.asyncio
+async def test_user_settings_returns_stale_cache_when_db_lookup_fails(monkeypatch):
+    database = db_module.DataBase("postgresql://user:pass@localhost/testdb")
+    database._settings_cache[42] = (0.0, {"captions": "on", "delete_message": "off", "info_buttons": "off", "url_button": "off", "audio_button": "off"})
+
+    class _SessionCtx:
+        async def __aenter__(self):
+            raise TimeoutError("db timeout")
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+    monkeypatch.setattr(database, "SessionLocal", lambda: _SessionCtx())
+    monkeypatch.setattr(db_module.time, "monotonic", lambda: 9999.0)
+
+    settings = await database.user_settings(42)
+
+    assert settings["captions"] == "on"
+
+
+@pytest.mark.asyncio
 async def test_downloaded_files_count(database):
     today = datetime.now()
     older = today - timedelta(days=10)
