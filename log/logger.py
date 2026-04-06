@@ -200,7 +200,7 @@ class ContextLoggerAdapter(logging.LoggerAdapter):
 
 CONSOLE_FORMAT = (
     "%(log_color)s%(asctime)s | %(levelname)s | %(name)s | "
-    "%(service)s | %(flow)s | %(request_id)s | %(message)s%(reset)s"
+    "%(service)s | %(flow)s | %(request_id)s | %(kind)s | %(event_name)s | %(message)s%(reset)s"
 )
 FILE_FORMAT = (
     "%(asctime)s | %(levelname)s | %(name)s | "
