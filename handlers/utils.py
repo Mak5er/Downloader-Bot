@@ -664,6 +664,42 @@ def resolve_settings_target_id(message: types.Message) -> int:
     return message.from_user.id
 
 
+async def load_user_settings(db_service: Any, message: types.Message) -> Any:
+    return await db_service.user_settings(resolve_settings_target_id(message))
+
+
+def make_status_text_progress_updater(
+    label: str,
+    update_text: Callable[[str], Awaitable[None]],
+    *,
+    min_interval_seconds: float = 1.0,
+) -> Callable[[DownloadProgress], Awaitable[None]]:
+    state = {"last": 0.0}
+
+    async def _on_progress(progress: DownloadProgress) -> None:
+        now = time.monotonic()
+        if not progress.done and now - state["last"] < min_interval_seconds:
+            return
+        state["last"] = now
+        await update_text(build_progress_status(label, progress))
+
+    return _on_progress
+
+
+def make_retry_status_notifier(
+    update_text: Callable[[str], Awaitable[None]],
+    *,
+    enabled: bool = True,
+    min_failed_attempt: int = 2,
+) -> Callable[[int, int, Any], Awaitable[None]]:
+    async def _on_retry(failed_attempt: int, total_attempts: int, _error: Any) -> None:
+        if not enabled or failed_attempt < min_failed_attempt:
+            return
+        await update_text(bm.retrying_again_status(failed_attempt + 1, total_attempts))
+
+    return _on_retry
+
+
 async def safe_edit_text(message: Optional[types.Message], text: str, **kwargs) -> None:
     """Best-effort edit of a bot message (status/progress)."""
     if not message:

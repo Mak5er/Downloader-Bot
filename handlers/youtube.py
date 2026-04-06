@@ -16,7 +16,6 @@ from config import OUTPUT_DIR, CHANNEL_ID
 from handlers.user import update_info
 from handlers.utils import (
     build_request_id,
-    build_progress_status,
     build_queue_busy_text,
     build_rate_limit_text,
     get_bot_url,
@@ -24,6 +23,9 @@ from handlers.utils import (
     get_message_text,
     handle_download_error,
     handle_video_too_large,
+    load_user_settings,
+    make_retry_status_notifier,
+    make_status_text_progress_updater,
     maybe_delete_user_message,
     react_to_message,
     remove_file,
@@ -34,7 +36,6 @@ from handlers.utils import (
     safe_answer_inline_query,
     send_chat_action_if_needed,
     retry_async_operation,
-    resolve_settings_target_id,
     with_callback_logging,
     with_chosen_inline_logging,
     with_inline_query_logging,
@@ -391,7 +392,7 @@ async def download_video(message: types.Message):
         if show_service_status:
             status_message = await message.answer(bm.downloading_video_status())
 
-        user_settings = await db.user_settings(resolve_settings_target_id(message))
+        user_settings = await load_user_settings(db, message)
         user_captions = user_settings["captions"]
         bot_url = await get_bot_url(bot)
 
@@ -442,26 +443,17 @@ async def download_video(message: types.Message):
 
         name = f"{yt['id']}_youtube_video.mp4"
         await safe_edit_text(status_message, bm.downloading_video_status())
-        progress_state = {"last": 0.0}
         size_hint_raw = video.get("filesize") or video.get("filesize_approx")
         size_hint = safe_int(size_hint_raw, 0) or None
         if size_hint and size_hint >= MAX_FILE_SIZE:
             await handle_video_too_large(message, business_id=business_id)
             return
 
-        async def on_progress(progress: DownloadProgress):
-            now = time.monotonic()
-            if not progress.done and now - progress_state["last"] < 1.0:
-                return
-            progress_state["last"] = now
-            await safe_edit_text(status_message, build_progress_status("YouTube video", progress))
+        async def _edit_status(text: str) -> None:
+            await safe_edit_text(status_message, text)
 
-        async def on_retry_download(failed_attempt: int, total_attempts: int, _error):
-            if failed_attempt >= 2:
-                await safe_edit_text(
-                    status_message,
-                    bm.retrying_again_status(failed_attempt + 1, total_attempts),
-                )
+        on_progress = make_status_text_progress_updater("YouTube video", _edit_status)
+        on_retry_download = make_retry_status_notifier(_edit_status)
 
         # Prefer high-speed downloader when stream is direct media; fall back to yt-dlp for manifests/HLS.
         if _is_manifest_stream(video):
@@ -597,7 +589,7 @@ async def download_music(message: types.Message):
     show_service_status = business_id is None
     try:
         await react_to_message(message, "👾", business_id=business_id)
-        user_settings = await db.user_settings(resolve_settings_target_id(message))
+        user_settings = await load_user_settings(db, message)
         bot_url = await get_bot_url(bot)
         bot_avatar = await get_bot_avatar_thumbnail(bot)
         if show_service_status:
@@ -1052,14 +1044,7 @@ async def _send_inline_youtube_video(
                     max_filesize=MAX_FILE_SIZE - 1,
                 )
             else:
-                progress_state = {"last": 0.0}
-
-                async def on_progress(progress: DownloadProgress):
-                    now = time.monotonic()
-                    if not progress.done and now - progress_state["last"] < 1.0:
-                        return
-                    progress_state["last"] = now
-                    await _edit_inline_status(build_progress_status("YouTube video", progress))
+                on_progress = make_status_text_progress_updater("YouTube video", _edit_inline_status)
 
                 metrics = await download_stream(
                     video,

@@ -22,10 +22,11 @@ from handlers.utils import (
     build_queue_busy_text,
     build_rate_limit_text,
     build_start_deeplink_url,
-    build_progress_status,
     get_bot_url,
     handle_download_error,
     get_message_text,
+    load_user_settings,
+    make_status_text_progress_updater,
     maybe_delete_user_message,
     react_to_message,
     remove_file,
@@ -36,7 +37,6 @@ from handlers.utils import (
     safe_edit_inline_text,
     safe_answer_inline_query,
     send_chat_action_if_needed,
-    resolve_settings_target_id,
     with_callback_logging,
     with_chosen_inline_logging,
     with_inline_query_logging,
@@ -714,7 +714,7 @@ async def handle_tweet_links(message, direct_url: Optional[str] = None):
     await react_to_message(message, "👾", business_id=business_id)
 
     bot_url = await get_bot_url(bot)
-    user_settings = await db.user_settings(resolve_settings_target_id(message))
+    user_settings = await load_user_settings(db, message)
 
     try:
         tweet_ids = await extract_tweet_ids_async(text)
@@ -996,15 +996,9 @@ async def _send_inline_twitter_media(
                 return
 
             file_name = os.path.join(str(tweet_media["conversationID"]), os.path.basename(urlsplit(media["url"]).path))
-            progress_state = {"last": 0.0}
             await _edit_inline_status(bm.downloading_video_status())
 
-            async def on_progress(progress):
-                now = time.monotonic()
-                if not progress.done and now - progress_state["last"] < 1.0:
-                    return
-                progress_state["last"] = now
-                await _edit_inline_status(build_progress_status("X / Twitter video", progress))
+            on_progress = make_status_text_progress_updater("X / Twitter video", _edit_inline_status)
 
             metrics = await twitter_downloader.download(
                 media["url"],

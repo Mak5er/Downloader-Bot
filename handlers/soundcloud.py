@@ -1,6 +1,5 @@
 import datetime
 import re
-import time
 from dataclasses import dataclass
 from typing import Optional
 from urllib.parse import urlparse, urlunparse
@@ -14,13 +13,15 @@ from config import CHANNEL_ID, COBALT_API_KEY, COBALT_API_URL, OUTPUT_DIR
 from handlers.user import update_info
 from handlers.utils import (
     build_request_id,
-    build_progress_status,
     build_queue_busy_text,
     build_rate_limit_text,
     get_bot_avatar_thumbnail,
     get_bot_url,
     get_message_text,
     handle_download_error,
+    load_user_settings,
+    make_retry_status_notifier,
+    make_status_text_progress_updater,
     maybe_delete_user_message,
     react_to_message,
     remove_file,
@@ -31,7 +32,6 @@ from handlers.utils import (
     safe_edit_inline_text,
     safe_answer_inline_query,
     send_chat_action_if_needed,
-    resolve_settings_target_id,
     with_callback_logging,
     with_chosen_inline_logging,
     with_inline_query_logging,
@@ -180,11 +180,6 @@ def parse_soundcloud_track(data: dict, source_url: str) -> Optional[SoundCloudTr
         thumbnail_url=thumb_url,
     )
 
-
-async def get_user_settings(message: types.Message):
-    return await db.user_settings(resolve_settings_target_id(message))
-
-
 class SoundCloudService:
     def __init__(self, output_dir: str) -> None:
         config = DownloadConfig(
@@ -281,7 +276,7 @@ async def process_soundcloud(message: types.Message):
         logging.info("SoundCloud request: user_id=%s url=%s", message.from_user.id, source_url)
         await send_analytics(user_id=message.from_user.id, chat_type=message.chat.type, action_name="soundcloud_audio")
         await react_to_message(message, "\U0001F47E", business_id=business_id)
-        user_settings = await get_user_settings(message)
+        user_settings = await load_user_settings(db, message)
         bot_url = await get_bot_url(bot)
         bot_avatar = await get_bot_avatar_thumbnail(bot)
         if show_service_status:
@@ -313,21 +308,15 @@ async def process_soundcloud(message: types.Message):
         timestamp = datetime.datetime.now().strftime("%Y%m%d%H%M%S")
         request_id = f"soundcloud_audio:{message.chat.id}:{message.message_id}:{track.id}"
         audio_name = f"{track.id}_{timestamp}_soundcloud_audio.mp3"
-        progress_state = {"last": 0.0}
 
-        async def on_progress(progress: DownloadProgress):
-            now = time.monotonic()
-            if not progress.done and now - progress_state["last"] < 1.0:
-                return
-            progress_state["last"] = now
-            await safe_edit_text(status_message, build_progress_status("SoundCloud audio", progress))
+        async def _edit_status(text: str) -> None:
+            await safe_edit_text(status_message, text)
 
-        async def on_retry(failed_attempt: int, total_attempts: int, _error):
-            if show_service_status and failed_attempt >= 2:
-                await safe_edit_text(
-                    status_message,
-                    bm.retrying_again_status(failed_attempt + 1, total_attempts),
-                )
+        on_progress = make_status_text_progress_updater("SoundCloud audio", _edit_status)
+        on_retry = make_retry_status_notifier(
+            _edit_status,
+            enabled=show_service_status,
+        )
 
         audio_metrics = await soundcloud_service.download_media(
             track.audio_url,
@@ -500,16 +489,10 @@ async def _send_inline_soundcloud_audio(
             timestamp = datetime.datetime.now().strftime("%Y%m%d%H%M%S")
             request_id = f"soundcloud_inline:{request.owner_user_id}:{request_event_id}:{track.id}"
             audio_name = f"{track.id}_{timestamp}_soundcloud_inline.mp3"
-            progress_state = {"last": 0.0}
 
             await _edit_inline_status(bm.downloading_audio_status())
 
-            async def on_progress(progress: DownloadProgress):
-                now = time.monotonic()
-                if not progress.done and now - progress_state["last"] < 1.0:
-                    return
-                progress_state["last"] = now
-                await _edit_inline_status(build_progress_status("SoundCloud audio", progress))
+            on_progress = make_status_text_progress_updater("SoundCloud audio", _edit_inline_status)
 
             metrics = await soundcloud_service.download_media(
                 track.audio_url,

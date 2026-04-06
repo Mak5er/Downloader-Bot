@@ -1,7 +1,6 @@
 import asyncio
 import datetime
 import re
-import time
 from typing import Optional
 from dataclasses import dataclass
 from urllib.parse import urlparse, urlunparse
@@ -22,13 +21,15 @@ from handlers.user import update_info
 from handlers.utils import (
     build_inline_album_result,
     build_request_id,
-    build_progress_status,
     build_queue_busy_text,
     build_rate_limit_text,
     build_start_deeplink_url,
     get_bot_url,
     get_message_text,
     handle_download_error,
+    load_user_settings,
+    make_retry_status_notifier,
+    make_status_text_progress_updater,
     maybe_delete_user_message,
     react_to_message,
     remove_file,
@@ -39,7 +40,6 @@ from handlers.utils import (
     safe_answer_inline_query,
     send_chat_action_if_needed,
     retry_async_operation,
-    resolve_settings_target_id,
     with_callback_logging,
     with_chosen_inline_logging,
     with_inline_query_logging,
@@ -150,11 +150,6 @@ def _get_instagram_preview_url(media: Optional[InstagramMedia]) -> Optional[str]
     if media.type == "photo":
         return media.url
     return media.thumb or None
-
-
-async def get_user_settings(message: types.Message):
-    return await db.user_settings(resolve_settings_target_id(message))
-
 
 class InstagramService:
 
@@ -348,7 +343,7 @@ async def process_instagram(message: types.Message, direct_url: Optional[str] = 
             url = strip_instagram_url(url_match.group(0))
 
         logging.info("Instagram request: user_id=%s url=%s", message.from_user.id, url)
-        user_settings = await get_user_settings(message)
+        user_settings = await load_user_settings(db, message)
         await react_to_message(message, "👾", business_id=business_id)
 
         data = await inst_service.fetch_data(url)
@@ -410,7 +405,6 @@ async def process_instagram_video(message: types.Message, data: InstagramVideo, 
         status_message = await message.answer(bm.downloading_video_status())
 
     db_file_id = await db.get_file_id(db_video_url)
-    progress_state = {"last": 0.0}
     download_path: Optional[str] = None
 
     try:
@@ -434,19 +428,14 @@ async def process_instagram_video(message: types.Message, data: InstagramVideo, 
             await maybe_delete_user_message(message, user_settings["delete_message"])
             return
 
-        async def on_progress(progress: DownloadProgress):
-            now = time.monotonic()
-            if not progress.done and now - progress_state["last"] < 1.0:
-                return
-            progress_state["last"] = now
-            await safe_edit_text(status_message, build_progress_status("Instagram video", progress))
+        async def _edit_status(text: str) -> None:
+            await safe_edit_text(status_message, text)
 
-        async def on_retry(failed_attempt: int, total_attempts: int, _error):
-            if show_service_status and failed_attempt >= 2:
-                await safe_edit_text(
-                    status_message,
-                    bm.retrying_again_status(failed_attempt + 1, total_attempts),
-                )
+        on_progress = make_status_text_progress_updater("Instagram video", _edit_status)
+        on_retry = make_retry_status_notifier(
+            _edit_status,
+            enabled=show_service_status,
+        )
 
         metrics = await inst_service.download_media(
             media.url,
@@ -722,21 +711,15 @@ async def download_instagram_audio_callback(call: types.CallbackQuery):
         audio_item = data.media_list[0]
         timestamp = datetime.datetime.now().strftime("%Y%m%d%H%M%S")
         download_name = f"{data.id}_{timestamp}_instagram_audio.mp3"
-        progress_state = {"last": 0.0}
 
-        async def on_progress(progress: DownloadProgress):
-            now = time.monotonic()
-            if not progress.done and now - progress_state["last"] < 1.0:
-                return
-            progress_state["last"] = now
-            await safe_edit_text(status_message, build_progress_status("Instagram audio", progress))
+        async def _edit_status(text: str) -> None:
+            await safe_edit_text(status_message, text)
 
-        async def on_retry(failed_attempt: int, total_attempts: int, _error):
-            if show_service_status and failed_attempt >= 2:
-                await safe_edit_text(
-                    status_message,
-                    bm.retrying_again_status(failed_attempt + 1, total_attempts),
-                )
+        on_progress = make_status_text_progress_updater("Instagram audio", _edit_status)
+        on_retry = make_retry_status_notifier(
+            _edit_status,
+            enabled=show_service_status,
+        )
 
         metrics = await inst_service.download_media(
             audio_item.url,
@@ -1058,16 +1041,10 @@ async def _send_inline_instagram_video(
 
             timestamp = datetime.datetime.now().strftime("%Y%m%d%H%M%S")
             download_name = f"{data.id}_{timestamp}_instagram_video.mp4"
-            progress_state = {"last": 0.0}
 
             await _edit_inline_status(bm.downloading_video_status())
 
-            async def on_progress(progress: DownloadProgress):
-                now = time.monotonic()
-                if not progress.done and now - progress_state["last"] < 1.0:
-                    return
-                progress_state["last"] = now
-                await _edit_inline_status(build_progress_status("Instagram video", progress))
+            on_progress = make_status_text_progress_updater("Instagram video", _edit_inline_status)
 
             metrics = await inst_service.download_media(
                 media.url,

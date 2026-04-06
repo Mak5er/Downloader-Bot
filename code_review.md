@@ -32,7 +32,7 @@
 
 | Severity | Файл / рядок | Проблема | Рекомендація |
 |---|---|---|---|
-| Medium | `handlers/tiktok.py:175`, `handlers/instagram.py:155`, `handlers/pinterest.py:213`, `handlers/soundcloud.py:184` | Дублюється однакова логіка `get_user_settings`. Подібне дублювання є і в inline-send flow, media upload flow, status-message flow. Це збільшує вартість змін і ризик роз'їзду поведінки між платформами. | Винести спільні helper/service функції для settings, queue/progress handling, upload/caching, inline token lifecycle. |
+| Medium | `handlers/tiktok.py`, `handlers/instagram.py`, `handlers/pinterest.py`, `handlers/twitter.py`, `handlers/youtube.py`, `handlers/soundcloud.py` | Після винесення shared helpers для resolved user settings, throttled progress updates і retry-status callbacks ще лишається дублювання у media upload/caching та частині inline delivery flow. Воно все ще збільшує вартість змін і ризик роз'їзду поведінки між платформами. | Продовжити уніфікацію навколо спільного upload/cache/send pipeline і менших reusable delivery helper-функцій. |
 | Medium | `handlers/admin.py`, `handlers/user.py`, `handlers/tiktok.py`, `handlers/instagram.py`, `handlers/twitter.py`, `handlers/pinterest.py`, `handlers/soundcloud.py`, `utils/download_manager.py` | По коду багато широких `except Exception`, часто без переведення в чіткий доменний результат. Через це важко відрізнити реальну бізнес-помилку від дефекту в коді. | Залишати broad catch тільки на boundary layer; усередині сервісів ловити конкретні винятки і логувати структуровано. |
 
 ## 3. Потенційні баги
@@ -71,7 +71,7 @@
 ### Бажано
 
 1. Розбити великі platform handlers на менші модулі.
-2. Уніфікувати дубльовану логіку settings/progress/upload/inline flow.
+2. Далі уніфікувати дубльовану логіку upload/caching/delivery flow між платформами.
 3. Перейти з `create_all` на повноцінний Alembic-first lifecycle.
 4. Прибрати `from main import ...` через окремий app context / dependency container.
 

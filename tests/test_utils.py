@@ -1,3 +1,4 @@
+import itertools
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -5,6 +6,7 @@ import messages as bm
 import pytest
 
 from handlers import utils
+from utils.download_manager import DownloadProgress
 
 
 @pytest.mark.asyncio
@@ -236,3 +238,84 @@ async def test_safe_edit_inline_text_skips_identical_payloads():
         inline_message_id="inline-1",
         parse_mode="HTML",
     )
+
+
+@pytest.mark.asyncio
+async def test_load_user_settings_uses_private_user_id():
+    db_service = SimpleNamespace(user_settings=AsyncMock(return_value={"captions": "on"}))
+    message = SimpleNamespace(
+        chat=SimpleNamespace(id=200, type="private"),
+        from_user=SimpleNamespace(id=100),
+    )
+
+    result = await utils.load_user_settings(db_service, message)
+
+    assert result == {"captions": "on"}
+    db_service.user_settings.assert_awaited_once_with(100)
+
+
+@pytest.mark.asyncio
+async def test_load_user_settings_uses_group_chat_id():
+    db_service = SimpleNamespace(user_settings=AsyncMock(return_value={"captions": "off"}))
+    message = SimpleNamespace(
+        chat=SimpleNamespace(id=-555, type="supergroup"),
+        from_user=SimpleNamespace(id=100),
+    )
+
+    result = await utils.load_user_settings(db_service, message)
+
+    assert result == {"captions": "off"}
+    db_service.user_settings.assert_awaited_once_with(-555)
+
+
+@pytest.mark.asyncio
+async def test_make_status_text_progress_updater_throttles_intermediate_updates(monkeypatch):
+    update_text = AsyncMock()
+    monotonic_values = itertools.chain([10.0, 10.2, 10.4], itertools.repeat(10.4))
+    monkeypatch.setattr(utils.time, "monotonic", lambda: next(monotonic_values))
+    on_progress = utils.make_status_text_progress_updater("Test media", update_text)
+
+    await on_progress(
+        DownloadProgress(
+            downloaded_bytes=10,
+            total_bytes=100,
+            elapsed=1.0,
+            speed_bps=10.0,
+            eta_seconds=9.0,
+            done=False,
+        )
+    )
+    await on_progress(
+        DownloadProgress(
+            downloaded_bytes=20,
+            total_bytes=100,
+            elapsed=2.0,
+            speed_bps=10.0,
+            eta_seconds=8.0,
+            done=False,
+        )
+    )
+    await on_progress(
+        DownloadProgress(
+            downloaded_bytes=100,
+            total_bytes=100,
+            elapsed=3.0,
+            speed_bps=30.0,
+            eta_seconds=0.0,
+            done=True,
+        )
+    )
+
+    assert update_text.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_make_retry_status_notifier_respects_threshold(monkeypatch):
+    update_text = AsyncMock()
+    monkeypatch.setattr(utils.bm, "retrying_again_status", lambda attempt, total: f"retry {attempt}/{total}")
+    notifier = utils.make_retry_status_notifier(update_text)
+
+    await notifier(1, 4, RuntimeError("skip"))
+    await notifier(2, 4, RuntimeError("show"))
+
+    update_text.assert_awaited_once_with("retry 3/4")

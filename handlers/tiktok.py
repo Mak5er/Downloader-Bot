@@ -21,7 +21,6 @@ from handlers.user import update_info
 from handlers.utils import (
     build_inline_album_result,
     build_request_id,
-    build_progress_status,
     build_queue_busy_text,
     build_rate_limit_text,
     build_start_deeplink_url,
@@ -30,6 +29,9 @@ from handlers.utils import (
     get_message_text,
     handle_download_error,
     handle_video_too_large,
+    load_user_settings,
+    make_retry_status_notifier,
+    make_status_text_progress_updater,
     maybe_delete_user_message,
     react_to_message,
     remove_file,
@@ -40,7 +42,6 @@ from handlers.utils import (
     safe_answer_inline_query,
     send_chat_action_if_needed,
     retry_async_operation,
-    resolve_settings_target_id,
     with_callback_logging,
     with_chosen_inline_logging,
     with_inline_query_logging,
@@ -170,10 +171,6 @@ async def process_tiktok_url_async(text: str) -> str:
 
 def get_video_id_from_url(url: str) -> str:
     return url.split('/')[-1].split('?')[0]
-
-
-async def get_user_settings(message: types.Message):
-    return await db.user_settings(resolve_settings_target_id(message))
 
 
 @dataclass
@@ -505,7 +502,7 @@ async def process_tiktok(message: types.Message, direct_url: Optional[str] = Non
         # Profile lookup: allow messages like "@username" without a URL.
         if direct_url is None and re.fullmatch(r"@[\w.]{1,32}", stripped):
             await react_to_message(message, "рџ‘ѕ", business_id=business_id)
-            settings = await get_user_settings(message)
+            settings = await load_user_settings(db, message)
             await process_tiktok_profile(message, stripped, bot_url, settings["captions"])
             return
 
@@ -532,7 +529,7 @@ async def process_tiktok(message: types.Message, direct_url: Optional[str] = Non
         data = await fetch_tiktok_data_with_retry(url, on_retry=_on_retry_fetch)
         images = data.get("data", {}).get("images", [])
 
-        user_settings = await get_user_settings(message)
+        user_settings = await load_user_settings(db, message)
 
         logging.debug(
             "TikTok content classification: has_images=%s is_profile=%s",
@@ -583,7 +580,6 @@ async def process_tiktok_video(message: types.Message, data: dict, bot_url: str,
 
     db_file_id = await db.get_file_id(db_video_url)
     download_path: Optional[str] = None
-    progress_throttle_state = {"last": 0.0}
     request_id = f"tiktok_video:{message.chat.id}:{message.message_id}:{info.id}"
     size_hint = get_tiktok_size_hint(data)
 
@@ -609,19 +605,14 @@ async def process_tiktok_video(message: types.Message, data: dict, bot_url: str,
             await maybe_delete_user_message(message, user_settings["delete_message"])
             return
 
-        async def on_progress(progress: DownloadProgress):
-            now = time.monotonic()
-            if not progress.done and now - progress_throttle_state["last"] < 1.0:
-                return
-            progress_throttle_state["last"] = now
-            await safe_edit_text(status_message, build_progress_status("TikTok video", progress))
+        async def _edit_status(text: str) -> None:
+            await safe_edit_text(status_message, text)
 
-        async def _on_retry_download(failed_attempt: int, total_attempts: int, _error):
-            if show_service_status and failed_attempt >= 2:
-                await safe_edit_text(
-                    status_message,
-                    bm.retrying_again_status(failed_attempt + 1, total_attempts),
-                )
+        on_progress = make_status_text_progress_updater("TikTok video", _edit_status)
+        on_retry_download = make_retry_status_notifier(
+            _edit_status,
+            enabled=show_service_status,
+        )
 
         metrics = await asyncio.wait_for(
             tiktok_service.download_video(
@@ -631,7 +622,7 @@ async def process_tiktok_video(message: types.Message, data: dict, bot_url: str,
                 request_id=request_id,
                 size_hint=size_hint,
                 on_progress=on_progress,
-                on_retry=_on_retry_download,
+                on_retry=on_retry_download,
             ),
             timeout=420.0,
         )
@@ -884,21 +875,15 @@ async def download_tiktok_mp3_callback(call: types.CallbackQuery):
 
         timestamp = datetime.datetime.now().strftime("%Y%m%d%H%M%S")
         download_name = f"{info.id}_{timestamp}_tiktok_audio.mp3"
-        progress_state = {"last": 0.0}
 
-        async def on_progress(progress: DownloadProgress):
-            now = time.monotonic()
-            if not progress.done and now - progress_state["last"] < 1.0:
-                return
-            progress_state["last"] = now
-            await safe_edit_text(status_message, build_progress_status("TikTok audio", progress))
+        async def _edit_status(text: str) -> None:
+            await safe_edit_text(status_message, text)
 
-        async def _on_retry_download(failed_attempt: int, total_attempts: int, _error):
-            if show_service_status and failed_attempt >= 2:
-                await safe_edit_text(
-                    status_message,
-                    bm.retrying_again_status(failed_attempt + 1, total_attempts),
-                )
+        on_progress = make_status_text_progress_updater("TikTok audio", _edit_status)
+        on_retry_download = make_retry_status_notifier(
+            _edit_status,
+            enabled=show_service_status,
+        )
 
         metrics = await tiktok_service.download_audio(
             info.music_play_url,
@@ -906,7 +891,7 @@ async def download_tiktok_mp3_callback(call: types.CallbackQuery):
             user_id=call.from_user.id,
             request_id=request_id,
             on_progress=on_progress,
-            on_retry=_on_retry_download,
+            on_retry=on_retry_download,
         )
         if not metrics:
             await handle_download_error(call.message)
@@ -1207,22 +1192,13 @@ async def _send_inline_tiktok_video(
 
             timestamp = datetime.datetime.now().strftime("%Y%m%d%H%M%S")
             download_name = f"{info.id}_{timestamp}_tiktok_video.mp4"
-            progress_state = {"last": 0.0}
             request_id = f"tiktok_inline:{request.owner_user_id}:{request_event_id}:{info.id}"
             size_hint = get_tiktok_size_hint(data)
 
             await _edit_inline_status(bm.downloading_video_status())
 
-            async def on_progress(progress: DownloadProgress):
-                now = time.monotonic()
-                if not progress.done and now - progress_state["last"] < 1.0:
-                    return
-                progress_state["last"] = now
-                await _edit_inline_status(build_progress_status("TikTok video", progress))
-
-            async def _on_retry_download(failed_attempt: int, total_attempts: int, _error):
-                if failed_attempt >= 2:
-                    await _edit_inline_status(bm.retrying_again_status(failed_attempt + 1, total_attempts))
+            on_progress = make_status_text_progress_updater("TikTok video", _edit_inline_status)
+            on_retry_download = make_retry_status_notifier(_edit_inline_status)
 
             metrics = await asyncio.wait_for(
                 tiktok_service.download_video(
@@ -1232,7 +1208,7 @@ async def _send_inline_tiktok_video(
                     request_id=request_id,
                     size_hint=size_hint,
                     on_progress=on_progress,
-                    on_retry=_on_retry_download,
+                    on_retry=on_retry_download,
                 ),
                 timeout=420.0,
             )

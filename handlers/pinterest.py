@@ -1,7 +1,6 @@
 import asyncio
 import datetime
 import re
-import time
 from dataclasses import dataclass
 from typing import Optional
 from urllib.parse import urlparse, urlunparse
@@ -17,13 +16,15 @@ from handlers.user import update_info
 from handlers.utils import (
     build_inline_album_result,
     build_request_id,
-    build_progress_status,
     build_queue_busy_text,
     build_rate_limit_text,
     build_start_deeplink_url,
     get_bot_url,
     get_message_text,
     handle_download_error,
+    load_user_settings,
+    make_retry_status_notifier,
+    make_status_text_progress_updater,
     maybe_delete_user_message,
     react_to_message,
     remove_file,
@@ -34,7 +35,6 @@ from handlers.utils import (
     safe_edit_inline_text,
     safe_answer_inline_query,
     send_chat_action_if_needed,
-    resolve_settings_target_id,
     with_callback_logging,
     with_chosen_inline_logging,
     with_inline_query_logging,
@@ -209,11 +209,6 @@ def parse_pinterest_post(data: dict) -> Optional[PinterestPost]:
         media_list=media_list,
     )
 
-
-async def get_user_settings(message: types.Message):
-    return await db.user_settings(resolve_settings_target_id(message))
-
-
 class PinterestService:
     def __init__(self, output_dir: str) -> None:
         config = DownloadConfig(
@@ -309,7 +304,7 @@ async def process_pinterest(message: types.Message, direct_url: Optional[str] = 
         logging.info("Pinterest request: user_id=%s url=%s", message.from_user.id, source_url)
         await send_analytics(user_id=message.from_user.id, chat_type=message.chat.type, action_name="pinterest_media")
         await react_to_message(message, "\U0001F47E", business_id=business_id)
-        user_settings = await get_user_settings(message)
+        user_settings = await load_user_settings(db, message)
 
         post = await pinterest_service.fetch_post(source_url)
         if not post or not post.media_list:
@@ -353,7 +348,6 @@ async def process_pinterest_single_video(
     if business_id is None:
         status_message = await message.answer(bm.downloading_video_status())
     db_file_id = await db.get_file_id(source_url)
-    progress_state = {"last": 0.0}
     download_path: Optional[str] = None
     timestamp = datetime.datetime.now().strftime("%Y%m%d%H%M%S")
     download_name = f"{post.id}_{timestamp}_pinterest_video.mp4"
@@ -374,19 +368,14 @@ async def process_pinterest_single_video(
             await maybe_delete_user_message(message, user_settings["delete_message"])
             return
 
-        async def on_progress(progress: DownloadProgress):
-            now = time.monotonic()
-            if not progress.done and now - progress_state["last"] < 1.0:
-                return
-            progress_state["last"] = now
-            await safe_edit_text(status_message, build_progress_status("Pinterest video", progress))
+        async def _edit_status(text: str) -> None:
+            await safe_edit_text(status_message, text)
 
-        async def on_retry(failed_attempt: int, total_attempts: int, _error):
-            if business_id is None and failed_attempt >= 2:
-                await safe_edit_text(
-                    status_message,
-                    bm.retrying_again_status(failed_attempt + 1, total_attempts),
-                )
+        on_progress = make_status_text_progress_updater("Pinterest video", _edit_status)
+        on_retry = make_retry_status_notifier(
+            _edit_status,
+            enabled=business_id is None,
+        )
 
         metrics = await pinterest_service.download_media(
             media.url,
@@ -902,15 +891,9 @@ async def _send_inline_pinterest_video(
 
             timestamp = datetime.datetime.now().strftime("%Y%m%d%H%M%S")
             filename = f"{post.id}_{timestamp}_pinterest_inline.mp4"
-            progress_state = {"last": 0.0}
             await _edit_inline_status(bm.downloading_video_status())
 
-            async def on_progress(progress: DownloadProgress):
-                now = time.monotonic()
-                if not progress.done and now - progress_state["last"] < 1.0:
-                    return
-                progress_state["last"] = now
-                await _edit_inline_status(build_progress_status("Pinterest video", progress))
+            on_progress = make_status_text_progress_updater("Pinterest video", _edit_inline_status)
 
             metrics = await pinterest_service.download_media(
                 first_item.url,
