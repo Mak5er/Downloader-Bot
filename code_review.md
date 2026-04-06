@@ -45,7 +45,6 @@
 
 | Severity | Файл / рядок | Проблема | Рекомендація |
 |---|---|---|---|
-| Medium | `requirements.txt:1-14` | Залежності не зафіксовані по версіях. Це відкриває supply-chain та reproducibility ризики: одна й та сама ревізія коду сьогодні й завтра може отримати різні пакети. | Зафіксувати версії (`==` або принаймні контрольовані діапазони), додати lockfile/constraints та регулярний dependency update process. |
 
 ## 5. Продуктивність
 
@@ -77,8 +76,7 @@
 2. Уніфікувати дубльовану логіку settings/progress/upload/inline flow.
 3. Перейти з `create_all` на повноцінний Alembic-first lifecycle.
 4. Видалити або винести мертвий код (`run_alembic_migration`, `get_session`).
-5. Зафіксувати версії залежностей і додати регулярний dependency audit.
-6. Прибрати `from main import ...` через окремий app context / dependency container.
+5. Прибрати `from main import ...` через окремий app context / dependency container.
 
 ## Підсумок
 
