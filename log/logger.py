@@ -30,9 +30,24 @@ _DEFAULT_TEXT_FIELDS = {
     "chat_type": "-",
     "task_name": "-",
     "duration_ms": "-",
+    "extra_fields": "-",
+    "extra_fields_block": "",
 }
 
 _STANDARD_RECORD_ATTRS = set(vars(logging.makeLogRecord({})).keys()) | {"message", "asctime"}
+_TEXT_RESERVED_FIELDS = _STANDARD_RECORD_ATTRS | {
+    "service",
+    "flow",
+    "request_id",
+    "event_name",
+    "kind",
+    "user_id",
+    "chat_type",
+    "task_name",
+    "duration_ms",
+    "extra_fields",
+    "extra_fields_block",
+}
 
 
 def _sanitize_field_key(key: str) -> str:
@@ -48,6 +63,25 @@ def _sanitize_mapping(values: dict[str, Any]) -> dict[str, Any]:
             continue
         sanitized[_sanitize_field_key(str(key))] = value
     return sanitized
+
+
+def _serialize_text_field_value(value: Any) -> str:
+    if isinstance(value, str):
+        if value and all(ch not in value for ch in (' ', '"', "\n", "\r", "\t")):
+            return value
+        return json.dumps(value, ensure_ascii=False)
+    if isinstance(value, (int, float, bool)):
+        return str(value)
+    return json.dumps(value, ensure_ascii=False, sort_keys=True, default=str)
+
+
+def _extract_dynamic_text_fields(record: logging.LogRecord) -> dict[str, Any]:
+    return {
+        key: value
+        for key, value in record.__dict__.items()
+        if key not in _TEXT_RESERVED_FIELDS
+        and value not in (None, "", "-")
+    }
 
 
 class LocalTimeFormatter(logging.Formatter):
@@ -79,13 +113,7 @@ class JsonLinesFormatter(logging.Formatter):
         if duration_ms not in (None, "-", ""):
             payload["duration_ms"] = duration_ms
 
-        extra = {
-            key: value
-            for key, value in record.__dict__.items()
-            if key not in _STANDARD_RECORD_ATTRS
-            and key not in payload
-            and value not in (None, "", "-")
-        }
+        extra = _extract_dynamic_text_fields(record)
         if extra:
             payload["extra"] = extra
 
@@ -118,6 +146,17 @@ class ContextFilter(logging.Filter):
             record.duration_ms = f"{duration_ms:.2f}"
         elif duration_ms in (None, ""):
             record.duration_ms = "-"
+
+        dynamic_fields = _extract_dynamic_text_fields(record)
+        if dynamic_fields:
+            record.extra_fields = " ".join(
+                f"{key}={_serialize_text_field_value(value)}"
+                for key, value in sorted(dynamic_fields.items())
+            )
+            record.extra_fields_block = f" {record.extra_fields}"
+        else:
+            record.extra_fields = "-"
+            record.extra_fields_block = ""
 
         return True
 
@@ -200,13 +239,15 @@ class ContextLoggerAdapter(logging.LoggerAdapter):
 
 CONSOLE_FORMAT = (
     "%(log_color)s%(asctime)s | %(levelname)s | %(name)s | "
-    "%(service)s | %(flow)s | %(request_id)s | %(kind)s | %(event_name)s | %(message)s%(reset)s"
+    "service=%(service)s flow=%(flow)s request_id=%(request_id)s "
+    "event=%(event_name)s kind=%(kind)s user_id=%(user_id)s chat_type=%(chat_type)s "
+    "task=%(task_name)s duration_ms=%(duration_ms)s%(extra_fields_block)s | %(message)s%(reset)s"
 )
 FILE_FORMAT = (
     "%(asctime)s | %(levelname)s | %(name)s | "
     "service=%(service)s flow=%(flow)s request_id=%(request_id)s "
     "event=%(event_name)s kind=%(kind)s user_id=%(user_id)s chat_type=%(chat_type)s "
-    "task=%(task_name)s duration_ms=%(duration_ms)s | %(message)s"
+    "task=%(task_name)s duration_ms=%(duration_ms)s%(extra_fields_block)s | %(message)s"
 )
 
 
