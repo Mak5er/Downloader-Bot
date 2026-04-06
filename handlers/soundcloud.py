@@ -1,8 +1,6 @@
 import datetime
 import re
-from dataclasses import dataclass
 from typing import Optional
-from urllib.parse import urlparse, urlunparse
 
 from aiogram import F, Router, types
 from aiogram.types import FSInputFile
@@ -42,13 +40,9 @@ from log.logger import logger as logging
 from app_context import bot, db, send_analytics
 from utils.cobalt_client import fetch_cobalt_data
 from utils.download_manager import (
-    DownloadConfig,
     DownloadError,
-    DownloadMetrics,
-    DownloadProgress,
     DownloadQueueBusyError,
     DownloadRateLimitError,
-    ResilientDownloader,
     log_download_metrics,
 )
 from services.inline.service_icons import get_inline_service_icon
@@ -58,6 +52,7 @@ from services.inline.video_requests import (
     create_inline_video_request,
     reset_inline_video_request,
 )
+from services.platforms import soundcloud_media as soundcloud_platform
 
 logging = logging.bind(service="soundcloud")
 
@@ -69,186 +64,19 @@ SOUNDCLOUD_URL_REGEX = (
     r"https?://soundcloud\.app\.goo\.gl/\S+)"
 )
 
+SoundCloudTrack = soundcloud_platform.SoundCloudTrack
+strip_soundcloud_url = soundcloud_platform.strip_soundcloud_url
+parse_soundcloud_track = soundcloud_platform.parse_soundcloud_track
 
-@dataclass
-class SoundCloudTrack:
-    id: str
-    source_url: str
-    audio_url: str
-    title: str
-    artist: str
-    thumbnail_url: Optional[str] = None
-
-
-def strip_soundcloud_url(url: str) -> str:
-    try:
-        parsed = urlparse(url)
-    except Exception:
-        return url
-    return urlunparse((parsed.scheme, parsed.netloc, parsed.path, parsed.params, "", ""))
-
-
-def _looks_like_image_url(url: str) -> bool:
-    probe = (url or "").lower().split("?", 1)[0]
-    return probe.endswith((".jpg", ".jpeg", ".png", ".webp", ".avif"))
-
-
-def _looks_like_audio_url(url: str) -> bool:
-    probe = (url or "").lower().split("?", 1)[0]
-    return probe.endswith((".mp3", ".m4a", ".aac", ".ogg", ".wav", ".opus"))
-
-
-def _derive_title(filename: Optional[str]) -> str:
-    if not filename:
-        return "SoundCloud Audio"
-    stem = filename.rsplit("/", 1)[-1].rsplit(".", 1)[0]
-    stem = stem.replace("_", " ").replace("-", " ").strip()
-    return stem or "SoundCloud Audio"
-
-
-def parse_soundcloud_track(data: dict, source_url: str) -> Optional[SoundCloudTrack]:
-    if not isinstance(data, dict):
-        return None
-
-    status = data.get("status")
-    if status == "error":
-        error = data.get("error") or {}
-        logging.error(
-            "Cobalt SoundCloud API error: code=%s context=%s",
-            error.get("code") if isinstance(error, dict) else None,
-            error.get("context") if isinstance(error, dict) else None,
-        )
-        return None
-
-    audio_url: Optional[str] = None
-    thumb_url: Optional[str] = None
-    title = _derive_title(data.get("filename"))
-    artist = ""
-
-    if status in {"tunnel", "redirect"}:
-        maybe_url = data.get("url")
-        if isinstance(maybe_url, str) and maybe_url:
-            audio_url = maybe_url
-
-    elif status == "picker":
-        maybe_audio = data.get("audio")
-        if isinstance(maybe_audio, str) and maybe_audio:
-            audio_url = maybe_audio
-        picker_items = data.get("picker") or []
-        for item in picker_items:
-            if not isinstance(item, dict):
-                continue
-            maybe_thumb = item.get("thumb")
-            if isinstance(maybe_thumb, str) and maybe_thumb and not thumb_url:
-                thumb_url = maybe_thumb
-
-    elif status == "local-processing":
-        output = data.get("output") or {}
-        metadata = output.get("metadata") if isinstance(output, dict) else {}
-        if isinstance(metadata, dict):
-            title = metadata.get("title") or title
-            artist = metadata.get("artist") or ""
-
-        tunnels = data.get("tunnel") or []
-        for tunnel_url in tunnels:
-            if not isinstance(tunnel_url, str) or not tunnel_url:
-                continue
-            if _looks_like_image_url(tunnel_url):
-                if not thumb_url:
-                    thumb_url = tunnel_url
-                continue
-            if _looks_like_audio_url(tunnel_url) and not audio_url:
-                audio_url = tunnel_url
-                continue
-            if not audio_url:
-                audio_url = tunnel_url
-
-    else:
-        logging.error("Unsupported Cobalt SoundCloud response status: status=%s payload=%s", status, data)
-        return None
-
-    if not audio_url:
-        logging.error("Cobalt SoundCloud response has no audio URL: status=%s payload=%s", status, data)
-        return None
-
-    return SoundCloudTrack(
-        id=str(int(datetime.datetime.now().timestamp())),
-        source_url=source_url,
-        audio_url=audio_url,
-        title=title,
-        artist=artist,
-        thumbnail_url=thumb_url,
-    )
-
-class SoundCloudService:
+class SoundCloudService(soundcloud_platform.SoundCloudMediaService):
     def __init__(self, output_dir: str) -> None:
-        config = DownloadConfig(
-            chunk_size=1024 * 1024,
-            multipart_threshold=16 * 1024 * 1024,
-            max_workers=6,
-            retry_backoff=0.8,
+        super().__init__(
+            output_dir,
+            cobalt_api_url=COBALT_API_URL,
+            cobalt_api_key=COBALT_API_KEY,
+            fetch_cobalt_data_func=lambda *args, **kwargs: fetch_cobalt_data(*args, **kwargs),
+            retry_async_operation_func=lambda *args, **kwargs: retry_async_operation(*args, **kwargs),
         )
-        self._downloader = ResilientDownloader(output_dir, config=config, source="soundcloud")
-
-    async def fetch_track(self, url: str) -> Optional[SoundCloudTrack]:
-        payload = {
-            "url": url,
-            "downloadMode": "audio",
-            "audioFormat": "mp3",
-            "audioBitrate": "128",
-            "alwaysProxy": True,
-            "localProcessing": "preferred",
-            "disableMetadata": False,
-        }
-        data = await fetch_cobalt_data(
-            COBALT_API_URL,
-            COBALT_API_KEY,
-            payload,
-            source="soundcloud",
-            timeout=20,
-            attempts=3,
-            retry_delay=0.0,
-        )
-        if not data:
-            return None
-        return parse_soundcloud_track(data, url)
-
-    async def download_media(
-        self,
-        url: str,
-        filename: str,
-        *,
-        user_id: Optional[int] = None,
-        request_id: Optional[str] = None,
-        size_hint: Optional[int] = None,
-        on_queued=None,
-        on_progress=None,
-        on_retry=None,
-    ) -> Optional[DownloadMetrics]:
-        async def _download_once():
-            return await self._downloader.download(
-                url,
-                filename,
-                user_id=user_id,
-                request_id=request_id,
-                size_hint=size_hint,
-                on_queued=on_queued,
-                on_progress=on_progress,
-            )
-
-        try:
-            return await retry_async_operation(
-                _download_once,
-                attempts=3,
-                delay_seconds=2.0,
-                retry_on_exception=lambda exc: not isinstance(exc, (DownloadRateLimitError, DownloadQueueBusyError)),
-                on_retry=on_retry,
-            )
-        except (DownloadRateLimitError, DownloadQueueBusyError):
-            raise
-        except DownloadError as exc:
-            logging.error("Error downloading SoundCloud media: url=%s error=%s", url, exc)
-            return None
 
 
 soundcloud_service = SoundCloudService(OUTPUT_DIR)
