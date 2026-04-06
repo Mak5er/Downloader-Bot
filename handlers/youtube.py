@@ -1,9 +1,7 @@
 import asyncio
-import glob
 import os
-import time
 import re
-from typing import Any, Optional
+from typing import Optional
 
 from aiogram import types, Router, F
 from aiogram.types import FSInputFile, InlineQueryResultArticle
@@ -45,14 +43,11 @@ from handlers.utils import (
 from log.logger import logger as logging
 from app_context import bot, db, send_analytics
 from utils.download_manager import (
-    DownloadConfig,
     DownloadProgress,
     DownloadQueueBusyError,
     DownloadRateLimitError,
     DownloadTooLargeError,
     DownloadMetrics,
-    ResilientDownloader,
-    log_download_metrics,
 )
 from utils.media_cache import build_media_cache_key
 from services.inline.service_icons import get_inline_service_icon
@@ -62,39 +57,17 @@ from services.inline.video_requests import (
     create_inline_video_request,
     reset_inline_video_request,
 )
+from services.platforms import youtube_media as youtube_platform
 
 logging = logging.bind(service="youtube")
 
 MAX_FILE_SIZE = int(1.5 * 1024 * 1024 * 1024)  # 1.5 GB Telegram-safe limit
 YOUTUBE_VIDEO_URL_REGEX = r"(https?://(www\.)?(youtube|youtu|youtube-nocookie)\.(com|be)/(?!@)\S+)"
 YOUTUBE_MUSIC_URL_REGEX = r"(https?://)?music\.(youtube|youtu|youtube-nocookie)\.(com|be)/\S+"
-YTDLP_FORMAT_720 = "bestvideo[height<=720][vcodec^=avc1]+bestaudio[ext=m4a]/best[height<=720][ext=mp4]/best"
-YTDLP_SPEED_OPTS: dict[str, Any] = {
-    "quiet": True,
-    "no_warnings": True,
-    "noprogress": True,
-    "continuedl": True,
-    "overwrites": True,
-    "noplaylist": True,
-    "cachedir": False,
-    "socket_timeout": 15,
-    "retries": 2,
-    "fragment_retries": 2,
-    "concurrent_fragment_downloads": 4,
-}
 
 router = Router()
 
-youtube_downloader = ResilientDownloader(
-    OUTPUT_DIR,
-    config=DownloadConfig(
-        chunk_size=2 * 1024 * 1024,          # Larger chunks for higher throughput
-        multipart_threshold=8 * 1024 * 1024,  # Split earlier to parallelize medium files
-        max_workers=10,                      # More concurrent range requests
-        retry_backoff=0.6,                   # Slightly faster retry ramp-up
-    ),
-    source="youtube",
-)
+YTDLP_FORMAT_720 = youtube_platform.YTDLP_FORMAT_720
 
 
 def safe_int(value, default: int = 0) -> int:
@@ -114,23 +87,23 @@ def _extract_youtube_url(text: str, pattern: str) -> Optional[str]:
     return url
 
 
-def _get_youtube_thumbnail_url(yt: Optional[dict[str, Any]]) -> Optional[str]:
-    if not yt:
-        return None
-    thumbnail = yt.get("thumbnail")
-    if isinstance(thumbnail, str) and thumbnail:
-        return thumbnail
-    thumbnails = yt.get("thumbnails")
-    if isinstance(thumbnails, list):
-        for item in reversed(thumbnails):
-            if isinstance(item, dict):
-                url = item.get("url")
-                if isinstance(url, str) and url:
-                    return url
-    video_id = yt.get("id")
-    if isinstance(video_id, str) and video_id:
-        return f"https://i.ytimg.com/vi/{video_id}/hqdefault.jpg"
-    return None
+_get_youtube_thumbnail_url = youtube_platform.get_youtube_thumbnail_url
+get_video_stream = youtube_platform.get_video_stream
+get_audio_stream = youtube_platform.get_audio_stream
+_is_manifest_stream = youtube_platform.is_manifest_stream
+
+
+class YouTubeMediaService(youtube_platform.YouTubeMediaService):
+    def __init__(self, output_dir: str) -> None:
+        super().__init__(
+            output_dir,
+            retry_async_operation_func=lambda *args, **kwargs: retry_async_operation(*args, **kwargs),
+            youtube_dl_factory=lambda options: YoutubeDL(options),
+        )
+
+
+youtube_media_service = YouTubeMediaService(OUTPUT_DIR)
+youtube_downloader = youtube_media_service._downloader
 
 
 async def download_stream(
@@ -145,62 +118,21 @@ async def download_stream(
     on_progress=None,
     on_retry=None,
 ) -> Optional[DownloadMetrics]:
-    url = stream.get("url")
-    if not url:
-        logging.error("Stream missing URL for %s", source)
-        return None
-
-    headers = stream.get("http_headers") or {}
-    try:
-        kwargs = {"headers": headers}
-        if user_id is not None:
-            kwargs["user_id"] = user_id
-        if size_hint is not None:
-            kwargs["size_hint"] = size_hint
-        if max_size_bytes is not None:
-            kwargs["max_size_bytes"] = max_size_bytes
-        if on_queued is not None:
-            kwargs["on_queued"] = on_queued
-        if on_progress is not None:
-            kwargs["on_progress"] = on_progress
-
-        async def _download_once():
-            return await youtube_downloader.download(url, filename, **kwargs)
-
-        metrics = await retry_async_operation(
-            _download_once,
-            attempts=3,
-            delay_seconds=2.0,
-            retry_on_exception=lambda exc: not isinstance(exc, (DownloadRateLimitError, DownloadQueueBusyError, DownloadTooLargeError)),
-            on_retry=on_retry,
-        )
-        if metrics:
-            log_download_metrics(source, metrics)
-        return metrics
-    except (DownloadRateLimitError, DownloadQueueBusyError, DownloadTooLargeError):
-        raise
-    except Exception as exc:
-        logging.error("Failed to download stream: source=%s url=%s error=%s", source, url, exc)
-        return None
+    return await youtube_media_service.download_stream(
+        stream,
+        filename,
+        source,
+        user_id=user_id,
+        size_hint=size_hint,
+        max_size_bytes=max_size_bytes,
+        on_queued=on_queued,
+        on_progress=on_progress,
+        on_retry=on_retry,
+    )
 
 
 async def download_with_ytdlp(url: str, filename: str) -> Optional[str]:
-    """Fallback for cases when direct stream download produces invalid media."""
-    out_path = os.path.join(OUTPUT_DIR, filename)
-    os.makedirs(os.path.dirname(out_path) or OUTPUT_DIR, exist_ok=True)
-    ydl_opts = {
-        **YTDLP_SPEED_OPTS,
-        "format": YTDLP_FORMAT_720,
-        "outtmpl": out_path,
-        "merge_output_format": "mp4",
-    }
-    try:
-        await asyncio.to_thread(lambda: YoutubeDL(ydl_opts).download([url]))
-        logging.info("yt-dlp fallback succeeded: url=%s path=%s", url, out_path)
-        return out_path
-    except Exception as exc:  # pragma: no cover - defensive
-        logging.error("yt-dlp fallback failed: url=%s error=%s", url, exc)
-        return None
+    return await youtube_media_service.download_with_ytdlp(url, filename)
 
 
 async def download_with_ytdlp_metrics(
@@ -211,34 +143,13 @@ async def download_with_ytdlp_metrics(
     *,
     max_filesize: Optional[int] = None,
 ) -> Optional[DownloadMetrics]:
-    """Download via yt-dlp and return DownloadMetrics for unified logging."""
-    out_path = os.path.join(OUTPUT_DIR, filename)
-    os.makedirs(os.path.dirname(out_path) or OUTPUT_DIR, exist_ok=True)
-    ydl_opts = {
-        **YTDLP_SPEED_OPTS,
-        "format": format_selector,
-        "outtmpl": out_path,
-        "merge_output_format": "mp4",
-    }
-    if max_filesize is not None:
-        ydl_opts["max_filesize"] = int(max_filesize)
-    start = time.monotonic()
-    try:
-        await asyncio.to_thread(lambda: YoutubeDL(ydl_opts).download([url]))
-        elapsed = time.monotonic() - start
-        metrics = DownloadMetrics(
-            url=url,
-            path=out_path,
-            size=os.path.getsize(out_path),
-            elapsed=elapsed,
-            used_multipart=False,
-            resumed=False,
-        )
-        log_download_metrics(source, metrics)
-        return metrics
-    except Exception as exc:
-        logging.error("yt-dlp download failed: source=%s url=%s error=%s", source, url, exc)
-        return None
+    return await youtube_media_service.download_with_ytdlp_metrics(
+        url,
+        filename,
+        format_selector,
+        source,
+        max_filesize=max_filesize,
+    )
 
 
 async def download_mp3_with_ytdlp_metrics(
@@ -248,120 +159,20 @@ async def download_mp3_with_ytdlp_metrics(
     *,
     max_filesize: Optional[int] = None,
 ) -> Optional[DownloadMetrics]:
-    """Download audio via yt-dlp and return MP3 metrics."""
-    base_path = os.path.join(OUTPUT_DIR, base_name)
-    out_template = f"{base_path}.%(ext)s"
-    final_path = f"{base_path}.mp3"
-    ydl_opts = {
-        **YTDLP_SPEED_OPTS,
-        "format": "bestaudio/best",
-        "outtmpl": out_template,
-        "postprocessors": [{
-            "key": "FFmpegExtractAudio",
-            "preferredcodec": "mp3",
-            "preferredquality": "192",
-        }],
-        "merge_output_format": "mp3",
-    }
-    if max_filesize is not None:
-        ydl_opts["max_filesize"] = int(max_filesize)
-    start = time.monotonic()
-    try:
-        await asyncio.to_thread(lambda: YoutubeDL(ydl_opts).download([url]))
-        elapsed = time.monotonic() - start
-        resolved_path = final_path if os.path.exists(final_path) else None
-        if not resolved_path:
-            matches = glob.glob(f"{base_path}.*")
-            resolved_path = matches[0] if matches else None
-        if not resolved_path or not os.path.exists(resolved_path):
-            logging.error("yt-dlp mp3 output missing: url=%s base=%s", url, base_path)
-            return None
-        metrics = DownloadMetrics(
-            url=url,
-            path=resolved_path,
-            size=os.path.getsize(resolved_path),
-            elapsed=elapsed,
-            used_multipart=False,
-            resumed=False,
-        )
-        log_download_metrics(source, metrics)
-        return metrics
-    except Exception as exc:
-        logging.error("yt-dlp mp3 download failed: source=%s url=%s error=%s", source, url, exc)
-        return None
+    return await youtube_media_service.download_mp3_with_ytdlp_metrics(
+        url,
+        base_name,
+        source,
+        max_filesize=max_filesize,
+    )
 
 
 async def download_media(url: str, filename: str, format_candidates: list[str]) -> bool:
-    """
-    Backward-compatible wrapper kept for tests; downloads the provided URL with the shared downloader.
-    """
-    metrics = await download_stream({"url": url}, filename, "youtube_legacy")
-    return metrics is not None
+    return await youtube_media_service.download_media(url, filename, format_candidates)
 
 
 def get_youtube_video(url):
-    try:
-        ydl_opts = {
-            'quiet': True,
-            'no_warnings': True,
-            'skip_download': True,
-        }
-        with YoutubeDL(ydl_opts) as ydl:
-            return ydl.extract_info(url, download=False)
-    except DownloadError as e:
-        logging.error("Error fetching YouTube info: %s", e)
-        return None
-
-
-def get_video_stream(yt: dict, max_height: int = 720) -> dict | None:
-    formats = yt.get("formats", [])
-    progressive = [
-        f for f in formats
-        if f.get("vcodec") != "none"
-           and f.get("acodec") != "none"
-           and f.get("ext") == "mp4"
-           and int(f.get("height") or 0) <= max_height
-    ]
-    progressive.sort(key=lambda x: int(x.get("height", 0)), reverse=True)
-    if progressive:
-        best = progressive[0]
-        best["webpage_url"] = yt["webpage_url"]
-        return best
-
-    video_only = [
-        f for f in formats
-        if f.get("vcodec") != "none"
-           and f.get("acodec") == "none"
-           and f.get("ext") in ("mp4", "webm")
-           and int(f.get("height") or 0) <= max_height
-    ]
-    video_only.sort(key=lambda x: int(x.get("height", 0)), reverse=True)
-    if video_only:
-        best = video_only[0]
-        best["webpage_url"] = yt["webpage_url"]
-        return best
-
-    return None
-
-
-def get_audio_stream(yt: dict) -> dict | None:
-    formats = yt.get("formats", [])
-    audio_streams = [
-        f for f in formats
-        if f.get("vcodec") == "none" and f.get("ext") in ("m4a", "mp4")
-    ]
-    audio_streams.sort(key=lambda f: float(f.get("abr") or 0), reverse=True)
-    best = audio_streams[0] if audio_streams else None
-    if best:
-        best["webpage_url"] = yt["webpage_url"]
-    return best
-
-
-def _is_manifest_stream(stream: dict) -> bool:
-    """Return True if stream points to HLS/DASH manifest instead of direct media."""
-    protocol = (stream.get("protocol") or "").lower()
-    manifest_url = stream.get("manifest_url") or stream.get("url") or ""
-    return "m3u8" in protocol or "dash" in protocol or manifest_url.endswith(".m3u8")
+    return youtube_media_service.get_youtube_video(url)
 
 
 @router.message(
