@@ -5,11 +5,26 @@ import pytest
 from services import inline_service_icons
 from services import inline_video_requests
 from services import pending_requests
+from services import runtime_state_store
 from services import runtime_stats
+
+
+@pytest.fixture(autouse=True)
+def isolated_runtime_state_file(tmp_path, monkeypatch):
+    monkeypatch.setattr(runtime_state_store, "_STATE_FILE", tmp_path / "runtime_state.json")
+
+
+def _configure_runtime_state(monkeypatch, tmp_path, *modules):
+    state_file = tmp_path / "runtime_state.json"
+    monkeypatch.setattr(runtime_state_store, "_STATE_FILE", state_file)
+    for module in modules:
+        monkeypatch.setattr(module, "_loaded", True)
+    return state_file
 
 
 def test_pending_requests_store_get_and_pop(monkeypatch):
     monkeypatch.setattr(pending_requests, "_pending", {})
+    monkeypatch.setattr(pending_requests, "_loaded", True)
     request = pending_requests.PendingRequest(
         text="https://youtu.be/demo",
         notice_chat_id=10,
@@ -27,8 +42,9 @@ def test_pending_requests_store_get_and_pop(monkeypatch):
 
 def test_pending_requests_expire_after_ttl(monkeypatch):
     monkeypatch.setattr(pending_requests, "_pending", {})
+    monkeypatch.setattr(pending_requests, "_loaded", True)
     now = 100.0
-    monkeypatch.setattr(pending_requests.time, "monotonic", lambda: now)
+    monkeypatch.setattr(pending_requests.time, "time", lambda: now)
 
     request = pending_requests.PendingRequest(
         text="https://youtu.be/demo",
@@ -43,8 +59,30 @@ def test_pending_requests_expire_after_ttl(monkeypatch):
     assert 42 not in pending_requests._pending
 
 
+def test_pending_requests_reload_from_persisted_state(monkeypatch, tmp_path):
+    _configure_runtime_state(monkeypatch, tmp_path, pending_requests)
+    monkeypatch.setattr(pending_requests, "_pending", {})
+
+    request = pending_requests.PendingRequest(
+        text="https://youtu.be/demo",
+        notice_chat_id=10,
+        notice_message_id=20,
+    )
+    pending_requests.set_pending(42, request)
+
+    monkeypatch.setattr(pending_requests, "_pending", {})
+    monkeypatch.setattr(pending_requests, "_loaded", False)
+
+    restored = pending_requests.get_pending(42)
+
+    assert restored is not None
+    assert restored.text == "https://youtu.be/demo"
+    assert restored.notice_chat_id == 10
+
+
 def test_inline_video_requests_lifecycle(monkeypatch):
     monkeypatch.setattr(inline_video_requests, "_requests", {})
+    monkeypatch.setattr(inline_video_requests, "_loaded", True)
     monkeypatch.setattr(inline_video_requests.secrets, "token_urlsafe", lambda _: "token-123")
 
     original_settings = {"audio_button": "on"}
@@ -98,9 +136,10 @@ def test_inline_video_requests_lifecycle(monkeypatch):
 
 def test_inline_video_request_expires_after_completion(monkeypatch):
     monkeypatch.setattr(inline_video_requests, "_requests", {})
+    monkeypatch.setattr(inline_video_requests, "_loaded", True)
     monkeypatch.setattr(inline_video_requests.secrets, "token_urlsafe", lambda _: "token-123")
     now = 200.0
-    monkeypatch.setattr(inline_video_requests.time, "monotonic", lambda: now)
+    monkeypatch.setattr(inline_video_requests.time, "time", lambda: now)
 
     token = inline_video_requests.create_inline_video_request(
         service="youtube",
@@ -118,6 +157,7 @@ def test_inline_video_request_expires_after_completion(monkeypatch):
 
 def test_inline_video_request_rejects_non_owner(monkeypatch):
     monkeypatch.setattr(inline_video_requests, "_requests", {})
+    monkeypatch.setattr(inline_video_requests, "_loaded", True)
     monkeypatch.setattr(inline_video_requests.secrets, "token_urlsafe", lambda _: "token-123")
 
     token = inline_video_requests.create_inline_video_request(
@@ -133,6 +173,28 @@ def test_inline_video_request_rejects_non_owner(monkeypatch):
             duplicate_handler="callback",
             actor_user_id=100,
         )
+
+
+def test_inline_video_requests_reload_from_persisted_state(monkeypatch, tmp_path):
+    _configure_runtime_state(monkeypatch, tmp_path, inline_video_requests)
+    monkeypatch.setattr(inline_video_requests, "_requests", {})
+    monkeypatch.setattr(inline_video_requests.secrets, "token_urlsafe", lambda _: "token-123")
+
+    token = inline_video_requests.create_inline_video_request(
+        service="youtube",
+        source_url="https://youtu.be/demo",
+        owner_user_id=99,
+        user_settings={"captions": "on"},
+    )
+
+    monkeypatch.setattr(inline_video_requests, "_requests", {})
+    monkeypatch.setattr(inline_video_requests, "_loaded", False)
+
+    restored = inline_video_requests.get_inline_video_request(token)
+
+    assert restored is not None
+    assert restored.owner_user_id == 99
+    assert restored.user_settings == {"captions": "on"}
 
 
 def test_get_inline_service_icon_normalizes_service_name():
