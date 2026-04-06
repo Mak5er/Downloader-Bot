@@ -145,14 +145,22 @@ async def test_private_chat_guard_allows_private_messages_and_irrelevant_group_m
 
 
 @pytest.mark.asyncio
-async def test_private_chat_guard_sends_typing_and_calls_handler_when_dm_is_open():
+@pytest.mark.parametrize(
+    "text",
+    [
+        "https://youtube.com/watch?v=demo",
+        "https://soundcloud.com/artist/track",
+        "https://pin.it/demo123",
+    ],
+)
+async def test_private_chat_guard_sends_typing_and_calls_handler_when_dm_is_open(text):
     middleware = private_chat_guard.PrivateChatGuardMiddleware()
     handler = AsyncMock(return_value="handled")
     bot = SimpleNamespace(send_chat_action=AsyncMock())
     event = Mock(spec=Message)
     event.chat = SimpleNamespace(type=ChatType.SUPERGROUP)
     event.from_user = SimpleNamespace(id=8, is_bot=False)
-    event.text = "https://youtube.com/watch?v=demo"
+    event.text = text
     event.caption = None
 
     result = await middleware(handler, event, {"bot": bot})

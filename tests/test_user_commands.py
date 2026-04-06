@@ -3,6 +3,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+import handlers
 from handlers import user
 
 
@@ -225,3 +226,29 @@ async def test_switch_period_uses_total_mode(monkeypatch):
 
     _, kwargs = call.message.edit_media.await_args
     assert kwargs["reply_markup"] == ("keyboard", "Month", "total")
+
+
+@pytest.mark.asyncio
+async def test_process_pending_message_dispatches_soundcloud(monkeypatch):
+    message = DummyMessage()
+    message.text = "https://soundcloud.com/artist/track"
+    process_soundcloud_url = AsyncMock()
+
+    monkeypatch.setattr(handlers.soundcloud, "process_soundcloud_url", process_soundcloud_url)
+
+    await user._process_pending_message(message)
+
+    process_soundcloud_url.assert_awaited_once_with(message)
+
+
+@pytest.mark.asyncio
+async def test_process_pending_message_dispatches_pinterest(monkeypatch):
+    message = DummyMessage()
+    message.text = "https://pin.it/demo123"
+    process_pinterest_url = AsyncMock()
+
+    monkeypatch.setattr(handlers.pinterest, "process_pinterest_url", process_pinterest_url)
+
+    await user._process_pending_message(message)
+
+    process_pinterest_url.assert_awaited_once_with(message)

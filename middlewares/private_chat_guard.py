@@ -1,4 +1,3 @@
-import re
 from typing import Any, Awaitable, Callable, Dict
 
 from aiogram import BaseMiddleware
@@ -8,16 +7,8 @@ from aiogram.types import Message
 
 import keyboards as kb
 import messages as bm
+from services.link_detection import detect_supported_service
 from services.pending_requests import PendingRequest, get_pending, set_pending
-
-SUPPORTED_LINK_RE = re.compile(
-    r"(https?://(www\.)?(youtube|youtu|youtube-nocookie)\.(com|be)/\S+"
-    r"|https?://(www\.)?(twitter|x)\.com/\S+"
-    r"|https?://t\.co/\S+"
-    r"|https?://(www\.)?instagram\.com/\S+"
-    r"|https?://(www\.|vm\.|vt\.|vn\.)?tiktok\.com/\S+)",
-    re.IGNORECASE,
-)
 
 _bot_username: str | None = None
 
@@ -39,7 +30,7 @@ class PrivateChatGuardMiddleware(BaseMiddleware):
             return await handler(event, data)
 
         text = event.text or event.caption or ""
-        if not text or not SUPPORTED_LINK_RE.search(text):
+        if not detect_supported_service(text):
             return await handler(event, data)
 
         bot = data.get("bot")

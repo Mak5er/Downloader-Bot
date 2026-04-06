@@ -39,9 +39,7 @@
 
 ## 3. Потенційні баги
 
-| Severity | Файл / рядок | Проблема | Рекомендація |
-|---|---|---|---|
-| Medium | `middlewares/private_chat_guard.py:13-18` | `SUPPORTED_LINK_RE` не покриває `soundcloud` та `pinterest`, хоча проєкт їх підтримує. Guard буде працювати нерівномірно залежно від платформи. | Винести URL detection в спільний реєстр платформ і використовувати його і в middleware, і в handlers. |
+Наразі окремих незакритих correctness-багів із першого проходу в backlog не лишилось; поточні залишки вже більше про архітектуру, performance та operational hardening.
 
 ## 4. Безпека
 
@@ -77,7 +75,6 @@
 1. Доробити persistence для тимчасових workflow-сховищ: TTL/LRU вже є, але важливі токени й pending flow все ще губляться після рестарту.
 2. Додати bounded concurrency для `check_active_users` і масової розсилки.
 3. Переробити analytics export: прибрати сирі Telegram ID з GA payload і перестати штовхати події по одній.
-4. Закрити нерівномірний private-link detection для `soundcloud` і `pinterest`.
 
 ### Бажано
 

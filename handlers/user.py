@@ -1,7 +1,6 @@
 import asyncio
 import datetime
 import io
-import re
 import threading
 import time
 from copy import copy
@@ -25,6 +24,7 @@ logging = logging.bind(service="user")
 from main import db, send_analytics, bot
 from services.db import StatsSnapshot
 from services.inline_album_links import get_inline_album_request
+from services.link_detection import detect_supported_service
 from services.pending_requests import pop_pending
 
 router = Router()
@@ -233,39 +233,36 @@ async def remove_reply_keyboard(message: types.Message):
 
 async def _process_pending_message(message: types.Message) -> None:
     text = get_message_text(message)
-    if not text:
+    service = detect_supported_service(text)
+    if not service:
         return
 
-    if re.search(r"(https?://(www\.|vm\.|vt\.|vn\.)?tiktok\.com/\S+)", text, re.IGNORECASE):
+    if service == "tiktok":
         from handlers import tiktok
         await tiktok.process_tiktok(message)
         return
 
-    if re.search(r"(https?://(www\.)?instagram\.com/\S+)", text, re.IGNORECASE):
+    if service == "instagram":
         from handlers import instagram
         await instagram.process_instagram_url(message)
         return
 
-    if re.search(
-        r"(https?://(?:www\.|m\.)?soundcloud\.com/\S+|https?://on\.soundcloud\.com/\S+|https?://soundcloud\.app\.goo\.gl/\S+)",
-        text,
-        re.IGNORECASE,
-    ):
+    if service == "soundcloud":
         from handlers import soundcloud
         await soundcloud.process_soundcloud_url(message)
         return
 
-    if re.search(r"(https?://(?:[\w-]+\.)?pinterest\.[\w.]+/\S+|https?://pin\.it/\S+)", text, re.IGNORECASE):
+    if service == "pinterest":
         from handlers import pinterest
         await pinterest.process_pinterest_url(message)
         return
 
-    if re.search(r"(https?://(www\.)?(youtube|youtu|youtube-nocookie)\.(com|be)/\S+)", text, re.IGNORECASE):
+    if service == "youtube":
         from handlers import youtube
         await youtube.download_video(message)
         return
 
-    if re.search(r"(https?://(www\.)?(twitter|x)\.com/\S+|https?://t\.co/\S+)", text, re.IGNORECASE):
+    if service == "twitter":
         from handlers import twitter
         await twitter.handle_tweet_links(message)
 
