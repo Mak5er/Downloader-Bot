@@ -1,6 +1,7 @@
 import asyncio
 import logging as py_logging
 import os
+import time
 from datetime import timedelta
 
 from aiogram import types, F, Router
@@ -30,6 +31,7 @@ from services.runtime_stats import get_runtime_snapshot
 router = Router()
 
 _ADMIN_ACCESS_REQUIRED = "Admin access required."
+_DOWNLOAD_CLEANUP_MIN_AGE_SECONDS = 6 * 60 * 60.0
 
 
 def _is_admin_user(user_id: int | None) -> bool:
@@ -521,12 +523,29 @@ async def write_message(message: types.Message, state: FSMContext):
 
 async def clear_downloads_and_notify():
     try:
-        if os.path.exists(OUTPUT_DIR):
+        queue_snapshot = get_download_queue().load_snapshot()
+        if queue_snapshot.active_jobs > 0 or queue_snapshot.queued_jobs > 0:
+            message = (
+                f"Skipped clearing '{OUTPUT_DIR}': "
+                f"active_jobs={queue_snapshot.active_jobs}, queued_jobs={queue_snapshot.queued_jobs}."
+            )
+        elif os.path.exists(OUTPUT_DIR):
+            removed_files = 0
+            skipped_recent_files = 0
+            cutoff_timestamp = time.time() - _DOWNLOAD_CLEANUP_MIN_AGE_SECONDS
             for file in os.listdir(OUTPUT_DIR):
                 file_path = os.path.join(OUTPUT_DIR, file)
-                if os.path.isfile(file_path):
-                    os.remove(file_path)
-            message = f"The folder '{OUTPUT_DIR}' has been successfully cleared."
+                if not os.path.isfile(file_path):
+                    continue
+                if os.path.getmtime(file_path) > cutoff_timestamp:
+                    skipped_recent_files += 1
+                    continue
+                os.remove(file_path)
+                removed_files += 1
+            message = (
+                f"The folder '{OUTPUT_DIR}' has been cleaned. "
+                f"Removed {removed_files} files; skipped {skipped_recent_files} recent files."
+            )
         else:
             message = f"The folder '{OUTPUT_DIR}' does not exist."
 

@@ -22,12 +22,46 @@ async def test_clear_downloads_and_notify_removes_files(tmp_path, monkeypatch):
     monkeypatch.setattr(admin, "OUTPUT_DIR", str(folder))
     monkeypatch.setattr(admin, "ADMINS_UID", [1, 2])
     monkeypatch.setattr(admin, "bot", SimpleNamespace(send_message=fake_send_message))
+    monkeypatch.setattr(admin, "_DOWNLOAD_CLEANUP_MIN_AGE_SECONDS", 0.0)
+    monkeypatch.setattr(
+        admin,
+        "get_download_queue",
+        lambda: SimpleNamespace(load_snapshot=lambda: SimpleNamespace(active_jobs=0, queued_jobs=0)),
+    )
 
     await admin.clear_downloads_and_notify()
 
     assert not any(path.is_file() for path in folder.iterdir())
     assert len(sent_messages) == 2
-    assert "successfully cleared" in sent_messages[0][1]
+    assert "Removed 2 files" in sent_messages[0][1]
+
+
+@pytest.mark.asyncio
+async def test_clear_downloads_and_notify_skips_when_queue_busy(tmp_path, monkeypatch):
+    folder = tmp_path / "downloads"
+    folder.mkdir()
+    file_path = folder / "file1.txt"
+    file_path.write_text("data")
+
+    sent_messages = []
+
+    async def fake_send_message(chat_id, text):
+        sent_messages.append((chat_id, text))
+
+    monkeypatch.setattr(admin, "OUTPUT_DIR", str(folder))
+    monkeypatch.setattr(admin, "ADMINS_UID", [1])
+    monkeypatch.setattr(admin, "bot", SimpleNamespace(send_message=fake_send_message))
+    monkeypatch.setattr(
+        admin,
+        "get_download_queue",
+        lambda: SimpleNamespace(load_snapshot=lambda: SimpleNamespace(active_jobs=1, queued_jobs=2)),
+    )
+
+    await admin.clear_downloads_and_notify()
+
+    assert file_path.exists()
+    assert len(sent_messages) == 1
+    assert "Skipped clearing" in sent_messages[0][1]
 
 
 @pytest.mark.asyncio
