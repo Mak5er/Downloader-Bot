@@ -16,9 +16,9 @@ from config import (
     API_SECRET,
     BOT_COMMANDS,
     BOT_TOKEN,
+    CUSTOM_API_URL,
     MEASUREMENT_ID,
     OUTPUT_DIR,
-    custom_api_url,
 )
 from log.logger import logger as logging
 from services.db import AnalyticsEvent, DataBase
@@ -29,7 +29,7 @@ logging = logging.bind(service="main")
 
 custom_timeout = 600
 session = AiohttpSession(
-    api=TelegramAPIServer.from_base(custom_api_url),
+    api=TelegramAPIServer.from_base(CUSTOM_API_URL),
     timeout=custom_timeout,
 )
 default = DefaultBotProperties(parse_mode=ParseMode.HTML)
