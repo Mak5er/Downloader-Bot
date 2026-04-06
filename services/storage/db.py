@@ -200,6 +200,8 @@ class DataBase:
         config = AlembicConfig(str(services_dir / "alembic.ini"))
         config.set_main_option("script_location", str(services_dir / "alembic"))
         config.set_main_option("sqlalchemy.url", self.sync_url)
+        # Embedded Alembic runs should preserve the application's own logging setup.
+        config.attributes["skip_logging_config"] = True
         return config
 
     async def _get_existing_tables(self) -> set[str]:
