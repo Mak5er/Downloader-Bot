@@ -47,7 +47,7 @@ from handlers.utils import (
     with_message_logging,
 )
 from log.logger import logger as logging
-from main import bot, db, send_analytics
+from app_context import bot, db, send_analytics
 from utils.download_manager import (
     DownloadConfig,
     DownloadError,

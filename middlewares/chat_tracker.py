@@ -5,7 +5,7 @@ from aiogram import BaseMiddleware
 from aiogram.enums import ChatType
 from aiogram.types import Chat, Message, User
 
-from main import db
+from app_context import db
 from services.db import DataBase
 
 

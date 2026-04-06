@@ -12,6 +12,7 @@ from aiogram.client.session.aiohttp import AiohttpSession
 from aiogram.client.telegram import TelegramAPIServer
 from aiogram.enums.parse_mode import ParseMode
 
+from app_context import set_app_context
 from config import (
     API_SECRET,
     BOT_COMMANDS,
@@ -276,6 +277,7 @@ async def main():
         startup_started_at = asyncio.get_running_loop().time()
         bot_me = await bot.get_me()
         logging.event("bot_startup", bot_username=bot_me.username)
+        set_app_context(bot=bot, db=db, send_analytics=send_analytics)
         await db.init_db()
         await start_analytics_workers()
 

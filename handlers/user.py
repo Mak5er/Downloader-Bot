@@ -21,7 +21,7 @@ from handlers.utils import get_message_text
 from log.logger import logger as logging
 
 logging = logging.bind(service="user")
-from main import db, send_analytics, bot
+from app_context import db, send_analytics, bot
 from services.db import StatsSnapshot
 from services.inline_album_links import get_inline_album_request
 from services.link_detection import detect_supported_service

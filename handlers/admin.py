@@ -24,7 +24,7 @@ from filters import IsBotAdmin
 from log.logger import logger as logging
 
 logging = logging.bind(service="admin")
-from main import bot, db
+from app_context import bot, db
 from services.download_queue import get_download_queue
 from services.runtime_stats import get_runtime_snapshot
 

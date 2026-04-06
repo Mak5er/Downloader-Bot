@@ -4,7 +4,7 @@ import time
 from aiogram import BaseMiddleware
 from aiogram.types import Message, CallbackQuery, InlineQuery
 
-from main import db
+from app_context import db
 
 _ACCESS_TEMPORARILY_UNAVAILABLE = "Service is temporarily unavailable. Please try again later."
 
