@@ -17,6 +17,7 @@ from config import (
     COBALT_API_KEY,
 )
 from handlers.media_delivery import send_cached_media_entries
+from handlers.media_resolver import resolve_cached_media_items
 from handlers.user import update_info
 from handlers.utils import (
     build_inline_album_result,
@@ -521,63 +522,34 @@ async def process_instagram_media_group(message: types.Message, data: InstagramV
 
     await send_chat_action_if_needed(bot, message.chat.id, "upload_photo", business_id)
 
-    media_items: list[dict[str, object]] = []
-    downloaded_paths: list[str] = []
     request_id = f"instagram_group:{message.chat.id}:{message.message_id}:{data.id}"
     status_message: Optional[types.Message] = None
     if business_id is None:
         status_message = await message.answer(bm.downloading_video_status())
 
-    async def _resolve_item(index: int, item: InstagramMedia):
-        cache_key = build_media_cache_key(original_url, item_index=index, item_kind=item.type)
-        cached_file_id = await db.get_file_id(cache_key)
-        if cached_file_id:
-            return {
-                "index": index,
-                "type": item.type,
-                "cache_key": cache_key,
-                "file_id": cached_file_id,
-                "path": None,
-                "cached": True,
-            }
-
-        ext = "mp4" if item.type == "video" else "jpg"
+    async def _download_item(index: int, item: InstagramMedia, media_kind: str):
+        ext = "mp4" if media_kind == "video" else "jpg"
         filename = f"inst_{data.id}_{index}.{ext}"
-        metrics = await inst_service.download_media(
+        return await inst_service.download_media(
             item.url,
             filename,
             user_id=message.from_user.id,
             request_id=request_id,
         )
-        if not metrics:
-            return None
-        log_download_metrics("instagram_group", metrics)
-        return {
-            "index": index,
-            "type": item.type,
-            "cache_key": cache_key,
-            "file_id": None,
-            "path": metrics.path,
-            "cached": False,
-        }
 
-    tasks = [
-        asyncio.create_task(_resolve_item(i, item))
-        for i, item in enumerate(data.media_list[:10])
-    ]
-    results = await asyncio.gather(*tasks, return_exceptions=True)
-
-    for result in sorted(
-        (r for r in results if not isinstance(r, Exception) and r is not None),
-        key=lambda value: int(value["index"]),
-    ):
-        if result["path"]:
-            downloaded_paths.append(str(result["path"]))
-        media_items.append(result)
-
-    for result in results:
-        if isinstance(result, Exception):
-            logging.error("Instagram media download task failed: error=%s", result)
+    media_items, downloaded_paths = await resolve_cached_media_items(
+        data.media_list,
+        db_service=db,
+        kind_getter=lambda item: item.type,
+        build_cache_key=lambda index, _item, media_kind: build_media_cache_key(
+            original_url,
+            item_index=index,
+            item_kind=media_kind,
+        ),
+        download_item=_download_item,
+        metrics_label="instagram_group",
+        error_label="Instagram",
+    )
 
     if not media_items:
         await handle_download_error(message, business_id=business_id)
