@@ -16,7 +16,7 @@ import keyboards as kb
 import messages as bm
 from config import OUTPUT_DIR, CHANNEL_ID
 from handlers.media_delivery import send_cached_media_entries
-from handlers.twitter_media import (
+from services.twitter_media import (
     build_twitter_media_cache_key as _build_twitter_media_cache_key,
     collect_media_entries as _collect_media_entries_impl,
     collect_media_files as _collect_media_files_impl,

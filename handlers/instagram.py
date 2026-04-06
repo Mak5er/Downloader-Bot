@@ -2,8 +2,6 @@ import asyncio
 import datetime
 import re
 from typing import Optional
-from dataclasses import dataclass
-from urllib.parse import urlparse, urlunparse
 
 from aiogram import types, Router, F
 from aiogram.types import FSInputFile
@@ -17,6 +15,13 @@ from config import (
     COBALT_API_KEY,
 )
 from handlers.media_delivery import send_cached_media_entries
+from services.instagram_media import (
+    InstagramMedia,
+    InstagramMediaService,
+    InstagramVideo,
+    get_instagram_preview_url as _get_instagram_preview_url,
+    strip_instagram_url,
+)
 from handlers.media_resolver import resolve_cached_media_items
 from handlers.user import update_info
 from handlers.utils import (
@@ -49,17 +54,15 @@ from handlers.utils import (
 )
 from log.logger import logger as logging
 from app_context import bot, db, send_analytics
+from utils.cobalt_client import fetch_cobalt_data
 from utils.download_manager import (
-    DownloadConfig,
     DownloadError,
     DownloadProgress,
     DownloadQueueBusyError,
     DownloadRateLimitError,
     DownloadMetrics,
-    ResilientDownloader,
     log_download_metrics,
 )
-from utils.cobalt_client import fetch_cobalt_data
 from utils.media_cache import build_media_cache_key
 from services.inline_album_links import create_inline_album_request
 from services.inline_service_icons import get_inline_service_icon
@@ -76,252 +79,15 @@ router = Router()
 
 MAX_FILE_SIZE = int(1.5 * 1024 * 1024 * 1024)
 
-
-def strip_instagram_url(url: str) -> str:
-    try:
-        parsed = urlparse(url)
-    except Exception:
-        return url
-    return urlunparse((parsed.scheme, parsed.netloc, parsed.path, parsed.params, "", ""))
-
-
-def _classify_cobalt_media_type(
-    media_url: str,
-    *,
-    audio_only: bool = False,
-    declared_type: Optional[str] = None,
-    filename: Optional[str] = None,
-    mime_type: Optional[str] = None,
-) -> str:
-    if audio_only:
-        return "audio"
-
-    if declared_type:
-        normalized_type = declared_type.lower()
-        if normalized_type in {"video", "gif", "merge", "mute", "remux"}:
-            return "video"
-        if normalized_type == "photo":
-            return "photo"
-        if normalized_type == "audio":
-            return "audio"
-
-    if mime_type:
-        normalized_mime = mime_type.lower()
-        if normalized_mime.startswith("video/"):
-            return "video"
-        if normalized_mime.startswith("image/"):
-            return "photo"
-        if normalized_mime.startswith("audio/"):
-            return "audio"
-
-    probe = f"{media_url} {filename or ''}".lower()
-    if any(ext in probe for ext in (".mp3", ".m4a", ".aac", ".ogg", ".wav", ".opus")):
-        return "audio"
-    if any(ext in probe for ext in (".jpg", ".jpeg", ".png", ".webp", ".avif")):
-        return "photo"
-    return "video"
-
-
-@dataclass
-class InstagramMedia:
-    url: str
-    type: str
-    thumb: Optional[str] = None
-
-
-@dataclass
-class InstagramVideo:
-    id: str
-    description: str
-    author: str
-    media_list: list[InstagramMedia]
-
-
-def _extract_instagram_thumb(source: dict) -> Optional[str]:
-    for key in ("thumb", "thumbnail", "poster", "preview", "cover"):
-        value = source.get(key)
-        if isinstance(value, str) and value:
-            return value
-    return None
-
-
-def _get_instagram_preview_url(media: Optional[InstagramMedia]) -> Optional[str]:
-    if not media:
-        return None
-    if media.type == "photo":
-        return media.url
-    return media.thumb or None
-
-class InstagramService:
-
+class InstagramService(InstagramMediaService):
     def __init__(self, output_dir: str) -> None:
-        config = DownloadConfig(
-            chunk_size=1024 * 1024,
-            multipart_threshold=16 * 1024 * 1024,
-            max_workers=6,
-            retry_backoff=0.8,
+        super().__init__(
+            output_dir,
+            cobalt_api_url=COBALT_API_URL,
+            cobalt_api_key=COBALT_API_KEY,
+            fetch_cobalt_data_func=fetch_cobalt_data,
+            retry_async_operation_func=retry_async_operation,
         )
-        self._downloader = ResilientDownloader(output_dir, config=config, source="instagram")
-
-    async def fetch_data(self, url: str, audio_only: bool = False) -> Optional[InstagramVideo]:
-        payload = {
-            "url": url,
-            "videoQuality": "720",
-            "downloadMode": "audio" if audio_only else "auto",
-            "alwaysProxy": True,
-            "localProcessing": "disabled",
-        }
-        data = await fetch_cobalt_data(
-            COBALT_API_URL,
-            COBALT_API_KEY,
-            payload,
-            source="instagram",
-            timeout=15,
-            attempts=3,
-            retry_delay=0.0,
-        )
-        if not data:
-            return None
-
-        media_list = []
-        status = data.get("status")
-
-        # Backward compatibility with old Cobalt response structure.
-        if not status:
-            if "url" in data:
-                status = "tunnel"
-            elif "picker" in data:
-                status = "picker"
-
-        if status in {"tunnel", "redirect"}:
-            media_url = data.get("url")
-            if isinstance(media_url, str) and media_url:
-                media_list.append(
-                    InstagramMedia(
-                        url=media_url,
-                        type=_classify_cobalt_media_type(
-                            media_url,
-                            audio_only=audio_only,
-                            filename=data.get("filename"),
-                        ),
-                        thumb=_extract_instagram_thumb(data),
-                    )
-                )
-
-        elif status == "picker":
-            picker_audio_url = data.get("audio")
-            if audio_only and isinstance(picker_audio_url, str) and picker_audio_url:
-                media_list.append(InstagramMedia(url=picker_audio_url, type="audio"))
-            else:
-                picker_items = data.get("picker") or []
-                for item in picker_items:
-                    if not isinstance(item, dict):
-                        continue
-                    media_url = item.get("url")
-                    if not isinstance(media_url, str) or not media_url:
-                        continue
-                    media_list.append(
-                        InstagramMedia(
-                            url=media_url,
-                            type=_classify_cobalt_media_type(
-                                media_url,
-                                audio_only=audio_only,
-                                declared_type=item.get("type"),
-                            ),
-                            thumb=_extract_instagram_thumb(item),
-                        )
-                    )
-
-        elif status == "local-processing":
-            tunnel_urls = data.get("tunnel") or []
-            output = data.get("output") or {}
-            if not isinstance(tunnel_urls, list) or not tunnel_urls:
-                logging.error("Cobalt local-processing response has no tunnels: payload=%s", data)
-                return None
-            if not audio_only and len(tunnel_urls) > 1:
-                logging.error(
-                    "Unsupported Cobalt local-processing payload for Instagram: type=%s tunnel_count=%s",
-                    data.get("type"),
-                    len(tunnel_urls),
-                )
-                return None
-            for media_url in tunnel_urls:
-                if not isinstance(media_url, str) or not media_url:
-                    continue
-                media_list.append(
-                    InstagramMedia(
-                        url=media_url,
-                        type=_classify_cobalt_media_type(
-                            media_url,
-                            audio_only=audio_only,
-                            declared_type=data.get("type"),
-                            filename=output.get("filename") if isinstance(output, dict) else None,
-                            mime_type=output.get("type") if isinstance(output, dict) else None,
-                        ),
-                        thumb=_extract_instagram_thumb(data) or _extract_instagram_thumb(output),
-                    )
-                )
-
-        elif status == "error":
-            error_obj = data.get("error") or {}
-            logging.error(
-                "Cobalt API returned error: code=%s context=%s",
-                error_obj.get("code") if isinstance(error_obj, dict) else None,
-                error_obj.get("context") if isinstance(error_obj, dict) else None,
-            )
-            return None
-
-        else:
-            logging.error("Unsupported Cobalt response status: status=%s payload=%s", status, data)
-            return None
-
-        if not media_list:
-            logging.error("Cobalt response has no media items: status=%s payload=%s", status, data)
-            return None
-
-        return InstagramVideo(
-            id=str(int(datetime.datetime.now().timestamp())),
-            description="",
-            author="instagram_user",
-            media_list=media_list
-        )
-
-    async def download_media(
-        self,
-        url: str,
-        filename: str,
-        *,
-        user_id: Optional[int] = None,
-        request_id: Optional[str] = None,
-        size_hint: Optional[int] = None,
-        on_queued=None,
-        on_progress=None,
-        on_retry=None,
-    ) -> Optional[DownloadMetrics]:
-        async def _download_once():
-            return await self._downloader.download(
-                url,
-                filename,
-                user_id=user_id,
-                request_id=request_id,
-                size_hint=size_hint,
-                on_queued=on_queued,
-                on_progress=on_progress,
-            )
-
-        try:
-            return await retry_async_operation(
-                _download_once,
-                attempts=3,
-                delay_seconds=2.0,
-                retry_on_exception=lambda exc: not isinstance(exc, (DownloadRateLimitError, DownloadQueueBusyError)),
-                on_retry=on_retry,
-            )
-        except (DownloadRateLimitError, DownloadQueueBusyError):
-            raise
-        except DownloadError as exc:
-            logging.error("Error downloading Instagram media: url=%s error=%s", url, exc)
-            return None
 
 
 inst_service = InstagramService(OUTPUT_DIR)
