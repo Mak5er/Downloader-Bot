@@ -16,6 +16,54 @@ def test_map_action_to_service_includes_soundcloud():
     assert db_module.DataBase._map_action_to_service("pinterest_media") == "Pinterest"
 
 
+def test_select_schema_migration_action_prefers_upgrade_for_empty_schema():
+    assert db_module.DataBase._select_schema_migration_action(set()) == "upgrade"
+
+
+def test_select_schema_migration_action_stamps_existing_legacy_schema():
+    existing_tables = set(db_module.APP_SCHEMA_TABLES)
+    assert db_module.DataBase._select_schema_migration_action(existing_tables) == "stamp"
+
+
+def test_select_schema_migration_action_rejects_partial_legacy_schema():
+    with pytest.raises(RuntimeError, match="partially initialized schema"):
+        db_module.DataBase._select_schema_migration_action({"users", "settings"})
+
+
+@pytest.mark.asyncio
+async def test_init_db_prefers_alembic_migrations(monkeypatch):
+    database = db_module.DataBase("postgresql://user:pass@localhost/testdb")
+    apply_migrations = AsyncMock()
+    create_schema = AsyncMock()
+    sync_sequences = AsyncMock()
+    monkeypatch.setattr(database, "_apply_schema_migrations", apply_migrations)
+    monkeypatch.setattr(database, "_create_schema_with_metadata", create_schema)
+    monkeypatch.setattr(database, "_sync_postgresql_sequences", sync_sequences)
+
+    await database.init_db()
+
+    apply_migrations.assert_awaited_once()
+    create_schema.assert_not_awaited()
+    sync_sequences.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_init_db_can_fallback_to_metadata_bootstrap(monkeypatch):
+    database = db_module.DataBase("postgresql://user:pass@localhost/testdb")
+    apply_migrations = AsyncMock()
+    create_schema = AsyncMock()
+    sync_sequences = AsyncMock()
+    monkeypatch.setattr(database, "_apply_schema_migrations", apply_migrations)
+    monkeypatch.setattr(database, "_create_schema_with_metadata", create_schema)
+    monkeypatch.setattr(database, "_sync_postgresql_sequences", sync_sequences)
+
+    await database.init_db(use_migrations=False)
+
+    apply_migrations.assert_not_awaited()
+    create_schema.assert_awaited_once()
+    sync_sequences.assert_awaited_once()
+
+
 @pytest_asyncio.fixture
 async def database(monkeypatch):
     if os.getenv("RUN_DB_TESTS") not in {"1", "true", "TRUE", "yes", "YES"}:
