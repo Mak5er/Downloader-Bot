@@ -1,6 +1,8 @@
+import asyncio
 import datetime
 import io
 import re
+import threading
 import time
 from copy import copy
 from collections import defaultdict
@@ -32,6 +34,7 @@ _update_info_cache: dict[int, tuple[float, str, Optional[str]]] = {}
 _STATS_CACHE_TTL_SECONDS = 60.0
 _stats_snapshot_cache: dict[str, tuple[float, StatsSnapshot]] = {}
 _stats_chart_cache: dict[tuple[str, str], tuple[float, bytes]] = {}
+_stats_render_lock = threading.Lock()
 
 SERVICE_ORDER = ["Instagram", "TikTok", "YouTube", "SoundCloud", "Pinterest", "Twitter", "Other"]
 SERVICE_COLORS = ["#6C5DD3", "#FF6B6B", "#28C76F", "#FF8800", "#E60023", "#00CFE8", "#FFA500"]
@@ -461,165 +464,170 @@ def render_stats_chart(snapshot: StatsSnapshot, period: str, mode: str) -> bytes
     if cached and _is_cache_fresh(cached[0]):
         return cached[1]
 
-    total_dates, total_counts = _build_series_for_period(snapshot.totals_by_date, period)
-    plt.style.use("dark_background")
-    fig, ax = plt.subplots(figsize=(11, 6), facecolor="#08111F")
-    fig.subplots_adjust(left=0.08, right=0.97, bottom=0.16, top=0.74)
-    ax.set_facecolor("#0F1B2D")
+    with _stats_render_lock:
+        cached = _stats_chart_cache.get(cache_key)
+        if cached and _is_cache_fresh(cached[0]):
+            return cached[1]
 
-    def _plot_series(
-        dates: list[datetime.datetime],
-        counts: list[int],
-        color: str,
-        label: str,
-        *,
-        annotate_last: bool = False,
-        fill_alpha: float = 0.16,
-        marker_size: int = 0,
-    ) -> None:
-        ax.plot(dates, counts, color=color, linewidth=2.4, label=label, solid_capstyle="round")
-        if fill_alpha > 0:
-            ax.fill_between(dates, counts, color=color, alpha=fill_alpha)
-        if marker_size:
-            ax.scatter(dates, counts, color=color, s=marker_size, zorder=3)
-        if annotate_last and dates and counts:
-            ax.scatter(dates[-1], counts[-1], color="#F59E0B", s=54, zorder=4)
-            ax.annotate(
-                str(counts[-1]),
-                (dates[-1], counts[-1]),
-                textcoords="offset points",
-                xytext=(0, 10),
-                ha="center",
-                color="#FBBF24",
-                fontsize=10,
-                fontweight="bold",
-            )
+        total_dates, total_counts = _build_series_for_period(snapshot.totals_by_date, period)
+        plt.style.use("dark_background")
+        fig, ax = plt.subplots(figsize=(11, 6), facecolor="#08111F")
+        fig.subplots_adjust(left=0.08, right=0.97, bottom=0.16, top=0.74)
+        ax.set_facecolor("#0F1B2D")
 
-    bucket_name = _stats_bucket_name(period)
-    peak_count = max(total_counts) if total_counts else 0
-    peak_bucket = _format_stats_bucket(period, total_dates[total_counts.index(peak_count)]) if total_dates else "-"
-    average_value = snapshot.total_downloads / len(total_counts) if total_counts else 0.0
-    mode_label = "Overall activity" if mode == "total" else "Platform comparison"
+        def _plot_series(
+            dates: list[datetime.datetime],
+            counts: list[int],
+            color: str,
+            label: str,
+            *,
+            annotate_last: bool = False,
+            fill_alpha: float = 0.16,
+            marker_size: int = 0,
+        ) -> None:
+            ax.plot(dates, counts, color=color, linewidth=2.4, label=label, solid_capstyle="round")
+            if fill_alpha > 0:
+                ax.fill_between(dates, counts, color=color, alpha=fill_alpha)
+            if marker_size:
+                ax.scatter(dates, counts, color=color, s=marker_size, zorder=3)
+            if annotate_last and dates and counts:
+                ax.scatter(dates[-1], counts[-1], color="#F59E0B", s=54, zorder=4)
+                ax.annotate(
+                    str(counts[-1]),
+                    (dates[-1], counts[-1]),
+                    textcoords="offset points",
+                    xytext=(0, 10),
+                    ha="center",
+                    color="#FBBF24",
+                    fontsize=10,
+                    fontweight="bold",
+                )
 
-    fig.text(
-        0.08,
-        0.92,
-        "Downloads Overview",
-        color="#F8FAFC",
-        fontsize=20,
-        fontweight="bold",
-        ha="left",
-    )
-    fig.text(
-        0.08,
-        0.875,
-        f"{period} view | {mode_label}",
-        color="#94A3B8",
-        fontsize=11,
-        ha="left",
-    )
+        bucket_name = _stats_bucket_name(period)
+        peak_count = max(total_counts) if total_counts else 0
+        peak_bucket = _format_stats_bucket(period, total_dates[total_counts.index(peak_count)]) if total_dates else "-"
+        average_value = snapshot.total_downloads / len(total_counts) if total_counts else 0.0
+        mode_label = "Overall activity" if mode == "total" else "Platform comparison"
 
-    chip_style = dict(boxstyle="round,pad=0.45", facecolor="#0D1728", edgecolor="#22324A", linewidth=1.0)
-    chip_positions = [0.66, 0.81, 0.96]
-    chip_titles = ["Total", f"Peak {bucket_name}", "Average"]
-    chip_values = [str(snapshot.total_downloads), f"{peak_bucket} | {peak_count}", f"{average_value:.1f} / {bucket_name}"]
-    for x_pos, title, value in zip(chip_positions, chip_titles, chip_values):
         fig.text(
-            x_pos,
-            0.81,
-            f"{title}\n{value}",
-            color="#E2E8F0",
-            fontsize=10.0,
-            ha="right",
-            va="top",
-            linespacing=1.45,
-            bbox=chip_style,
+            0.08,
+            0.92,
+            "Downloads Overview",
+            color="#F8FAFC",
+            fontsize=20,
+            fontweight="bold",
+            ha="left",
         )
-
-    if mode == "split":
-        plotted_any = False
-        for idx, service in enumerate(SERVICE_ORDER):
-            service_data = snapshot.by_service.get(service)
-            if not service_data:
-                continue
-            dates, counts = _build_series_for_period(service_data, period)
-            if not any(counts):
-                continue
-            _plot_series(
-                dates,
-                counts,
-                SERVICE_COLORS[idx % len(SERVICE_COLORS)],
-                service,
-                fill_alpha=0.08,
-            )
-            plotted_any = True
-
-        if plotted_any:
-            legend = ax.legend(
-                facecolor="#0D1728",
-                edgecolor="#22324A",
-                labelcolor="#F8FAFC",
-                fontsize=9,
-                ncol=2,
-                loc="upper left",
-                bbox_to_anchor=(0.0, 1.02),
-            )
-            legend.get_frame().set_alpha(0.95)
-        else:
-            _plot_series(total_dates, total_counts, "#6C5DD3", "Downloads", marker_size=18)
-    else:
-        _plot_series(total_dates, total_counts, "#38BDF8", "Downloads", annotate_last=True, marker_size=22, fill_alpha=0.18)
-
-    if snapshot.total_downloads <= 0:
-        ax.text(
-            0.5,
-            0.5,
-            "No downloads yet for this period",
-            transform=ax.transAxes,
-            ha="center",
-            va="center",
+        fig.text(
+            0.08,
+            0.875,
+            f"{period} view | {mode_label}",
             color="#94A3B8",
-            fontsize=14,
-            bbox=dict(boxstyle="round,pad=0.6", facecolor="#0D1728", edgecolor="#22324A"),
+            fontsize=11,
+            ha="left",
         )
 
-    ax.set_xlabel("Date", fontsize=11, color="#94A3B8", labelpad=12)
-    ax.set_ylabel("Downloads", fontsize=11, color="#94A3B8", labelpad=10)
-    ax.yaxis.set_major_locator(MaxNLocator(integer=True))
+        chip_style = dict(boxstyle="round,pad=0.45", facecolor="#0D1728", edgecolor="#22324A", linewidth=1.0)
+        chip_positions = [0.66, 0.81, 0.96]
+        chip_titles = ["Total", f"Peak {bucket_name}", "Average"]
+        chip_values = [str(snapshot.total_downloads), f"{peak_bucket} | {peak_count}", f"{average_value:.1f} / {bucket_name}"]
+        for x_pos, title, value in zip(chip_positions, chip_titles, chip_values):
+            fig.text(
+                x_pos,
+                0.81,
+                f"{title}\n{value}",
+                color="#E2E8F0",
+                fontsize=10.0,
+                ha="right",
+                va="top",
+                linespacing=1.45,
+                bbox=chip_style,
+            )
 
-    if total_dates:
-        ax.set_xlim(total_dates[0], total_dates[-1])
+        if mode == "split":
+            plotted_any = False
+            for idx, service in enumerate(SERVICE_ORDER):
+                service_data = snapshot.by_service.get(service)
+                if not service_data:
+                    continue
+                dates, counts = _build_series_for_period(service_data, period)
+                if not any(counts):
+                    continue
+                _plot_series(
+                    dates,
+                    counts,
+                    SERVICE_COLORS[idx % len(SERVICE_COLORS)],
+                    service,
+                    fill_alpha=0.08,
+                )
+                plotted_any = True
 
-    if period == "Year":
-        import matplotlib.dates as mdates
+            if plotted_any:
+                legend = ax.legend(
+                    facecolor="#0D1728",
+                    edgecolor="#22324A",
+                    labelcolor="#F8FAFC",
+                    fontsize=9,
+                    ncol=2,
+                    loc="upper left",
+                    bbox_to_anchor=(0.0, 1.02),
+                )
+                legend.get_frame().set_alpha(0.95)
+            else:
+                _plot_series(total_dates, total_counts, "#6C5DD3", "Downloads", marker_size=18)
+        else:
+            _plot_series(total_dates, total_counts, "#38BDF8", "Downloads", annotate_last=True, marker_size=22, fill_alpha=0.18)
 
-        ax.xaxis.set_major_locator(mdates.MonthLocator(interval=1))
-        ax.xaxis.set_major_formatter(mdates.DateFormatter("%b"))
-    elif period == "Week":
-        ax.set_xticks(total_dates)
-        ax.set_xticklabels([dt.strftime("%a") for dt in total_dates])
-    else:
-        visible_dates = _decimate_dates(total_dates, 8)
-        ax.set_xticks(visible_dates)
-        ax.set_xticklabels([dt.strftime("%b %d") for dt in visible_dates], rotation=20, ha="right")
+        if snapshot.total_downloads <= 0:
+            ax.text(
+                0.5,
+                0.5,
+                "No downloads yet for this period",
+                transform=ax.transAxes,
+                ha="center",
+                va="center",
+                color="#94A3B8",
+                fontsize=14,
+                bbox=dict(boxstyle="round,pad=0.6", facecolor="#0D1728", edgecolor="#22324A"),
+            )
 
-    ax.grid(axis="y", color="#22324A", linestyle="--", linewidth=0.8, alpha=0.75)
-    ax.grid(axis="x", color="#142033", linestyle="-", linewidth=0.5, alpha=0.2)
-    ax.spines["top"].set_visible(False)
-    ax.spines["right"].set_visible(False)
-    ax.spines["left"].set_color("#2B3B52")
-    ax.spines["bottom"].set_color("#2B3B52")
-    ax.tick_params(axis="x", colors="#CBD5E1", labelsize=10)
-    ax.tick_params(axis="y", colors="#CBD5E1", labelsize=10)
-    ax.set_ylim(bottom=0)
-    ax.margins(x=0.02)
+        ax.set_xlabel("Date", fontsize=11, color="#94A3B8", labelpad=12)
+        ax.set_ylabel("Downloads", fontsize=11, color="#94A3B8", labelpad=10)
+        ax.yaxis.set_major_locator(MaxNLocator(integer=True))
 
-    output = io.BytesIO()
-    fig.savefig(output, format="png", bbox_inches="tight", facecolor=fig.get_facecolor())
-    plt.close(fig)
-    chart_bytes = output.getvalue()
-    _stats_chart_cache[cache_key] = (time.monotonic(), chart_bytes)
-    return chart_bytes
+        if total_dates:
+            ax.set_xlim(total_dates[0], total_dates[-1])
+
+        if period == "Year":
+            import matplotlib.dates as mdates
+
+            ax.xaxis.set_major_locator(mdates.MonthLocator(interval=1))
+            ax.xaxis.set_major_formatter(mdates.DateFormatter("%b"))
+        elif period == "Week":
+            ax.set_xticks(total_dates)
+            ax.set_xticklabels([dt.strftime("%a") for dt in total_dates])
+        else:
+            visible_dates = _decimate_dates(total_dates, 8)
+            ax.set_xticks(visible_dates)
+            ax.set_xticklabels([dt.strftime("%b %d") for dt in visible_dates], rotation=20, ha="right")
+
+        ax.grid(axis="y", color="#22324A", linestyle="--", linewidth=0.8, alpha=0.75)
+        ax.grid(axis="x", color="#142033", linestyle="-", linewidth=0.5, alpha=0.2)
+        ax.spines["top"].set_visible(False)
+        ax.spines["right"].set_visible(False)
+        ax.spines["left"].set_color("#2B3B52")
+        ax.spines["bottom"].set_color("#2B3B52")
+        ax.tick_params(axis="x", colors="#CBD5E1", labelsize=10)
+        ax.tick_params(axis="y", colors="#CBD5E1", labelsize=10)
+        ax.set_ylim(bottom=0)
+        ax.margins(x=0.02)
+
+        output = io.BytesIO()
+        fig.savefig(output, format="png", bbox_inches="tight", facecolor=fig.get_facecolor())
+        plt.close(fig)
+        chart_bytes = output.getvalue()
+        _stats_chart_cache[cache_key] = (time.monotonic(), chart_bytes)
+        return chart_bytes
 
 
 def build_stats_caption(period: str, snapshot: StatsSnapshot, mode: str = "total") -> str:
@@ -660,7 +668,7 @@ def build_stats_caption(period: str, snapshot: StatsSnapshot, mode: str = "total
 
 async def _render_stats(period: str, mode: str) -> tuple[bytes, str]:
     snapshot = await fetch_stats_snapshot(period)
-    chart_bytes = render_stats_chart(snapshot, period, mode)
+    chart_bytes = await asyncio.to_thread(render_stats_chart, snapshot, period, mode)
     caption = build_stats_caption(period, snapshot, mode)
     return chart_bytes, caption
 
