@@ -1,3 +1,4 @@
+import asyncio
 import os
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -114,3 +115,97 @@ async def test_delete_log_truncates_log_files(monkeypatch, tmp_path):
     for name in ("bot_log.log", "error_log.log", "events_log.jsonl", "perf_log.jsonl"):
         assert (log_dir / name).read_text(encoding="utf-8") == ""
     call.message.reply.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_run_bounded_limits_parallelism():
+    active = 0
+    max_active = 0
+
+    async def worker(item):
+        nonlocal active, max_active
+        active += 1
+        max_active = max(max_active, active)
+        await asyncio.sleep(0.01)
+        active -= 1
+        return item * 2
+
+    results = await admin._run_bounded([1, 2, 3, 4, 5], limit=2, worker=worker)
+
+    assert results == [2, 4, 6, 8, 10]
+    assert max_active <= 2
+
+
+@pytest.mark.asyncio
+async def test_check_active_users_uses_bounded_runner(monkeypatch):
+    run_bounded = AsyncMock(return_value=[True, False])
+    fake_db = SimpleNamespace(
+        get_all_users_info=AsyncMock(
+            return_value=[
+                SimpleNamespace(user_id=1, status="active"),
+                SimpleNamespace(user_id=2, status="inactive"),
+            ]
+        )
+    )
+    fake_bot = SimpleNamespace(send_chat_action=AsyncMock())
+    status_message = SimpleNamespace(edit_text=AsyncMock())
+    call = SimpleNamespace(
+        from_user=SimpleNamespace(id=1),
+        answer=AsyncMock(),
+        message=SimpleNamespace(
+            chat=SimpleNamespace(id=1),
+            edit_text=AsyncMock(return_value=status_message),
+        ),
+    )
+
+    monkeypatch.setattr(admin, "ADMINS_UID", [1])
+    monkeypatch.setattr(admin, "db", fake_db)
+    monkeypatch.setattr(admin, "bot", fake_bot)
+    monkeypatch.setattr(admin, "_run_bounded", run_bounded)
+    monkeypatch.setattr(admin.bm, "active_users_check_started", lambda total: f"started:{total}")
+    monkeypatch.setattr(admin.bm, "active_users_check_completed", lambda total, ok, bad: f"done:{total}:{ok}:{bad}")
+    monkeypatch.setattr(admin.kb, "return_back_to_admin_keyboard", lambda: "back")
+
+    await admin.check_active_users(call)
+
+    run_bounded.assert_awaited_once()
+    _, kwargs = run_bounded.await_args
+    assert kwargs["limit"] == admin._ADMIN_ACTIVE_CHECK_CONCURRENCY
+    status_message.edit_text.assert_awaited_once_with("done:2:1:1", reply_markup="back", parse_mode="HTML")
+
+
+@pytest.mark.asyncio
+async def test_send_to_all_message_uses_bounded_runner(monkeypatch):
+    run_bounded = AsyncMock(return_value=[None, None])
+    fake_db = SimpleNamespace(
+        get_all_users_info=AsyncMock(
+            return_value=[
+                SimpleNamespace(user_id=1, status="active"),
+                SimpleNamespace(user_id=2, status="inactive"),
+            ]
+        )
+    )
+    fake_bot = SimpleNamespace(send_message=AsyncMock())
+    state = SimpleNamespace(clear=AsyncMock())
+    message = SimpleNamespace(
+        from_user=SimpleNamespace(id=1),
+        chat=SimpleNamespace(id=99),
+        text="hello all",
+        message_id=321,
+        answer=AsyncMock(),
+    )
+
+    monkeypatch.setattr(admin, "ADMINS_UID", [1])
+    monkeypatch.setattr(admin, "db", fake_db)
+    monkeypatch.setattr(admin, "bot", fake_bot)
+    monkeypatch.setattr(admin, "_run_bounded", run_bounded)
+    monkeypatch.setattr(admin.bm, "cancel", lambda: "/cancel")
+    monkeypatch.setattr(admin.bm, "start_mailing", lambda: "start")
+    monkeypatch.setattr(admin.bm, "finish_mailing", lambda: "finish")
+
+    await admin.send_to_all_message(message, state)
+
+    run_bounded.assert_awaited_once()
+    _, kwargs = run_bounded.await_args
+    assert kwargs["limit"] == admin._ADMIN_MAILING_CONCURRENCY
+    assert fake_bot.send_message.await_count == 2

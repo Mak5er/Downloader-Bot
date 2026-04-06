@@ -32,6 +32,9 @@ router = Router()
 
 _ADMIN_ACCESS_REQUIRED = "Admin access required."
 _DOWNLOAD_CLEANUP_MIN_AGE_SECONDS = 6 * 60 * 60.0
+_ADMIN_ACTIVE_CHECK_CONCURRENCY = 8
+_ADMIN_MAILING_CONCURRENCY = 5
+_ADMIN_THROTTLE_SECONDS = 0.05
 
 
 def _is_admin_user(user_id: int | None) -> bool:
@@ -50,6 +53,76 @@ async def _ensure_admin_message(message: types.Message) -> bool:
         return True
     await message.answer(_ADMIN_ACCESS_REQUIRED, reply_markup=types.ReplyKeyboardRemove())
     return False
+
+
+async def _run_bounded(items, *, limit: int, worker):
+    semaphore = asyncio.Semaphore(max(1, int(limit)))
+
+    async def _wrapped(item):
+        async with semaphore:
+            return await worker(item)
+
+    return await asyncio.gather(*(_wrapped(item) for item in items))
+
+
+async def _check_user_reachability(user) -> bool:
+    user_id = int(user.user_id)
+    user_status = user.status or "inactive"
+    send_successful = False
+
+    try:
+        await bot.send_chat_action(chat_id=user_id, action="typing")
+        send_successful = True
+    except TelegramRetryAfter as error:
+        await asyncio.sleep(error.retry_after)
+        try:
+            await bot.send_chat_action(chat_id=user_id, action="typing")
+            send_successful = True
+        except TelegramRetryAfter as retry_error:
+            logging.warning("Retry-after triggered twice while checking user %s: %s", user_id, retry_error)
+        except (TelegramForbiddenError, TelegramNotFound, TelegramBadRequest) as retry_error:
+            logging.info("User %s unreachable on retry: %s", user_id, retry_error)
+        except TelegramAPIError as retry_error:
+            logging.error("API error on retry while checking user %s: %s", user_id, retry_error)
+        except Exception as retry_error:
+            logging.error("Unexpected retry error while checking user %s: %s", user_id, retry_error)
+    except (TelegramForbiddenError, TelegramNotFound, TelegramBadRequest) as error:
+        logging.info("User %s unreachable: %s", user_id, error)
+    except TelegramAPIError as error:
+        logging.error("API error while checking user %s: %s", user_id, error)
+    except Exception as error:
+        logging.error("Unexpected error while checking user %s: %s", user_id, error)
+
+    if send_successful:
+        if user_status != "active":
+            await db.set_active(user_id)
+    elif user_status != "ban":
+        await db.set_inactive(user_id)
+
+    await asyncio.sleep(_ADMIN_THROTTLE_SECONDS)
+    return send_successful
+
+
+async def _deliver_mailing_message(user, *, sender_id: int, message_id: int) -> None:
+    user_id = int(user.user_id)
+    user_status = user.status or "inactive"
+
+    try:
+        await bot.copy_message(
+            chat_id=user_id,
+            from_chat_id=sender_id,
+            message_id=message_id,
+        )
+        if user_status == "inactive":
+            await db.set_active(user_id)
+    except Exception as error:
+        error_text = str(error)
+        if error_text == "Forbidden: bots can't send messages to bots":
+            await db.delete_user(user_id)
+        if "blocked" in error_text or "Chat not found" in error_text:
+            await db.set_inactive(user_id)
+    finally:
+        await asyncio.sleep(_ADMIN_THROTTLE_SECONDS)
 
 
 class Mailing(StatesGroup):
@@ -212,48 +285,13 @@ async def check_active_users(call: types.CallbackQuery):
 
     total_users = len(users_to_check)
     status_message = await call.message.edit_text(bm.active_users_check_started(total_users))
-
-    reachable = 0
-    unreachable = 0
-
-    for user in users_to_check:
-        user_id = int(user.user_id)
-        user_status = user.status or "inactive"
-        send_successful = False
-
-        try:
-            await bot.send_chat_action(chat_id=user_id, action="typing")
-            send_successful = True
-        except TelegramRetryAfter as error:
-            await asyncio.sleep(error.retry_after)
-            try:
-                await bot.send_chat_action(chat_id=user_id, action="typing")
-                send_successful = True
-            except TelegramRetryAfter as retry_error:
-                logging.warning("Retry-after triggered twice while checking user %s: %s", user_id, retry_error)
-            except (TelegramForbiddenError, TelegramNotFound, TelegramBadRequest) as retry_error:
-                logging.info("User %s unreachable on retry: %s", user_id, retry_error)
-            except TelegramAPIError as retry_error:
-                logging.error("API error on retry while checking user %s: %s", user_id, retry_error)
-            except Exception as retry_error:
-                logging.error("Unexpected retry error while checking user %s: %s", user_id, retry_error)
-        except (TelegramForbiddenError, TelegramNotFound, TelegramBadRequest) as error:
-            logging.info("User %s unreachable: %s", user_id, error)
-        except TelegramAPIError as error:
-            logging.error("API error while checking user %s: %s", user_id, error)
-        except Exception as error:
-            logging.error("Unexpected error while checking user %s: %s", user_id, error)
-
-        if send_successful:
-            reachable += 1
-            if user_status != "active":
-                await db.set_active(user_id)
-        else:
-            unreachable += 1
-            if user_status != "ban":
-                await db.set_inactive(user_id)
-
-        await asyncio.sleep(0.05)
+    results = await _run_bounded(
+        users_to_check,
+        limit=_ADMIN_ACTIVE_CHECK_CONCURRENCY,
+        worker=_check_user_reachability,
+    )
+    reachable = sum(1 for result in results if result)
+    unreachable = total_users - reachable
 
     await status_message.edit_text(
         bm.active_users_check_completed(total_users, reachable, unreachable),
@@ -446,29 +484,15 @@ async def send_to_all_message(message: types.Message, state: FSMContext):
                                reply_markup=types.ReplyKeyboardRemove())
 
         users = await db.get_all_users_info()
-        for user in users:
-            user_id = int(user.user_id)
-            user_status = user.status or "inactive"
-            try:
-                await bot.copy_message(chat_id=user_id,
-                                       from_chat_id=sender_id,
-                                       message_id=message.message_id)
-
-                if user_status == "inactive":
-                    await db.set_active(user_id)
-
-                await asyncio.sleep(
-                    0.05
-                )
-
-            except Exception as e:
-
-                if str(e) == "Forbidden: bots can't send messages to bots":
-                    await db.delete_user(user_id)
-
-                if "blocked" in str(e) or "Chat not found" in str(e):
-                    await db.set_inactive(user_id)
-                continue
+        await _run_bounded(
+            users,
+            limit=_ADMIN_MAILING_CONCURRENCY,
+            worker=lambda user: _deliver_mailing_message(
+                user,
+                sender_id=sender_id,
+                message_id=message.message_id,
+            ),
+        )
 
         await bot.send_message(chat_id=message.chat.id,
                                text=bm.finish_mailing(),

@@ -52,7 +52,6 @@
 
 | Severity | Файл / рядок | Проблема | Рекомендація |
 |---|---|---|---|
-| Medium | `handlers/admin.py:160-223`, `handlers/admin.py:371-413` | `check_active_users` і масова розсилка працюють строго послідовно з `sleep(0.05)` на кожного користувача. На великій базі це буде дуже повільно і схильне до таймаутів/429. | Додати bounded concurrency (наприклад, semaphore 5-10), retry policy і окремий background job для довгих адмінських операцій. |
 | Medium | `main.py:84-101`, `main.py:116-139` | Analytics batch flush відправляє події в GA послідовно по одній. При зростанні трафіку це створить вузьке місце і збільшить шанс переповнення `_analytics_queue`. | Або використовувати batch endpoint/паралельну відправку з лімітом concurrency, або спочатку тільки persist в БД, а експорт в GA робити окремим воркером. |
 
 ## 6. SOLID та чиста архітектура
@@ -73,8 +72,7 @@
 ### Важливо
 
 1. Доробити persistence для тимчасових workflow-сховищ: TTL/LRU вже є, але важливі токени й pending flow все ще губляться після рестарту.
-2. Додати bounded concurrency для `check_active_users` і масової розсилки.
-3. Переробити analytics export: прибрати сирі Telegram ID з GA payload і перестати штовхати події по одній.
+2. Переробити analytics export: прибрати сирі Telegram ID з GA payload і перестати штовхати події по одній.
 
 ### Бажано
 
