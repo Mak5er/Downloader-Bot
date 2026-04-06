@@ -175,3 +175,6 @@ log/*.jsonl
 services/alembic/README
 services/alembic/versions
 services/alembic/__pycache__/
+
+.claude
+.ruff_cache
