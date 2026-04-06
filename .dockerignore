@@ -1,5 +1,7 @@
 .git
 .github
+.coverage
+.ruff_cache
 .pytest_cache
 .venv
 .vscode
@@ -9,7 +11,11 @@ __pycache__
 *.pyd
 *.log
 .env
+coverage.xml
+htmlcov
 downloads
 log/*
 !log/logger.py
 tests
+README.md
+LICENCE

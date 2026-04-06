@@ -295,6 +295,7 @@ async def test_inline_twitter_query_prefers_media_thumbnail(monkeypatch):
 
     monkeypatch.setattr(twitter, "send_analytics", AsyncMock())
     monkeypatch.setattr(twitter.db, "user_settings", AsyncMock(return_value=settings))
+    monkeypatch.setattr(twitter, "get_bot_url", AsyncMock(return_value="https://t.me/maxloadbot"))
     monkeypatch.setattr(twitter, "_get_tweet_context", AsyncMock(return_value=("999", tweet_media)))
 
     await twitter.inline_twitter_query(query)
