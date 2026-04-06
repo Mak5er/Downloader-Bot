@@ -1,4 +1,4 @@
-from dataclasses import dataclass, field
+﻿from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from collections import defaultdict
 import re
@@ -80,28 +80,6 @@ class Settings(Base):
     audio_button = Column(Text, default="off", nullable=False)
 
     user = relationship("User", back_populates="settings")
-
-
-async def run_alembic_migration():
-    import os
-    import subprocess
-    import shutil
-
-    versions_dir = os.path.join(os.path.dirname(__file__), "alembic", "versions")
-    os.makedirs(versions_dir, exist_ok=True)
-
-    alembic_exe = shutil.which("alembic")
-    if not alembic_exe:
-        logging.warning("Alembic executable not found. Skipping migrations.")
-        return
-
-    logging.event("alembic_migration_start")
-
-    subprocess.run([
-        alembic_exe, "revision", "--autogenerate", "-m", "auto update"
-    ], cwd=os.path.dirname(__file__), stdout=subprocess.DEVNULL)
-    subprocess.run([alembic_exe, "upgrade", "head"], cwd=os.path.dirname(__file__))
-    logging.event("alembic_migration_complete")
 
 
 class DataBase:
@@ -207,10 +185,6 @@ class DataBase:
             "db_init",
             duration_ms=(time.perf_counter() - started_at) * 1000.0,
         )
-
-    async def get_session(self):
-        async with self.SessionLocal() as session:
-            yield session  # Потрібно для використання у FastAPI Depends, якщо треба
 
     async def add_user(self, user_id, user_name, user_username, chat_type, language, status):
         async with self.SessionLocal() as session:
@@ -599,3 +573,4 @@ class DataBase:
     async def get_downloaded_files_by_service(self, period: str) -> dict[str, dict[str, int]]:
         snapshot = await self.get_download_stats(period)
         return snapshot.by_service
+

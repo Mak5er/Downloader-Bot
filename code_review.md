@@ -33,7 +33,6 @@
 | Severity | Файл / рядок | Проблема | Рекомендація |
 |---|---|---|---|
 | Medium | `handlers/tiktok.py:175`, `handlers/instagram.py:155`, `handlers/pinterest.py:213`, `handlers/soundcloud.py:184` | Дублюється однакова логіка `get_user_settings`. Подібне дублювання є і в inline-send flow, media upload flow, status-message flow. Це збільшує вартість змін і ризик роз'їзду поведінки між платформами. | Винести спільні helper/service функції для settings, queue/progress handling, upload/caching, inline token lifecycle. |
-| Medium | `services/db.py:149-151`, `services/db.py:78-97` | Є мертвий або змішаний код: `get_session()` з коментарем про FastAPI, хоча проєкт не FastAPI; `run_alembic_migration()` не використовується. Це створює шум і плутає реальний runtime path. | Видалити невикористаний код або перемістити його в dev tools/scripts. |
 | Medium | `handlers/admin.py`, `handlers/user.py`, `handlers/tiktok.py`, `handlers/instagram.py`, `handlers/twitter.py`, `handlers/pinterest.py`, `handlers/soundcloud.py`, `utils/download_manager.py` | По коду багато широких `except Exception`, часто без переведення в чіткий доменний результат. Через це важко відрізнити реальну бізнес-помилку від дефекту в коді. | Залишати broad catch тільки на boundary layer; усередині сервісів ловити конкретні винятки і логувати структуровано. |
 | Low | `config.py:7-24` | Naming/конфіг змішані: частина змінних у верхньому регістрі, частина в нижньому (`admin_id`, `custom_api_url`). Це дрібниця, але збільшує ентропію в коді. | Привести весь конфіг до одного стилю (`UPPER_SNAKE_CASE`) і однієї точки валідації. |
 
@@ -75,8 +74,7 @@
 1. Розбити великі platform handlers на менші модулі.
 2. Уніфікувати дубльовану логіку settings/progress/upload/inline flow.
 3. Перейти з `create_all` на повноцінний Alembic-first lifecycle.
-4. Видалити або винести мертвий код (`run_alembic_migration`, `get_session`).
-5. Прибрати `from main import ...` через окремий app context / dependency container.
+4. Прибрати `from main import ...` через окремий app context / dependency container.
 
 ## Підсумок
 

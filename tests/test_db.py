@@ -25,11 +25,6 @@ async def database(monkeypatch):
     if not db_url:
         pytest.skip("DATABASE_URL env not set for tests.")
 
-    async def noop_migration():
-        return None
-
-    monkeypatch.setattr(db_module, "run_alembic_migration", noop_migration)
-
     database = db_module.DataBase(db_url)
     await database.init_db()
     yield database
