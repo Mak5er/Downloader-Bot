@@ -4,12 +4,14 @@ import time
 from dataclasses import dataclass, field
 from typing import Optional
 
+from services.links.detection import extract_supported_link
 from services.runtime.state_store import load_bucket, save_bucket
 
 
 @dataclass
 class PendingRequest:
-    text: str
+    service: str
+    url: str
     notice_chat_id: int
     notice_message_id: int
     source_chat_id: Optional[int] = None
@@ -26,7 +28,8 @@ _loaded = False
 
 def _serialize_pending_request(request: PendingRequest) -> dict[str, object]:
     return {
-        "text": request.text,
+        "service": request.service,
+        "url": request.url,
         "notice_chat_id": request.notice_chat_id,
         "notice_message_id": request.notice_message_id,
         "source_chat_id": request.source_chat_id,
@@ -36,8 +39,17 @@ def _serialize_pending_request(request: PendingRequest) -> dict[str, object]:
 
 
 def _deserialize_pending_request(payload: dict[str, object]) -> PendingRequest:
+    service = str(payload.get("service") or "").strip().lower()
+    url = str(payload.get("url") or "").strip()
+    if not service or not url:
+        legacy = extract_supported_link(str(payload.get("text") or ""))
+        if legacy is None:
+            raise ValueError("pending request payload is missing a supported url")
+        service, url = legacy
+
     return PendingRequest(
-        text=str(payload.get("text") or ""),
+        service=service,
+        url=url,
         notice_chat_id=int(payload["notice_chat_id"]),
         notice_message_id=int(payload["notice_message_id"]),
         source_chat_id=int(payload["source_chat_id"]) if payload.get("source_chat_id") is not None else None,
@@ -52,11 +64,16 @@ def _ensure_loaded() -> None:
         return
 
     payload = load_bucket(_PERSISTENCE_BUCKET, dict)
-    _pending = {
-        int(user_id): _deserialize_pending_request(request_payload)
-        for user_id, request_payload in payload.items()
-        if isinstance(request_payload, dict)
-    }
+    restored: dict[int, PendingRequest] = {}
+    for user_id, request_payload in payload.items():
+        if not isinstance(request_payload, dict):
+            continue
+        try:
+            restored[int(user_id)] = _deserialize_pending_request(request_payload)
+        except (TypeError, ValueError, KeyError):
+            continue
+
+    _pending = restored
     _loaded = True
 
 

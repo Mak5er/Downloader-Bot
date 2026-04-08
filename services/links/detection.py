@@ -43,3 +43,13 @@ def detect_supported_service(text: str | None) -> str | None:
             return service
     return None
 
+
+def extract_supported_link(text: str | None) -> tuple[str, str] | None:
+    if not text:
+        return None
+
+    for service, pattern in _SERVICE_PATTERNS:
+        match = pattern.search(text)
+        if match:
+            return service, match.group(1)
+    return None

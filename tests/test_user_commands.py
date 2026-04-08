@@ -117,7 +117,8 @@ async def test_send_welcome_replays_pending_request_in_private_context(monkeypat
         user,
         "pop_pending",
         lambda _user_id: SimpleNamespace(
-            text="https://youtu.be/demo",
+            service="youtube",
+            url="https://youtu.be/demo",
             notice_chat_id=-100,
             notice_message_id=555,
         ),

@@ -26,7 +26,8 @@ def test_pending_requests_store_get_and_pop(monkeypatch):
     monkeypatch.setattr(pending_requests, "_pending", {})
     monkeypatch.setattr(pending_requests, "_loaded", True)
     request = pending_requests.PendingRequest(
-        text="https://youtu.be/demo",
+        service="youtube",
+        url="https://youtu.be/demo",
         notice_chat_id=10,
         notice_message_id=20,
         source_chat_id=-100,
@@ -47,7 +48,8 @@ def test_pending_requests_expire_after_ttl(monkeypatch):
     monkeypatch.setattr(pending_requests.time, "time", lambda: now)
 
     request = pending_requests.PendingRequest(
-        text="https://youtu.be/demo",
+        service="youtube",
+        url="https://youtu.be/demo",
         notice_chat_id=10,
         notice_message_id=20,
     )
@@ -60,11 +62,12 @@ def test_pending_requests_expire_after_ttl(monkeypatch):
 
 
 def test_pending_requests_reload_from_persisted_state(monkeypatch, tmp_path):
-    _configure_runtime_state(monkeypatch, tmp_path, pending_requests)
+    state_file = _configure_runtime_state(monkeypatch, tmp_path, pending_requests)
     monkeypatch.setattr(pending_requests, "_pending", {})
 
     request = pending_requests.PendingRequest(
-        text="https://youtu.be/demo",
+        service="youtube",
+        url="https://youtu.be/demo",
         notice_chat_id=10,
         notice_message_id=20,
     )
@@ -76,8 +79,29 @@ def test_pending_requests_reload_from_persisted_state(monkeypatch, tmp_path):
     restored = pending_requests.get_pending(42)
 
     assert restored is not None
-    assert restored.text == "https://youtu.be/demo"
+    assert restored.service == "youtube"
+    assert restored.url == "https://youtu.be/demo"
     assert restored.notice_chat_id == 10
+    persisted = state_file.read_text(encoding="utf-8")
+    assert '"service":"youtube"' in persisted
+    assert '"url":"https://youtu.be/demo"' in persisted
+    assert '"text"' not in persisted
+
+
+def test_pending_requests_reload_legacy_text_payload(monkeypatch, tmp_path):
+    state_file = _configure_runtime_state(monkeypatch, tmp_path, pending_requests)
+    state_file.write_text(
+        '{"pending_requests":{"42":{"text":"please open https://youtu.be/demo now","notice_chat_id":10,"notice_message_id":20}}}',
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(pending_requests, "_pending", {})
+    monkeypatch.setattr(pending_requests, "_loaded", False)
+
+    restored = pending_requests.get_pending(42)
+
+    assert restored is not None
+    assert restored.service == "youtube"
+    assert restored.url == "https://youtu.be/demo"
 
 
 def test_inline_video_requests_lifecycle(monkeypatch):

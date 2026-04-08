@@ -113,7 +113,7 @@ async def send_welcome(message: types.Message):
                 await bot.delete_message(pending.notice_chat_id, pending.notice_message_id)
             except Exception:
                 pass
-            await _process_pending_message(_build_pending_private_message(message, pending.text))
+            await _process_pending_message(_build_pending_private_message(message, pending.url))
 
 
 def _build_pending_private_message(message: types.Message, pending_text: str) -> types.Message:

@@ -7,7 +7,7 @@ from aiogram.types import Message
 
 import keyboards as kb
 import messages as bm
-from services.links.detection import detect_supported_service
+from services.links.detection import extract_supported_link
 from services.runtime.pending_requests import PendingRequest, get_pending, set_pending
 
 _bot_username: str | None = None
@@ -30,8 +30,10 @@ class PrivateChatGuardMiddleware(BaseMiddleware):
             return await handler(event, data)
 
         text = event.text or event.caption or ""
-        if not detect_supported_service(text):
+        detected = extract_supported_link(text)
+        if detected is None:
             return await handler(event, data)
+        service, source_url = detected
 
         bot = data.get("bot")
         if not bot:
@@ -59,7 +61,8 @@ class PrivateChatGuardMiddleware(BaseMiddleware):
             set_pending(
                 event.from_user.id,
                 PendingRequest(
-                    text=text,
+                    service=service,
+                    url=source_url,
                     notice_chat_id=notice.chat.id,
                     notice_message_id=notice.message_id,
                     source_chat_id=getattr(event.chat, "id", None),

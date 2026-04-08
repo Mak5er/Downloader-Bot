@@ -176,7 +176,8 @@ async def test_private_chat_guard_creates_pending_request_when_user_has_no_dm(mo
     handler = AsyncMock()
     sent_requests = []
     existing_pending = private_chat_guard.PendingRequest(
-        text="https://youtu.be/old",
+        service="youtube",
+        url="https://youtu.be/old",
         notice_chat_id=-100,
         notice_message_id=555,
     )
@@ -220,6 +221,7 @@ async def test_private_chat_guard_creates_pending_request_when_user_has_no_dm(mo
     event.reply.assert_awaited_once_with("Open DM", reply_markup="keyboard:maxloadbot")
     handler.assert_not_awaited()
     assert sent_requests[0][0] == 42
-    assert sent_requests[0][1].text == "https://tiktok.com/@demo/video/1"
+    assert sent_requests[0][1].service == "tiktok"
+    assert sent_requests[0][1].url == "https://tiktok.com/@demo/video/1"
     assert sent_requests[0][1].notice_chat_id == -200
     assert sent_requests[0][1].notice_message_id == 777
