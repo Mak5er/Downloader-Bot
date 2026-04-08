@@ -3,6 +3,7 @@ import logging as py_logging
 import os
 import time
 from datetime import timedelta
+from pathlib import Path
 
 from aiogram import types, F, Router
 from aiogram.exceptions import (
@@ -63,6 +64,62 @@ async def _run_bounded(items, *, limit: int, worker):
             return await worker(item)
 
     return await asyncio.gather(*(_wrapped(item) for item in items))
+
+
+def _is_path_within_root(path: Path, root: Path) -> bool:
+    try:
+        path.resolve().relative_to(root.resolve())
+        return True
+    except ValueError:
+        return False
+
+
+def _cleanup_download_tree(*, now: float | None = None) -> tuple[int, int, int]:
+    root = Path(OUTPUT_DIR).resolve()
+    cutoff_timestamp = (time.time() if now is None else now) - _DOWNLOAD_CLEANUP_MIN_AGE_SECONDS
+    removed_files = 0
+    skipped_recent_files = 0
+    candidate_dirs: list[Path] = []
+
+    for current_root, dirnames, filenames in os.walk(root, topdown=True, followlinks=False):
+        current_path = Path(current_root).resolve()
+        if not _is_path_within_root(current_path, root):
+            dirnames[:] = []
+            continue
+
+        safe_dirnames: list[str] = []
+        for dirname in dirnames:
+            dir_path = current_path / dirname
+            if dir_path.is_symlink():
+                continue
+            if _is_path_within_root(dir_path, root):
+                safe_dirnames.append(dirname)
+                candidate_dirs.append(dir_path.resolve())
+        dirnames[:] = safe_dirnames
+
+        for filename in filenames:
+            file_path = current_path / filename
+            if not _is_path_within_root(file_path, root):
+                continue
+            if file_path.stat().st_mtime > cutoff_timestamp:
+                skipped_recent_files += 1
+                continue
+            file_path.unlink()
+            removed_files += 1
+
+    removed_dirs = 0
+    for dir_path in sorted(candidate_dirs, key=lambda item: len(item.parts), reverse=True):
+        if dir_path == root:
+            continue
+        try:
+            next(dir_path.iterdir())
+        except StopIteration:
+            dir_path.rmdir()
+            removed_dirs += 1
+        except FileNotFoundError:
+            continue
+
+    return removed_files, skipped_recent_files, removed_dirs
 
 
 async def _check_user_reachability(user) -> bool:
@@ -554,21 +611,11 @@ async def clear_downloads_and_notify():
                 f"active_jobs={queue_snapshot.active_jobs}, queued_jobs={queue_snapshot.queued_jobs}."
             )
         elif os.path.exists(OUTPUT_DIR):
-            removed_files = 0
-            skipped_recent_files = 0
-            cutoff_timestamp = time.time() - _DOWNLOAD_CLEANUP_MIN_AGE_SECONDS
-            for file in os.listdir(OUTPUT_DIR):
-                file_path = os.path.join(OUTPUT_DIR, file)
-                if not os.path.isfile(file_path):
-                    continue
-                if os.path.getmtime(file_path) > cutoff_timestamp:
-                    skipped_recent_files += 1
-                    continue
-                os.remove(file_path)
-                removed_files += 1
+            removed_files, skipped_recent_files, removed_dirs = _cleanup_download_tree()
             message = (
                 f"The folder '{OUTPUT_DIR}' has been cleaned. "
-                f"Removed {removed_files} files; skipped {skipped_recent_files} recent files."
+                f"Removed {removed_files} files and {removed_dirs} directories; "
+                f"skipped {skipped_recent_files} recent files."
             )
         else:
             message = f"The folder '{OUTPUT_DIR}' does not exist."

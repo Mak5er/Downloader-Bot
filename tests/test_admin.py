@@ -35,6 +35,37 @@ async def test_clear_downloads_and_notify_removes_files(tmp_path, monkeypatch):
     assert not any(path.is_file() for path in folder.iterdir())
     assert len(sent_messages) == 2
     assert "Removed 2 files" in sent_messages[0][1]
+    assert "0 directories" in sent_messages[0][1]
+
+
+@pytest.mark.asyncio
+async def test_clear_downloads_and_notify_removes_nested_files_and_empty_dirs(tmp_path, monkeypatch):
+    folder = tmp_path / "downloads"
+    nested = folder / "tweet123" / "variants"
+    nested.mkdir(parents=True)
+    old_file = nested / "video.mp4"
+    old_file.write_text("data")
+
+    sent_messages = []
+
+    async def fake_send_message(chat_id, text):
+        sent_messages.append((chat_id, text))
+
+    monkeypatch.setattr(admin, "OUTPUT_DIR", str(folder))
+    monkeypatch.setattr(admin, "ADMINS_UID", [1])
+    monkeypatch.setattr(admin, "bot", SimpleNamespace(send_message=fake_send_message))
+    monkeypatch.setattr(admin, "_DOWNLOAD_CLEANUP_MIN_AGE_SECONDS", 0.0)
+    monkeypatch.setattr(
+        admin,
+        "get_download_queue",
+        lambda: SimpleNamespace(load_snapshot=lambda: SimpleNamespace(active_jobs=0, queued_jobs=0)),
+    )
+
+    await admin.clear_downloads_and_notify()
+
+    assert not old_file.exists()
+    assert not nested.exists()
+    assert "Removed 1 files and 2 directories" in sent_messages[0][1]
 
 
 @pytest.mark.asyncio
