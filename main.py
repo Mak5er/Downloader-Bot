@@ -2,7 +2,7 @@ import asyncio
 import hashlib
 import os
 from dataclasses import dataclass
-from typing import Optional
+from typing import Callable, Optional
 
 import httpx
 from aiocron import crontab
@@ -29,25 +29,50 @@ from utils.http_client import close_http_session
 
 logging = logging.bind(service="main")
 
-custom_timeout = 600
-session = AiohttpSession(
-    api=TelegramAPIServer.from_base(CUSTOM_API_URL),
-    timeout=custom_timeout,
-)
-default = DefaultBotProperties(parse_mode=ParseMode.HTML)
-bot = Bot(token=BOT_TOKEN, default=default, session=session)
-dp = Dispatcher()
-
-db = DataBase()
-
-os.makedirs("downloads", exist_ok=True)
-
-
 @dataclass(slots=True)
 class _AnalyticsPayload:
     user_id: int
     chat_type: str
     action_name: str
+
+
+@dataclass(slots=True)
+class Application:
+    session: AiohttpSession
+    bot: Bot
+    dispatcher: Dispatcher
+    db: DataBase
+
+
+def create_app(
+    *,
+    bot_token: str = BOT_TOKEN,
+    api_url: str = CUSTOM_API_URL,
+    database_factory: Callable[[], DataBase] = DataBase,
+    session_timeout: int = 600,
+) -> Application:
+    session = AiohttpSession(
+        api=TelegramAPIServer.from_base(api_url),
+        timeout=session_timeout,
+    )
+    default = DefaultBotProperties(parse_mode=ParseMode.HTML)
+    bot = Bot(token=bot_token, default=default, session=session)
+    dispatcher = Dispatcher()
+    db = database_factory()
+    os.makedirs("downloads", exist_ok=True)
+    return Application(
+        session=session,
+        bot=bot,
+        dispatcher=dispatcher,
+        db=db,
+    )
+
+
+_app = create_app()
+session = _app.session
+bot = _app.bot
+dp = _app.dispatcher
+db = _app.db
 
 
 _ANALYTICS_QUEUE_MAXSIZE = 2048
