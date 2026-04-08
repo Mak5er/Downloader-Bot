@@ -1,6 +1,5 @@
 import asyncio
 import datetime
-import os
 import re
 from typing import Optional
 from urllib.parse import urlparse
@@ -9,6 +8,7 @@ import aiohttp
 from aiogram import types, Router, F
 from aiogram.types import FSInputFile, InlineQueryResultArticle
 from fake_useragent import UserAgent
+from yt_dlp import YoutubeDL
 
 import keyboards as kb
 import messages as bm
@@ -17,7 +17,6 @@ from services.media.delivery import send_cached_media_entries
 from handlers.user import update_info
 from handlers.utils import (
     build_inline_album_result,
-    build_request_id,
     build_queue_busy_text,
     build_rate_limit_text,
     build_start_deeplink_url,
@@ -48,10 +47,8 @@ from handlers.utils import (
 from log.logger import logger as logging
 from app_context import bot, db, send_analytics
 from utils.download_manager import (
-    DownloadProgress,
     DownloadQueueBusyError,
     DownloadRateLimitError,
-    DownloadMetrics,
     log_download_metrics,
 )
 from utils.http_client import get_http_session
@@ -88,6 +85,7 @@ class TikTokService(tiktok_platform.TikTokMediaService):
             get_http_session_func=lambda: get_http_session(),
             retry_async_operation_func=lambda *args, **kwargs: retry_async_operation(*args, **kwargs),
             user_agent_factory=lambda: UserAgent(),
+            youtube_dl_factory=lambda options: YoutubeDL(options),
         )
 
 
@@ -254,8 +252,9 @@ async def process_tiktok_video(message: types.Message, data: dict, bot_url: str,
 
         metrics = await asyncio.wait_for(
             tiktok_service.download_video(
-                info.id,
+                db_video_url,
                 download_name,
+                download_data=data,
                 user_id=message.from_user.id,
                 request_id=request_id,
                 size_hint=size_hint,
@@ -505,8 +504,9 @@ async def download_tiktok_mp3_callback(call: types.CallbackQuery):
         )
 
         metrics = await tiktok_service.download_audio(
-            info.music_play_url,
+            video_url,
             download_name,
+            download_data=data,
             user_id=call.from_user.id,
             request_id=request_id,
             on_progress=on_progress,
@@ -821,8 +821,9 @@ async def _send_inline_tiktok_video(
 
             metrics = await asyncio.wait_for(
                 tiktok_service.download_video(
-                    info.id,
+                    db_video_url,
                     download_name,
+                    download_data=data,
                     user_id=request.owner_user_id,
                     request_id=request_id,
                     size_hint=size_hint,
