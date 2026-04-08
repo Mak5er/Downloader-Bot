@@ -1,12 +1,15 @@
 import asyncio
+import hashlib
 import json
 import logging
 import os
+import re
 from contextlib import contextmanager
 from contextvars import ContextVar, Token
 from datetime import datetime
 from logging.handlers import RotatingFileHandler
 from typing import Any, Iterator
+from urllib.parse import urlsplit
 
 import colorlog
 
@@ -83,6 +86,9 @@ _TEXT_DYNAMIC_FIELD_PRIORITY = (
 )
 _TEXT_DYNAMIC_FIELD_MAX = 5
 _TEXT_VALUE_MAX_LENGTH = 120
+_LOG_HASH_LENGTH = 10
+_URL_RE = re.compile(r"https?://\S+", re.IGNORECASE)
+_URL_PATH_NOISE = {"status", "statuses", "video", "watch", "reel", "reels", "p"}
 
 
 def _sanitize_field_key(key: str) -> str:
@@ -114,6 +120,41 @@ def _serialize_text_field_value(value: Any) -> str:
     if len(rendered) > _TEXT_VALUE_MAX_LENGTH:
         rendered = f"{rendered[:_TEXT_VALUE_MAX_LENGTH - 1]}…"
     return rendered
+
+
+def _short_hash(value: str) -> str:
+    return hashlib.sha256(value.encode("utf-8", errors="ignore")).hexdigest()[:_LOG_HASH_LENGTH]
+
+
+def summarize_url_for_log(url: Any) -> str:
+    if not isinstance(url, str):
+        return "-"
+    candidate = url.strip()
+    if not candidate:
+        return "-"
+
+    parsed = urlsplit(candidate if "://" in candidate else f"https://{candidate}")
+    host = (parsed.netloc or "").lower() or "url"
+    segments = [
+        segment
+        for segment in (parsed.path or "").split("/")
+        if segment and segment.lower() not in _URL_PATH_NOISE
+    ]
+    hint = segments[-1][:24] if segments else "root"
+    return f"{host}|{hint}|{_short_hash(candidate)}"
+
+
+def summarize_text_for_log(text: Any) -> str:
+    if not isinstance(text, str):
+        return "-"
+    candidate = text.strip()
+    if not candidate:
+        return "-"
+
+    match = _URL_RE.search(candidate)
+    if match:
+        return summarize_url_for_log(match.group(0))
+    return f"text|len={len(candidate)}|{_short_hash(candidate)}"
 
 
 def _extract_dynamic_text_fields(record: logging.LogRecord) -> dict[str, Any]:

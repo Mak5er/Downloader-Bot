@@ -19,7 +19,7 @@ from aiogram.types import FSInputFile
 from aiogram.exceptions import TelegramAPIError
 
 import messages as bm
-from log.logger import logger as logging
+from log.logger import logger as logging, summarize_text_for_log
 from services.download.queue import QueueTicket
 from utils.download_manager import DownloadProgress
 
@@ -256,7 +256,7 @@ async def safe_answer_inline_query(
         logging.warning(
             "Retrying inline answer with degraded previews: user_id=%s query=%s error=%s",
             getattr(getattr(query, "from_user", None), "id", None),
-            getattr(query, "query", None),
+            summarize_text_for_log(getattr(query, "query", None)),
             exc,
         )
         degraded_results = sanitize_inline_results(

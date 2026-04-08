@@ -51,7 +51,7 @@ from handlers.utils import (
     with_inline_send_logging,
     with_message_logging,
 )
-from log.logger import logger as logging
+from log.logger import logger as logging, summarize_text_for_log, summarize_url_for_log
 from app_context import bot, db, send_analytics
 from utils.download_manager import (
     DownloadConfig,
@@ -175,7 +175,7 @@ async def _expand_short_link_cached(link: str) -> Optional[str]:
             retry_on_exception=lambda exc: isinstance(exc, (aiohttp.ClientError, asyncio.TimeoutError)),
         )
     except Exception as exc:
-        logging.error("Failed to expand t.co URL: url=%s error=%s", link, exc)
+        logging.error("Failed to expand t.co URL: url=%s error=%s", summarize_url_for_log(link), exc)
         return None
 
     async with _twitter_cache_lock:
@@ -445,7 +445,7 @@ async def handle_tweet_links(message, direct_url: Optional[str] = None):
         message.from_user.id,
         message.from_user.username,
         business_id,
-        text,
+        summarize_text_for_log(text),
     )
 
     await react_to_message(message, "👾", business_id=business_id)
@@ -531,7 +531,7 @@ async def inline_twitter_query(query: types.InlineQuery):
                     except Exception as exc:
                         logging.warning(
                             "Failed to cache Twitter album preview photo: url=%s error=%s",
-                            source_url,
+                            summarize_url_for_log(source_url),
                             exc,
                         )
             preview_url = _get_twitter_media_preview_url(media_items[0], tweet_media) or next(
@@ -614,7 +614,7 @@ async def inline_twitter_query(query: types.InlineQuery):
         logging.exception(
             "Error processing Twitter inline query: user_id=%s query=%s error=%s",
             query.from_user.id,
-            query.query,
+            summarize_text_for_log(query.query),
             exc,
         )
         await query.answer([], cache_time=1, is_personal=True)

@@ -44,7 +44,7 @@ from handlers.utils import (
     with_inline_send_logging,
     with_message_logging,
 )
-from log.logger import logger as logging
+from log.logger import logger as logging, summarize_text_for_log, summarize_url_for_log
 from app_context import bot, db, send_analytics
 from utils.download_manager import (
     DownloadQueueBusyError,
@@ -130,7 +130,7 @@ async def process_tiktok(message: types.Message, direct_url: Optional[str] = Non
             message.from_user.id,
             message.from_user.username,
             business_id,
-            text,
+            summarize_text_for_log(text),
         )
 
         stripped = (text or "").strip()
@@ -183,7 +183,7 @@ async def process_tiktok(message: types.Message, direct_url: Optional[str] = Non
         logging.exception(
             "Error processing TikTok message: user_id=%s text=%s error=%s",
             message.from_user.id,
-            get_message_text(message),
+            summarize_text_for_log(get_message_text(message)),
             e,
         )
         await handle_download_error(message)
@@ -223,7 +223,7 @@ async def process_tiktok_video(message: types.Message, data: dict, bot_url: str,
         if db_file_id:
             logging.info(
                 "Serving cached TikTok video: url=%s file_id=%s",
-                db_video_url,
+                summarize_url_for_log(db_video_url),
                 db_file_id,
             )
             await safe_edit_text(status_message, bm.uploading_status())
@@ -272,7 +272,7 @@ async def process_tiktok_video(message: types.Message, data: dict, bot_url: str,
         file_size = metrics.size
 
         if file_size >= MAX_FILE_SIZE:
-            logging.warning("TikTok video too large: url=%s size=%s", db_video_url, file_size)
+            logging.warning("TikTok video too large: url=%s size=%s", summarize_url_for_log(db_video_url), file_size)
             await handle_large_file(message, business_id)
             return
 
@@ -292,9 +292,9 @@ async def process_tiktok_video(message: types.Message, data: dict, bot_url: str,
 
         try:
             await db.add_file(db_video_url, sent.video.file_id, "video")
-            logging.info("Cached TikTok video: url=%s file_id=%s", db_video_url, sent.video.file_id)
+            logging.info("Cached TikTok video: url=%s file_id=%s", summarize_url_for_log(db_video_url), sent.video.file_id)
         except Exception as e:
-            logging.error("Error caching TikTok video: url=%s error=%s", db_video_url, e)
+            logging.error("Error caching TikTok video: url=%s error=%s", summarize_url_for_log(db_video_url), e)
 
     except DownloadRateLimitError as e:
         if show_service_status:
@@ -313,7 +313,7 @@ async def process_tiktok_video(message: types.Message, data: dict, bot_url: str,
         else:
             await handle_download_error(message, business_id=business_id)
     except Exception as e:
-        logging.exception("Error processing TikTok video: url=%s error=%s", db_video_url, e)
+        logging.exception("Error processing TikTok video: url=%s error=%s", summarize_url_for_log(db_video_url), e)
         await handle_download_error(message, business_id=business_id)
     finally:
         if download_path:
@@ -332,14 +332,14 @@ async def process_tiktok_photos(message: types.Message, data: dict, bot_url: str
         logging.warning(
             "TikTok photo post missing images: user_id=%s url=%s",
             message.from_user.id,
-            video_url,
+            summarize_url_for_log(video_url),
         )
         await handle_download_error(message, business_id=business_id)
         return
     logging.info(
         "Sending TikTok photo set: user_id=%s url=%s image_count=%s",
         message.from_user.id,
-        video_url,
+        summarize_url_for_log(video_url),
         len(images),
     )
     status_message: Optional[types.Message] = None
@@ -453,7 +453,7 @@ async def download_tiktok_mp3_callback(call: types.CallbackQuery):
     logging.info(
         "Downloading TikTok MP3 via button: user_id=%s url=%s",
         call.from_user.id,
-        video_url,
+        summarize_url_for_log(video_url),
     )
 
     try:
@@ -560,13 +560,13 @@ async def inline_tiktok_query(query: types.InlineQuery):
         logging.info(
             "Inline TikTok request: user_id=%s query=%s",
             query.from_user.id,
-            query.query,
+            summarize_text_for_log(query.query),
         )
         user_settings = await db.user_settings(query.from_user.id)
         bot_url = await get_bot_url(bot)
         match = re.search(r"(https?://(?:www\.|vm\.|vt\.|vn\.)?tiktok\.com/\S+)", query.query)
         if not match:
-            logging.debug("Inline TikTok query pattern not matched: query=%s", query.query)
+            logging.debug("Inline TikTok query pattern not matched: query=%s", summarize_text_for_log(query.query))
             return await query.answer([], cache_time=1, is_personal=True)
 
         source_url = strip_tiktok_tracking(match.group(0))
@@ -660,7 +660,7 @@ async def inline_tiktok_query(query: types.InlineQuery):
                         except Exception as exc:
                             logging.warning(
                                 "Failed to cache TikTok album preview photo: url=%s error=%s",
-                                source_url,
+                                summarize_url_for_log(source_url),
                                 exc,
                             )
                 results.append(build_inline_album_result(
@@ -683,7 +683,7 @@ async def inline_tiktok_query(query: types.InlineQuery):
         logging.exception(
             "Error processing inline TikTok query: user_id=%s query=%s error=%s",
             query.from_user.id,
-            query.query,
+            summarize_text_for_log(query.query),
             e,
         )
         await query.answer([], cache_time=1, is_personal=True)
@@ -854,7 +854,7 @@ async def _send_inline_tiktok_video(
             await db.add_file(db_video_url, db_id, "video")
             logging.info(
                 "Inline TikTok video cached: url=%s file_id=%s",
-                db_video_url,
+                summarize_url_for_log(db_video_url),
                 db_id,
             )
         else:
@@ -885,7 +885,7 @@ async def _send_inline_tiktok_video(
             logging.info(
                 "Served inline TikTok video: inline_message_id=%s url=%s file_id=%s",
                 inline_message_id,
-                db_video_url,
+                summarize_url_for_log(db_video_url),
                 db_id,
             )
             return

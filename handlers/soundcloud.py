@@ -36,7 +36,7 @@ from handlers.utils import (
     with_inline_send_logging,
     with_message_logging,
 )
-from log.logger import logger as logging
+from log.logger import logger as logging, summarize_text_for_log, summarize_url_for_log
 from app_context import bot, db, send_analytics
 from utils.cobalt_client import fetch_cobalt_data
 from utils.download_manager import (
@@ -101,7 +101,7 @@ async def process_soundcloud(message: types.Message):
             return
         source_url = strip_soundcloud_url(match.group(0))
 
-        logging.info("SoundCloud request: user_id=%s url=%s", message.from_user.id, source_url)
+        logging.info("SoundCloud request: user_id=%s url=%s", message.from_user.id, summarize_url_for_log(source_url))
         await send_analytics(user_id=message.from_user.id, chat_type=message.chat.type, action_name="soundcloud_audio")
         await react_to_message(message, "\U0001F47E", business_id=business_id)
         user_settings = await load_user_settings(db, message)
@@ -268,7 +268,7 @@ async def inline_soundcloud_query(query: types.InlineQuery):
         logging.exception(
             "Error processing SoundCloud inline query: user_id=%s query=%s error=%s",
             query.from_user.id,
-            query.query,
+            summarize_text_for_log(query.query),
             exc,
         )
         await query.answer([], cache_time=1, is_personal=True)

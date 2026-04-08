@@ -40,7 +40,7 @@ from handlers.utils import (
     with_inline_send_logging,
     with_message_logging,
 )
-from log.logger import logger as logging
+from log.logger import logger as logging, summarize_text_for_log, summarize_url_for_log
 from app_context import bot, db, send_analytics
 from utils.download_manager import (
     DownloadProgress,
@@ -192,7 +192,7 @@ async def download_video(message: types.Message):
         "Downloading YouTube video : user_id=%s username=%s url=%s",
         message.from_user.id,
         message.from_user.username,
-        url,
+        summarize_url_for_log(url),
     )
     await send_analytics(user_id=message.from_user.id, chat_type=message.chat.type, action_name="youtube_video")
     status_message: Optional[types.Message] = None
@@ -229,7 +229,7 @@ async def download_video(message: types.Message):
         if db_file_id:
             logging.info(
                 "Serving cached YouTube video: url=%s file_id=%s",
-                yt['webpage_url'],
+                summarize_url_for_log(yt['webpage_url']),
                 db_file_id,
             )
             await safe_edit_text(status_message, bm.uploading_status())
@@ -345,7 +345,7 @@ async def download_video(message: types.Message):
         await db.add_file(yt['webpage_url'], sent_message.video.file_id, "video")
         logging.info(
             "YouTube video cached: url=%s file_id=%s",
-            yt['webpage_url'],
+            summarize_url_for_log(yt['webpage_url']),
             sent_message.video.file_id,
         )
 
@@ -393,7 +393,7 @@ async def download_music(message: types.Message):
         "Downloading YouTube audio: user_id=%s username=%s url=%s",
         message.from_user.id,
         message.from_user.username,
-        url,
+        summarize_url_for_log(url),
     )
     status_message: Optional[types.Message] = None
     business_id = message.business_connection_id
@@ -525,7 +525,7 @@ async def download_youtube_mp3_callback(call: types.CallbackQuery):
     logging.info(
         "Downloading YouTube MP3 via button: user_id=%s url=%s",
         call.from_user.id,
-        url,
+        summarize_url_for_log(url),
     )
 
     try:
@@ -645,7 +645,7 @@ async def inline_youtube_music_query(query: types.InlineQuery):
         logging.exception(
             "Error processing YouTube Music inline query: user_id=%s query=%s error=%s",
             query.from_user.id,
-            query.query,
+            summarize_text_for_log(query.query),
             e,
         )
         await query.answer([], cache_time=1, is_personal=True)
@@ -662,7 +662,7 @@ async def inline_youtube_query(query: types.InlineQuery):
         logging.info(
             "Downloading YouTube Inline: user_id=%s query=%s",
             query.from_user.id,
-            url,
+            summarize_url_for_log(url),
         )
         yt = await asyncio.to_thread(get_youtube_video, url)
         if not yt:

@@ -6,6 +6,7 @@ import messages as bm
 import pytest
 
 from handlers import utils
+from log.logger import summarize_text_for_log, summarize_url_for_log
 from utils.download_manager import DownloadProgress
 
 
@@ -319,3 +320,18 @@ async def test_make_retry_status_notifier_respects_threshold(monkeypatch):
     await notifier(2, 4, RuntimeError("show"))
 
     update_text.assert_awaited_once_with("retry 3/4")
+
+
+def test_summarize_url_for_log_uses_host_hint_and_hash():
+    summary = summarize_url_for_log("https://www.youtube.com/watch?v=abc123")
+
+    assert summary.startswith("www.youtube.com|")
+    assert "watch" not in summary
+    assert len(summary.split("|")[-1]) == 10
+
+
+def test_summarize_text_for_log_avoids_raw_text_echo():
+    summary = summarize_text_for_log("download this private note please")
+
+    assert summary.startswith("text|len=")
+    assert "private note" not in summary

@@ -18,7 +18,7 @@ from matplotlib.ticker import MaxNLocator
 import keyboards as kb
 import messages as bm
 from handlers.utils import get_message_text
-from log.logger import logger as logging
+from log.logger import logger as logging, summarize_url_for_log
 
 logging = logging.bind(service="user")
 from app_context import db, send_analytics, bot
@@ -173,7 +173,7 @@ async def _process_inline_album_deeplink(message: types.Message, payload: str) -
             "Failed to process inline album deeplink: user_id=%s service=%s url=%s",
             message.from_user.id,
             request.service,
-            request.url,
+            summarize_url_for_log(request.url),
         )
         await message.reply(bm.something_went_wrong())
         return True

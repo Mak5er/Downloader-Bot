@@ -48,7 +48,7 @@ from handlers.utils import (
     with_inline_send_logging,
     with_message_logging,
 )
-from log.logger import logger as logging
+from log.logger import logger as logging, summarize_text_for_log, summarize_url_for_log
 from app_context import bot, db, send_analytics
 from utils.cobalt_client import fetch_cobalt_data
 from utils.download_manager import (
@@ -110,7 +110,7 @@ async def process_pinterest(message: types.Message, direct_url: Optional[str] = 
                 return
             source_url = strip_pinterest_url(url_match.group(0))
 
-        logging.info("Pinterest request: user_id=%s url=%s", message.from_user.id, source_url)
+        logging.info("Pinterest request: user_id=%s url=%s", message.from_user.id, summarize_url_for_log(source_url))
         await send_analytics(user_id=message.from_user.id, chat_type=message.chat.type, action_name="pinterest_media")
         await react_to_message(message, "\U0001F47E", business_id=business_id)
         user_settings = await load_user_settings(db, message)
@@ -132,7 +132,7 @@ async def process_pinterest(message: types.Message, direct_url: Optional[str] = 
         logging.exception(
             "Error processing Pinterest message: user_id=%s text=%s error=%s",
             message.from_user.id,
-            get_message_text(message),
+            summarize_text_for_log(get_message_text(message)),
             exc,
         )
         await handle_download_error(message)
@@ -439,7 +439,7 @@ async def inline_pinterest_query(query: types.InlineQuery):
                     except Exception as exc:
                         logging.warning(
                             "Failed to cache Pinterest album preview photo: url=%s error=%s",
-                            source_url,
+                            summarize_url_for_log(source_url),
                             exc,
                         )
             token = create_inline_album_request(query.from_user.id, "pinterest", source_url)
@@ -515,7 +515,7 @@ async def inline_pinterest_query(query: types.InlineQuery):
         logging.exception(
             "Error processing Pinterest inline query: user_id=%s query=%s error=%s",
             query.from_user.id,
-            query.query,
+            summarize_text_for_log(query.query),
             exc,
         )
         await query.answer([], cache_time=1, is_personal=True)

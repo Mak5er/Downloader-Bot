@@ -52,7 +52,7 @@ from handlers.utils import (
     with_inline_send_logging,
     with_message_logging,
 )
-from log.logger import logger as logging
+from log.logger import logger as logging, summarize_text_for_log, summarize_url_for_log
 from app_context import bot, db, send_analytics
 from utils.cobalt_client import fetch_cobalt_data
 from utils.download_manager import (
@@ -109,7 +109,7 @@ async def process_instagram(message: types.Message, direct_url: Optional[str] = 
                 return
             url = strip_instagram_url(url_match.group(0))
 
-        logging.info("Instagram request: user_id=%s url=%s", message.from_user.id, url)
+        logging.info("Instagram request: user_id=%s url=%s", message.from_user.id, summarize_url_for_log(url))
         user_settings = await load_user_settings(db, message)
         await react_to_message(message, "👾", business_id=business_id)
 
@@ -139,7 +139,7 @@ async def process_instagram(message: types.Message, direct_url: Optional[str] = 
         logging.exception(
             "Error processing Instagram message: user_id=%s text=%s error=%s",
             message.from_user.id,
-            get_message_text(message),
+            summarize_text_for_log(get_message_text(message)),
             e,
         )
         await handle_download_error(message)
@@ -178,7 +178,7 @@ async def process_instagram_video(message: types.Message, data: InstagramVideo, 
         if db_file_id:
             logging.info(
                 "Serving cached Instagram video: url=%s file_id=%s",
-                db_video_url,
+                summarize_url_for_log(db_video_url),
                 db_file_id,
             )
             await safe_edit_text(status_message, bm.uploading_status())
@@ -222,7 +222,7 @@ async def process_instagram_video(message: types.Message, data: InstagramVideo, 
         if file_size >= MAX_FILE_SIZE:
             logging.warning(
                 "Instagram video too large: url=%s size=%s",
-                db_video_url,
+                summarize_url_for_log(db_video_url),
                 file_size,
             )
             await handle_download_error(message, business_id=business_id)
@@ -245,11 +245,11 @@ async def process_instagram_video(message: types.Message, data: InstagramVideo, 
             await db.add_file(db_video_url, sent.video.file_id, "video")
             logging.info(
                 "Cached Instagram video: url=%s file_id=%s",
-                db_video_url,
+                summarize_url_for_log(db_video_url),
                 sent.video.file_id,
             )
         except Exception as e:
-            logging.error("Error caching Instagram video: url=%s error=%s", db_video_url, e)
+            logging.error("Error caching Instagram video: url=%s error=%s", summarize_url_for_log(db_video_url), e)
 
     except DownloadRateLimitError as e:
         if show_service_status:
@@ -264,7 +264,7 @@ async def process_instagram_video(message: types.Message, data: InstagramVideo, 
     except Exception as e:
         logging.exception(
             "Error processing Instagram video: url=%s error=%s",
-            db_video_url,
+            summarize_url_for_log(db_video_url),
             e,
         )
         await handle_download_error(message, business_id=business_id)
@@ -283,7 +283,7 @@ async def process_instagram_media_group(message: types.Message, data: InstagramV
         "Sending Instagram media group: user_id=%s media_count=%s url=%s",
         message.from_user.id,
         len(data.media_list),
-        original_url,
+        summarize_url_for_log(original_url),
     )
 
     await send_chat_action_if_needed(bot, message.chat.id, "upload_photo", business_id)
@@ -372,7 +372,7 @@ async def download_instagram_audio_callback(call: types.CallbackQuery):
         if db_file_id:
             logging.info(
                 "Serving cached Instagram audio: url=%s file_id=%s",
-                original_url,
+                summarize_url_for_log(original_url),
                 db_file_id,
             )
             await safe_edit_text(status_message, bm.uploading_status())
@@ -395,7 +395,7 @@ async def download_instagram_audio_callback(call: types.CallbackQuery):
                 await safe_edit_text(status_message, bm.audio_fetch_failed())
             else:
                 await handle_download_error(call.message, business_id=business_id)
-            logging.error("Failed to fetch Instagram audio: url=%s", original_url)
+            logging.error("Failed to fetch Instagram audio: url=%s", summarize_url_for_log(original_url))
             return
 
         audio_item = data.media_list[0]
@@ -451,11 +451,11 @@ async def download_instagram_audio_callback(call: types.CallbackQuery):
             await db.add_file(cache_key, sent_message.audio.file_id, "audio")
             logging.info(
                 "Cached Instagram audio: url=%s file_id=%s",
-                original_url,
+                summarize_url_for_log(original_url),
                 sent_message.audio.file_id,
             )
         except Exception as e:
-            logging.error("Error caching Instagram audio: url=%s error=%s", original_url, e)
+            logging.error("Error caching Instagram audio: url=%s error=%s", summarize_url_for_log(original_url), e)
 
         await remove_file(metrics.path)
         logging.debug("Removed temporary Instagram audio file: path=%s", metrics.path)
@@ -473,7 +473,7 @@ async def download_instagram_audio_callback(call: types.CallbackQuery):
     except Exception as e:
         logging.exception(
             "Error downloading Instagram audio: url=%s error=%s",
-            original_url,
+            summarize_url_for_log(original_url),
             e,
         )
         if status_message:
@@ -492,7 +492,7 @@ async def inline_instagram_query(query: types.InlineQuery):
         logging.info(
             "Inline Instagram request: user_id=%s query=%s",
             query.from_user.id,
-            query.query,
+            summarize_text_for_log(query.query),
         )
 
         user_settings = await db.user_settings(query.from_user.id)
@@ -500,14 +500,14 @@ async def inline_instagram_query(query: types.InlineQuery):
 
         url_match = re.search(r"(https?://(www\.)?instagram\.com/(p|reels|reel)/[^/?#&]+)", query.query)
         if not url_match:
-            logging.debug("Inline Instagram query pattern not matched: query=%s", query.query)
+            logging.debug("Inline Instagram query pattern not matched: query=%s", summarize_text_for_log(query.query))
             return await query.answer([], cache_time=1, is_personal=True)
 
         original_url = strip_instagram_url(url_match.group(0))
 
         data = await inst_service.fetch_data(original_url)
         if not data or not data.media_list:
-            logging.warning("Inline Instagram fetch failed: url=%s", original_url)
+            logging.warning("Inline Instagram fetch failed: url=%s", summarize_url_for_log(original_url))
             return await query.answer([], cache_time=1, is_personal=True)
 
         if len(data.media_list) == 1 and data.media_list[0].type == "video":
@@ -587,7 +587,7 @@ async def inline_instagram_query(query: types.InlineQuery):
                     except Exception as exc:
                         logging.warning(
                             "Failed to cache Instagram album preview photo: url=%s error=%s",
-                            original_url,
+                            summarize_url_for_log(original_url),
                             exc,
                         )
             token = create_inline_album_request(query.from_user.id, "instagram", original_url)
@@ -610,7 +610,7 @@ async def inline_instagram_query(query: types.InlineQuery):
         logging.exception(
             "Error processing inline Instagram query: user_id=%s query=%s error=%s",
             query.from_user.id,
-            query.query,
+            summarize_text_for_log(query.query),
             e,
         )
         await query.answer([], cache_time=1, is_personal=True)
