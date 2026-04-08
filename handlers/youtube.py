@@ -11,6 +11,13 @@ from yt_dlp.utils import DownloadError
 import keyboards as kb
 import messages as bm
 from config import OUTPUT_DIR, CHANNEL_ID
+from handlers.deps import build_handler_dependencies
+from handlers.youtube_inline import (
+    handle_youtube_music_inline_query,
+    handle_youtube_video_inline_query,
+    send_inline_youtube_music,
+    send_inline_youtube_video,
+)
 from services.media.orchestration import handle_download_backpressure, run_single_media_flow
 from handlers.user import update_info
 from handlers.utils import (
@@ -606,100 +613,33 @@ async def download_youtube_mp3_callback(call: types.CallbackQuery):
 @router.inline_query(F.query.regexp(YOUTUBE_MUSIC_URL_REGEX, mode="search"))
 @with_inline_query_logging("youtube", "music_inline_query")
 async def inline_youtube_music_query(query: types.InlineQuery):
-    try:
-        await send_analytics(
-            user_id=query.from_user.id,
-            chat_type=query.chat_type,
-            action_name="inline_youtube_music",
-        )
-
-        url = _extract_youtube_url(query.query or "", YOUTUBE_MUSIC_URL_REGEX)
-        if not url:
-            await query.answer([], cache_time=1, is_personal=True)
-            return
-        if not CHANNEL_ID:
-            logging.error("CHANNEL_ID is not configured; YouTube Music inline is disabled")
-            await query.answer([], cache_time=1, is_personal=True)
-            return
-
-        yt = await asyncio.to_thread(get_youtube_video, url)
-        if not yt:
-            await query.answer([], cache_time=1, is_personal=True)
-            return
-
-        user_settings = await db.user_settings(query.from_user.id)
-        webpage_url = yt.get("webpage_url") or url
-        token = create_inline_video_request("youtube", webpage_url, query.from_user.id, user_settings)
-        results = [
-            types.InlineQueryResultArticle(
-                id=f"ytmusic_inline:{token}",
-                title="YouTube Music",
-                description=yt.get("title") or "Press the button to send this audio inline.",
-                thumbnail_url=_get_youtube_thumbnail_url(yt) or get_inline_service_icon("youtube"),
-                input_message_content=types.InputTextMessageContent(
-                    message_text=bm.inline_send_audio_prompt("YouTube"),
-                ),
-                reply_markup=kb.inline_send_media_keyboard(
-                    "Send audio inline",
-                    f"inline:ytmusic:{token}",
-                ),
-            )
-        ]
-        await safe_answer_inline_query(query, results, cache_time=10, is_personal=True)
-        return
-
-    except Exception as e:
-        logging.exception(
-            "Error processing YouTube Music inline query: user_id=%s query=%s error=%s",
-            query.from_user.id,
-            summarize_text_for_log(query.query),
-            e,
-        )
-        await query.answer([], cache_time=1, is_personal=True)
+    deps = build_handler_dependencies(bot=bot, db=db, send_analytics=send_analytics)
+    await handle_youtube_music_inline_query(
+        query,
+        deps=deps,
+        channel_id=CHANNEL_ID,
+        youtube_music_url_regex=YOUTUBE_MUSIC_URL_REGEX,
+        extract_youtube_url_fn=_extract_youtube_url,
+        get_youtube_video_fn=get_youtube_video,
+        get_youtube_thumbnail_url_fn=_get_youtube_thumbnail_url,
+        get_bot_url_fn=get_bot_url,
+        safe_answer_inline_query_fn=safe_answer_inline_query,
+    )
 
 
 @router.inline_query(F.query.regexp(YOUTUBE_VIDEO_URL_REGEX, mode="search"))
 @with_inline_query_logging("youtube", "video_inline_query")
 async def inline_youtube_query(query: types.InlineQuery):
-    try:
-        url = _extract_youtube_url(query.query, YOUTUBE_VIDEO_URL_REGEX)
-        if not url:
-            await query.answer([], cache_time=1, is_personal=True)
-            return
-        logging.info(
-            "Downloading YouTube Inline: user_id=%s query=%s",
-            query.from_user.id,
-            summarize_url_for_log(url),
-        )
-        yt = await asyncio.to_thread(get_youtube_video, url)
-        if not yt:
-            await query.answer([], cache_time=1, is_personal=True)
-            return
-
-        await send_analytics(user_id=query.from_user.id, chat_type=query.chat_type, action_name="inline_youtube_video")
-
-        user_settings = await db.user_settings(query.from_user.id)
-        token = create_inline_video_request("youtube", yt["webpage_url"], query.from_user.id, user_settings)
-        results = [
-            InlineQueryResultArticle(
-                id=f"youtube_inline:{token}",
-                title="YouTube Video",
-                description=yt.get("title") or "Press the button to send this video inline.",
-                thumbnail_url=_get_youtube_thumbnail_url(yt) or get_inline_service_icon("youtube"),
-                input_message_content=types.InputTextMessageContent(
-                    message_text=bm.inline_send_video_prompt("YouTube"),
-                ),
-                reply_markup=kb.inline_send_media_keyboard(
-                    "Send video inline",
-                    f"inline:youtube:{token}",
-                ),
-            )
-        ]
-        await safe_answer_inline_query(query, results, cache_time=10)
-        return
-    except Exception as e:
-        logging.error("Error processing inline query: %s", e)
-        await query.answer([], cache_time=1, is_personal=True)
+    deps = build_handler_dependencies(bot=bot, db=db, send_analytics=send_analytics)
+    await handle_youtube_video_inline_query(
+        query,
+        deps=deps,
+        youtube_video_url_regex=YOUTUBE_VIDEO_URL_REGEX,
+        extract_youtube_url_fn=_extract_youtube_url,
+        get_youtube_video_fn=get_youtube_video,
+        get_youtube_thumbnail_url_fn=_get_youtube_thumbnail_url,
+        safe_answer_inline_query_fn=safe_answer_inline_query,
+    )
 
 
 @with_inline_send_logging("youtube", "music_inline_send")
@@ -712,91 +652,25 @@ async def _send_inline_youtube_music(
     request_event_id: str,
     duplicate_handler: str,
 ) -> None:
-    request = claim_inline_video_request_for_send(
-        token,
-        duplicate_handler=duplicate_handler,
+    deps = build_handler_dependencies(bot=bot, db=db, send_analytics=send_analytics)
+    await send_inline_youtube_music(
+        token=token,
+        inline_message_id=inline_message_id,
+        actor_name=actor_name,
         actor_user_id=actor_user_id,
+        request_event_id=request_event_id,
+        duplicate_handler=duplicate_handler,
+        deps=deps,
+        channel_id=CHANNEL_ID,
+        max_file_size=MAX_FILE_SIZE,
+        get_youtube_video_fn=get_youtube_video,
+        download_mp3_with_ytdlp_metrics_fn=download_mp3_with_ytdlp_metrics,
+        retry_async_operation_fn=retry_async_operation,
+        get_bot_avatar_thumbnail_fn=get_bot_avatar_thumbnail,
+        get_bot_url_fn=get_bot_url,
+        safe_edit_inline_media_fn=safe_edit_inline_media,
+        safe_edit_inline_text_fn=safe_edit_inline_text,
     )
-    if request is None:
-        return
-
-    metrics: Optional[DownloadMetrics] = None
-
-    async def _edit_inline_status(text: str, *, with_retry_button: bool = False) -> None:
-        reply_markup = (
-            kb.inline_send_media_keyboard("Send audio inline", f"inline:ytmusic:{token}")
-            if with_retry_button
-            else None
-        )
-        await safe_edit_inline_text(bot, inline_message_id, text, reply_markup=reply_markup)
-
-    try:
-        yt = await asyncio.to_thread(get_youtube_video, request.source_url)
-        if not yt:
-            reset_inline_video_request(token)
-            await _edit_inline_status(bm.something_went_wrong(), with_retry_button=True)
-            return
-
-        cache_key = build_media_cache_key(request.source_url, variant="audio")
-        db_file_id = await db.get_file_id(cache_key)
-        if not db_file_id:
-            base_name = f"{yt.get('id', 'youtube_music')}_youtube_music_inline"
-            await _edit_inline_status(bm.downloading_audio_status())
-            metrics = await retry_async_operation(
-                lambda: download_mp3_with_ytdlp_metrics(
-                    request.source_url,
-                    base_name,
-                    "youtube_music_inline_mp3",
-                    max_filesize=MAX_FILE_SIZE - 1,
-                ),
-                attempts=3,
-                delay_seconds=2.0,
-                should_retry_result=lambda result: result is None,
-            )
-            if not metrics:
-                reset_inline_video_request(token)
-                await _edit_inline_status(bm.something_went_wrong(), with_retry_button=True)
-                return
-            if metrics.size >= MAX_FILE_SIZE:
-                complete_inline_video_request(token)
-                await _edit_inline_status(bm.audio_too_large())
-                return
-
-            await _edit_inline_status(bm.uploading_status())
-            send_kwargs = {
-                "chat_id": CHANNEL_ID,
-                "audio": FSInputFile(metrics.path),
-                "title": yt.get("title"),
-                "caption": f"YouTube Music from {actor_name}",
-            }
-            bot_avatar = await get_bot_avatar_thumbnail(bot)
-            if bot_avatar:
-                send_kwargs["thumbnail"] = bot_avatar
-            sent = await bot.send_audio(**send_kwargs)
-            db_file_id = sent.audio.file_id
-            await db.add_file(cache_key, db_file_id, "audio")
-        else:
-            await _edit_inline_status(bm.uploading_status())
-
-        bot_url = await get_bot_url(bot)
-        edited = await safe_edit_inline_media(
-            bot,
-            inline_message_id,
-            types.InputMediaAudio(
-                media=db_file_id,
-                caption=bm.captions(request.user_settings["captions"], None, bot_url),
-                parse_mode="HTML",
-            ),
-        )
-        if edited:
-            complete_inline_video_request(token)
-            return
-
-        reset_inline_video_request(token)
-        await _edit_inline_status(bm.something_went_wrong(), with_retry_button=True)
-    finally:
-        if metrics and metrics.path:
-            await remove_file(metrics.path)
 
 
 @with_inline_send_logging("youtube", "video_inline_send")
@@ -809,122 +683,28 @@ async def _send_inline_youtube_video(
     request_event_id: str,
     duplicate_handler: str,
 ) -> None:
-    request = claim_inline_video_request_for_send(
-        token,
-        duplicate_handler=duplicate_handler,
+    deps = build_handler_dependencies(bot=bot, db=db, send_analytics=send_analytics)
+    await send_inline_youtube_video(
+        token=token,
+        inline_message_id=inline_message_id,
+        actor_name=actor_name,
         actor_user_id=actor_user_id,
+        request_event_id=request_event_id,
+        duplicate_handler=duplicate_handler,
+        deps=deps,
+        channel_id=CHANNEL_ID,
+        max_file_size=MAX_FILE_SIZE,
+        ytdlp_format_720=YTDLP_FORMAT_720,
+        get_youtube_video_fn=get_youtube_video,
+        get_video_stream_fn=get_video_stream,
+        safe_int_fn=safe_int,
+        is_manifest_stream_fn=_is_manifest_stream,
+        download_stream_fn=download_stream,
+        download_with_ytdlp_metrics_fn=download_with_ytdlp_metrics,
+        get_bot_url_fn=get_bot_url,
+        safe_edit_inline_media_fn=safe_edit_inline_media,
+        safe_edit_inline_text_fn=safe_edit_inline_text,
     )
-    if request is None:
-        return
-
-    metrics: Optional[DownloadMetrics] = None
-
-    async def _edit_inline_status(text: str, *, with_retry_button: bool = False) -> None:
-        reply_markup = (
-            kb.inline_send_media_keyboard("Send video inline", f"inline:youtube:{token}")
-            if with_retry_button
-            else None
-        )
-        await safe_edit_inline_text(bot, inline_message_id, text, reply_markup=reply_markup)
-
-    try:
-        yt = await asyncio.to_thread(get_youtube_video, request.source_url)
-        if not yt:
-            reset_inline_video_request(token)
-            await _edit_inline_status(bm.something_went_wrong(), with_retry_button=True)
-            return
-
-        views = safe_int(yt.get("view_count"), 0)
-        likes = safe_int(yt.get("like_count"), 0)
-        db_file_id = await db.get_file_id(request.source_url)
-        if not db_file_id:
-            video = await asyncio.to_thread(get_video_stream, yt)
-            if not video:
-                reset_inline_video_request(token)
-                await _edit_inline_status(bm.something_went_wrong(), with_retry_button=True)
-                return
-
-            name = f"{yt['id']}_youtube_inline.mp4"
-            inline_size_hint_raw = video.get("filesize") or video.get("filesize_approx")
-            inline_size_hint = safe_int(inline_size_hint_raw, 0) or None
-            if inline_size_hint and inline_size_hint >= MAX_FILE_SIZE:
-                complete_inline_video_request(token)
-                await _edit_inline_status(bm.video_too_large())
-                return
-
-            await _edit_inline_status(bm.downloading_video_status())
-            if _is_manifest_stream(video):
-                metrics = await download_with_ytdlp_metrics(
-                    request.source_url,
-                    name,
-                    YTDLP_FORMAT_720,
-                    "youtube_inline_ytdlp_manifest",
-                    max_filesize=MAX_FILE_SIZE - 1,
-                )
-            else:
-                on_progress = make_status_text_progress_updater("YouTube video", _edit_inline_status)
-
-                metrics = await download_stream(
-                    video,
-                    name,
-                    "youtube_inline",
-                    user_id=request.owner_user_id,
-                    size_hint=inline_size_hint,
-                    max_size_bytes=MAX_FILE_SIZE,
-                    on_progress=on_progress,
-                )
-                if not metrics:
-                    metrics = await download_with_ytdlp_metrics(
-                        request.source_url,
-                        name,
-                        YTDLP_FORMAT_720,
-                        "youtube_inline_ytdlp",
-                        max_filesize=MAX_FILE_SIZE - 1,
-                    )
-            if not metrics:
-                reset_inline_video_request(token)
-                await _edit_inline_status(bm.something_went_wrong(), with_retry_button=True)
-                return
-
-            await _edit_inline_status(bm.uploading_status())
-            sent_message = await bot.send_video(
-                chat_id=CHANNEL_ID,
-                video=FSInputFile(metrics.path),
-                caption=f"YouTube Video from {actor_name}",
-            )
-            db_file_id = sent_message.video.file_id
-            await db.add_file(request.source_url, db_file_id, "video")
-        else:
-            await _edit_inline_status(bm.uploading_status())
-
-        bot_url = await get_bot_url(bot)
-        edited = await safe_edit_inline_media(
-            bot,
-            inline_message_id,
-            types.InputMediaVideo(
-                media=db_file_id,
-                caption=bm.captions(request.user_settings["captions"], yt["title"], bot_url),
-                parse_mode="HTML",
-            ),
-            reply_markup=kb.return_video_info_keyboard(
-                views=views,
-                likes=likes,
-                comments=None,
-                shares=None,
-                music_play_url=None,
-                video_url=request.source_url,
-                user_settings=request.user_settings,
-            ),
-        )
-        if edited:
-            complete_inline_video_request(token)
-            return
-
-        reset_inline_video_request(token)
-        await _edit_inline_status(bm.something_went_wrong(), with_retry_button=True)
-    finally:
-        if metrics and metrics.path:
-            await remove_file(metrics.path)
 
 
 @router.chosen_inline_result(F.result_id.startswith("ytmusic_inline:"))

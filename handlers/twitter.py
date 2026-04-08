@@ -15,8 +15,10 @@ from aiogram.types import FSInputFile
 import keyboards as kb
 import messages as bm
 from config import OUTPUT_DIR, CHANNEL_ID
+from handlers.deps import build_handler_dependencies
 from services.media.orchestration import handle_download_backpressure, run_media_collection_flow
 from services.media.delivery import send_cached_media_entries
+from handlers.twitter_inline import handle_twitter_inline_query, send_inline_twitter_media
 from services.platforms.twitter_media import (
     build_twitter_media_cache_key as _build_twitter_media_cache_key,
     collect_media_entries as _collect_media_entries_impl,
@@ -491,143 +493,21 @@ async def handle_tweet_links(message, direct_url: Optional[str] = None):
 @router.inline_query(F.query.regexp(_TWITTER_LINK_REGEX, mode="search"))
 @with_inline_query_logging("twitter", "inline_query")
 async def inline_twitter_query(query: types.InlineQuery):
-    try:
-        await send_analytics(user_id=query.from_user.id, chat_type=query.chat_type, action_name="inline_twitter_media")
-        match = re.search(_TWITTER_LINK_REGEX, query.query or "")
-        if not match:
-            await query.answer([], cache_time=1, is_personal=True)
-            return
-
-        source_url = match.group(0)
-        user_settings = await db.user_settings(query.from_user.id)
-        bot_url = await get_bot_url(bot)
-        album_token = create_inline_album_request(query.from_user.id, "twitter", source_url)
-        album_deep_link = build_start_deeplink_url(bot_url, f"album_{album_token}")
-        context = await _get_tweet_context(source_url)
-        if not context:
-            await safe_answer_inline_query(
-                query,
-                [
-                    _build_twitter_open_in_bot_result(
-                        result_id="twitter_open_in_bot",
-                        deep_link=album_deep_link,
-                        description="Open this post in the bot.",
-                    )
-                ],
-                cache_time=10,
-                is_personal=True,
-            )
-            return
-
-        tweet_id, tweet_media = context
-        media_items = _extract_twitter_media_items(tweet_media)
-        if len(media_items) > 1:
-            preview_file_id = None
-            first_media = media_items[0]
-            first_media_kind = _normalize_twitter_media_kind(first_media.get("type"))
-            if first_media_kind == "photo" and CHANNEL_ID:
-                preview_cache_key = _build_twitter_media_cache_key(source_url, 0, "photo", len(media_items))
-                preview_file_id = await db.get_file_id(preview_cache_key)
-                if not preview_file_id:
-                    try:
-                        sent = await bot.send_photo(
-                            chat_id=CHANNEL_ID,
-                            photo=first_media["url"],
-                            caption="X / Twitter Album Preview",
-                        )
-                        if sent.photo:
-                            preview_file_id = sent.photo[-1].file_id
-                            await db.add_file(preview_cache_key, preview_file_id, "photo")
-                    except Exception as exc:
-                        logging.warning(
-                            "Failed to cache Twitter album preview photo: url=%s error=%s",
-                            summarize_url_for_log(source_url),
-                            exc,
-                        )
-            preview_url = _get_twitter_media_preview_url(media_items[0], tweet_media) or next(
-                (
-                    _get_twitter_media_preview_url(item, tweet_media)
-                    for item in media_items
-                    if _get_twitter_media_preview_url(item, tweet_media)
-                ),
-                None,
-            )
-            results = [
-                build_inline_album_result(
-                    result_id=f"twitter_album_{tweet_id}",
-                    service_name="Twitter",
-                    deep_link=album_deep_link,
-                    message_text=bm.captions(
-                        user_settings["captions"],
-                        tweet_media.get("text"),
-                        bot_url,
-                    ),
-                    preview_file_id=preview_file_id,
-                    preview_url=preview_url,
-                    thumbnail_url=preview_url or get_inline_service_icon("twitter"),
-                )
-            ]
-            await safe_answer_inline_query(query, results, cache_time=10, is_personal=True)
-            return
-
-        if len(media_items) != 1:
-            await safe_answer_inline_query(
-                query,
-                [
-                    _build_twitter_open_in_bot_result(
-                        result_id=f"twitter_open_{tweet_id}",
-                        deep_link=album_deep_link,
-                        description="Inline preview is limited for this post. Open it in the bot.",
-                    )
-                ],
-                cache_time=10,
-                is_personal=True,
-            )
-            return
-
-        media = media_items[0]
-        media_kind = _normalize_twitter_media_kind(media.get("type"))
-        if not media_kind:
-            await safe_answer_inline_query(
-                query,
-                [
-                    _build_twitter_open_in_bot_result(
-                        result_id=f"twitter_open_unknown_{tweet_id}",
-                        deep_link=album_deep_link,
-                        description="Open this post in the bot.",
-                    )
-                ],
-                cache_time=10,
-                is_personal=True,
-            )
-            return
-        token = create_inline_video_request("twitter", source_url, query.from_user.id, user_settings)
-        action_text = "Send photo inline" if media_kind == "photo" else "Send video inline"
-        prompt_text = (
-            bm.inline_send_video_prompt("Twitter")
-            if media_kind == "video"
-            else "Twitter photo is being prepared...\nIf it does not start automatically, tap the button below."
-        )
-        preview_url = _get_twitter_media_preview_url(media, tweet_media) or get_inline_service_icon("twitter")
-        results = [
-            types.InlineQueryResultArticle(
-                id=f"twitter_inline:{token}",
-                title="X / Twitter Post",
-                description=tweet_media.get("text") or f"Press the button to send this {media_kind} inline.",
-                thumbnail_url=preview_url,
-                input_message_content=types.InputTextMessageContent(message_text=prompt_text),
-                reply_markup=kb.inline_send_media_keyboard(action_text, f"inline:twitter:{token}"),
-            )
-        ]
-        await safe_answer_inline_query(query, results, cache_time=10, is_personal=True)
-    except Exception as exc:
-        logging.exception(
-            "Error processing Twitter inline query: user_id=%s query=%s error=%s",
-            query.from_user.id,
-            summarize_text_for_log(query.query),
-            exc,
-        )
-        await query.answer([], cache_time=1, is_personal=True)
+    deps = build_handler_dependencies(bot=bot, db=db, send_analytics=send_analytics)
+    await handle_twitter_inline_query(
+        query,
+        deps=deps,
+        twitter_link_regex=_TWITTER_LINK_REGEX,
+        channel_id=CHANNEL_ID,
+        get_tweet_context_fn=_get_tweet_context,
+        extract_twitter_media_items_fn=_extract_twitter_media_items,
+        normalize_twitter_media_kind_fn=_normalize_twitter_media_kind,
+        build_twitter_media_cache_key_fn=_build_twitter_media_cache_key,
+        get_twitter_media_preview_url_fn=_get_twitter_media_preview_url,
+        build_twitter_open_in_bot_result_fn=_build_twitter_open_in_bot_result,
+        get_bot_url_fn=get_bot_url,
+        safe_answer_inline_query_fn=safe_answer_inline_query,
+    )
 
 
 @with_inline_send_logging("twitter", "inline_send")
@@ -640,181 +520,26 @@ async def _send_inline_twitter_media(
     request_event_id: str,
     duplicate_handler: str,
 ) -> None:
-    request = claim_inline_video_request_for_send(
-        token,
-        duplicate_handler=duplicate_handler,
+    deps = build_handler_dependencies(bot=bot, db=db, send_analytics=send_analytics)
+    await send_inline_twitter_media(
+        token=token,
+        inline_message_id=inline_message_id,
+        actor_name=actor_name,
         actor_user_id=actor_user_id,
+        request_event_id=request_event_id,
+        duplicate_handler=duplicate_handler,
+        deps=deps,
+        channel_id=CHANNEL_ID,
+        max_file_size=MAX_FILE_SIZE,
+        twitter_downloader=twitter_downloader,
+        get_tweet_context_fn=_get_tweet_context,
+        extract_twitter_media_items_fn=_extract_twitter_media_items,
+        normalize_twitter_media_kind_fn=_normalize_twitter_media_kind,
+        build_twitter_media_cache_key_fn=_build_twitter_media_cache_key,
+        get_bot_url_fn=get_bot_url,
+        safe_edit_inline_media_fn=safe_edit_inline_media,
+        safe_edit_inline_text_fn=safe_edit_inline_text,
     )
-    if request is None:
-        return
-
-    download_path: Optional[str] = None
-
-    async def _edit_inline_status(text: str, *, with_retry_button: bool = False, media_kind: str = "video") -> None:
-        button_text = "Send photo inline" if media_kind == "photo" else "Send video inline"
-        reply_markup = (
-            kb.inline_send_media_keyboard(button_text, f"inline:twitter:{token}")
-            if with_retry_button
-            else None
-        )
-        await safe_edit_inline_text(bot, inline_message_id, text, reply_markup=reply_markup)
-
-    try:
-        context = await _get_tweet_context(request.source_url)
-        if not context:
-            complete_inline_video_request(token)
-            await _edit_inline_status("Only single photo or single video posts are supported inline.")
-            return
-
-        _, tweet_media = context
-        media_items = _extract_twitter_media_items(tweet_media)
-        if len(media_items) != 1:
-            complete_inline_video_request(token)
-            await _edit_inline_status("Only single photo or single video posts are supported inline.")
-            return
-
-        media = media_items[0]
-        media_kind = _normalize_twitter_media_kind(media.get("type"))
-        if not media_kind:
-            complete_inline_video_request(token)
-            await _edit_inline_status("Only single photo or single video posts are supported inline.")
-            return
-        post_url = tweet_media["tweetURL"]
-        post_caption = tweet_media.get("text")
-        likes = tweet_media.get("likes")
-        comments = tweet_media.get("replies")
-        retweets = tweet_media.get("retweets")
-
-        if media_kind == "photo":
-            cache_key = _build_twitter_media_cache_key(post_url, 0, "photo", 1)
-            db_file_id = await db.get_file_id(cache_key)
-            if not db_file_id:
-                if not CHANNEL_ID:
-                    reset_inline_video_request(token)
-                    await _edit_inline_status(bm.something_went_wrong(), with_retry_button=True, media_kind="photo")
-                    return
-
-                await _edit_inline_status(bm.uploading_status(), media_kind="photo")
-                sent = await bot.send_photo(
-                    chat_id=CHANNEL_ID,
-                    photo=media["url"],
-                    caption=f"X / Twitter Photo from {actor_name}",
-                )
-                if not sent.photo:
-                    reset_inline_video_request(token)
-                    await _edit_inline_status(bm.something_went_wrong(), with_retry_button=True, media_kind="photo")
-                    return
-                db_file_id = sent.photo[-1].file_id
-                await db.add_file(cache_key, db_file_id, "photo")
-            else:
-                await _edit_inline_status(bm.uploading_status(), media_kind="photo")
-
-            edited = await safe_edit_inline_media(
-                bot,
-                inline_message_id,
-                types.InputMediaPhoto(
-                    media=db_file_id,
-                    caption=bm.captions(request.user_settings["captions"], post_caption, await get_bot_url(bot)),
-                    parse_mode="HTML",
-                ),
-                reply_markup=kb.return_video_info_keyboard(
-                    None,
-                    likes,
-                    comments,
-                    retweets,
-                    None,
-                    post_url,
-                    request.user_settings,
-                ),
-            )
-            if edited:
-                complete_inline_video_request(token)
-                return
-            reset_inline_video_request(token)
-            await _edit_inline_status(bm.something_went_wrong(), with_retry_button=True, media_kind="photo")
-            return
-
-        cache_key = post_url
-        db_file_id = await db.get_file_id(cache_key)
-        if not db_file_id:
-            if not CHANNEL_ID:
-                reset_inline_video_request(token)
-                await _edit_inline_status(bm.something_went_wrong(), with_retry_button=True)
-                return
-
-            file_name = os.path.join(str(tweet_media["conversationID"]), os.path.basename(urlsplit(media["url"]).path))
-            await _edit_inline_status(bm.downloading_video_status())
-
-            on_progress = make_status_text_progress_updater("X / Twitter video", _edit_inline_status)
-
-            metrics = await twitter_downloader.download(
-                media["url"],
-                file_name,
-                skip_if_exists=True,
-                user_id=request.owner_user_id,
-                request_id=f"twitter_inline:{request.owner_user_id}:{request_event_id}:{tweet_media['conversationID']}",
-                max_size_bytes=MAX_FILE_SIZE,
-                on_progress=on_progress,
-            )
-            if not metrics:
-                reset_inline_video_request(token)
-                await _edit_inline_status(bm.something_went_wrong(), with_retry_button=True)
-                return
-
-            log_download_metrics("twitter_inline", metrics)
-            download_path = metrics.path
-            if metrics.size >= MAX_FILE_SIZE:
-                complete_inline_video_request(token)
-                await _edit_inline_status(bm.video_too_large())
-                return
-
-            await _edit_inline_status(bm.uploading_status())
-            sent = await bot.send_video(
-                chat_id=CHANNEL_ID,
-                video=FSInputFile(download_path),
-                caption=f"X / Twitter Video from {actor_name}",
-            )
-            db_file_id = sent.video.file_id
-            await db.add_file(cache_key, db_file_id, "video")
-        else:
-            await _edit_inline_status(bm.uploading_status())
-
-        edited = await safe_edit_inline_media(
-            bot,
-            inline_message_id,
-            types.InputMediaVideo(
-                media=db_file_id,
-                caption=bm.captions(request.user_settings["captions"], post_caption, await get_bot_url(bot)),
-                parse_mode="HTML",
-            ),
-            reply_markup=kb.return_video_info_keyboard(
-                None,
-                likes,
-                comments,
-                retweets,
-                None,
-                post_url,
-                request.user_settings,
-            ),
-        )
-        if edited:
-            complete_inline_video_request(token)
-            return
-
-        reset_inline_video_request(token)
-        await _edit_inline_status(bm.something_went_wrong(), with_retry_button=True)
-    except Exception as exc:
-        logging.exception(
-            "Error sending Twitter inline media: inline_message_id=%s token=%s error=%s",
-            inline_message_id,
-            token,
-            exc,
-        )
-        reset_inline_video_request(token)
-        await _edit_inline_status(bm.something_went_wrong(), with_retry_button=True)
-    finally:
-        if download_path:
-            await remove_file(download_path)
 
 
 @router.chosen_inline_result(F.result_id.startswith("twitter_inline:"))
