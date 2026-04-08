@@ -15,6 +15,7 @@ from aiogram.types import FSInputFile
 import keyboards as kb
 import messages as bm
 from config import OUTPUT_DIR, CHANNEL_ID
+from services.media.orchestration import handle_download_backpressure, run_media_collection_flow
 from services.media.delivery import send_cached_media_entries
 from services.platforms.twitter_media import (
     build_twitter_media_cache_key as _build_twitter_media_cache_key,
@@ -356,46 +357,60 @@ async def reply_media(message, tweet_id, tweet_media, bot_url, business_id, user
         if business_id is None:
             status_message = await message.answer(bm.downloading_video_status())
 
-        media_entries = await _collect_media_entries(
-            tweet_id,
-            tweet_media,
-            user_id=message.from_user.id,
-            request_id=f"twitter:{message.chat.id}:{message.message_id}:{tweet_id}",
-        )
-        logging.info(
-            "Tweet media fetched: tweet_id=%s photos=%s videos=%s",
-            tweet_id,
-            sum(1 for item in media_entries if item["kind"] == "photo"),
-            sum(1 for item in media_entries if item["kind"] == "video"),
-        )
-
         caption_media = bm.captions("on", post_caption, bot_url)
         caption_text = bm.captions("on", post_caption, bot_url, limit=4096)
         keyboard = kb.return_video_info_keyboard(None, likes, comments, retweets, None, post_url, user_settings)
 
-        if media_entries:
-            await safe_edit_text(status_message, bm.uploading_status())
-            await _send_tweet_media_entries(message, media_entries, caption_media, keyboard)
-        else:
-            await message.answer(caption_text, reply_markup=keyboard, parse_mode="HTML")
+        async def _edit_status(text: str) -> None:
+            await safe_edit_text(status_message, text)
+
+        async def _fetch_entries():
+            media_entries = await _collect_media_entries(
+                tweet_id,
+                tweet_media,
+                user_id=message.from_user.id,
+                request_id=f"twitter:{message.chat.id}:{message.message_id}:{tweet_id}",
+            )
+            logging.info(
+                "Tweet media fetched: tweet_id=%s photos=%s videos=%s",
+                tweet_id,
+                sum(1 for item in media_entries if item["kind"] == "photo"),
+                sum(1 for item in media_entries if item["kind"] == "video"),
+            )
+            return media_entries
+
+        async def _handle_backpressure(exc: Exception) -> None:
+            await handle_download_backpressure(
+                exc,
+                business_id=business_id,
+                on_rate_limit_reply=lambda retry_after: message.reply(build_rate_limit_text(retry_after)),
+                on_queue_busy_reply=lambda position: message.reply(build_queue_busy_text(position)),
+                on_business_error=lambda: handle_download_error(message, business_id=business_id),
+            )
+
+        await run_media_collection_flow(
+            update_status=_edit_status,
+            upload_status_text=bm.uploading_status(),
+            fetch_entries=_fetch_entries,
+            send_entries=lambda media_entries: _send_tweet_media_entries(
+                message,
+                media_entries,
+                caption_media,
+                keyboard,
+            ),
+            send_empty=lambda: message.answer(caption_text, reply_markup=keyboard, parse_mode="HTML"),
+            delete_status_message=lambda: safe_delete_message(status_message),
+            cleanup=lambda: _cleanup_tweet_dir(tweet_dir),
+            on_rate_limit=_handle_backpressure,
+            on_queue_busy=_handle_backpressure,
+            on_too_large=lambda _exc: message.reply(bm.video_too_large()),
+        )
 
         logging.info(
             "Tweet media delivered: user_id=%s tweet_id=%s",
             message.from_user.id,
             tweet_id,
         )
-    except DownloadRateLimitError as exc:
-        if business_id is None:
-            await message.reply(build_rate_limit_text(exc.retry_after))
-        else:
-            await handle_download_error(message, business_id=business_id)
-    except DownloadQueueBusyError as exc:
-        if business_id is None:
-            await message.reply(build_queue_busy_text(exc.position))
-        else:
-            await handle_download_error(message, business_id=business_id)
-    except DownloadTooLargeError:
-        await message.reply(bm.video_too_large())
     except Exception as e:
         logging.exception(
             "Error processing tweet media: tweet_id=%s user_id=%s error=%s",
@@ -405,11 +420,6 @@ async def reply_media(message, tweet_id, tweet_media, bot_url, business_id, user
         )
         await react_to_message(message, "👎", business_id=business_id)
         await message.reply(bm.something_went_wrong())
-    finally:
-        await safe_delete_message(status_message)
-        asyncio.create_task(_cleanup_tweet_dir(tweet_dir))
-
-
 async def _prefetch_tweet_payloads(tweet_ids: list[str]) -> list[tuple[str, dict[str, Any] | BaseException]]:
     semaphore = asyncio.Semaphore(3)
     results: list[tuple[int, str, dict[str, Any] | BaseException]] = []

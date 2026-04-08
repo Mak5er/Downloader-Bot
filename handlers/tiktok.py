@@ -14,6 +14,7 @@ import keyboards as kb
 import messages as bm
 from config import OUTPUT_DIR, CHANNEL_ID
 from services.media.delivery import send_cached_media_entries
+from services.media.orchestration import handle_download_backpressure, run_single_media_flow
 from handlers.user import update_info
 from handlers.utils import (
     build_inline_album_result,
@@ -213,44 +214,27 @@ async def process_tiktok_video(message: types.Message, data: dict, bot_url: str,
     status_message: Optional[types.Message] = None
     if show_service_status:
         status_message = await message.answer(bm.downloading_video_status())
-
-    db_file_id = await db.get_file_id(db_video_url)
-    download_path: Optional[str] = None
     request_id = f"tiktok_video:{message.chat.id}:{message.message_id}:{info.id}"
     size_hint = get_tiktok_size_hint(data)
 
-    try:
-        if db_file_id:
-            logging.info(
-                "Serving cached TikTok video: url=%s file_id=%s",
-                summarize_url_for_log(db_video_url),
-                db_file_id,
-            )
-            await safe_edit_text(status_message, bm.uploading_status())
-            await send_chat_action_if_needed(bot, message.chat.id, "upload_video", business_id)
-            await message.reply_video(
-                video=db_file_id,
-                caption=bm.captions(user_settings["captions"], info.description, bot_url),
-                reply_markup=kb.return_video_info_keyboard(
-                    info.views, info.likes, info.comments,
-                    info.shares, info.music_play_url, db_video_url, user_settings,
-                    audio_callback_data=audio_callback_data,
-                ),
-                parse_mode="HTML"
-            )
-            await maybe_delete_user_message(message, user_settings["delete_message"])
-            return
+    async def _edit_status(text: str) -> None:
+        await safe_edit_text(status_message, text)
 
-        async def _edit_status(text: str) -> None:
-            await safe_edit_text(status_message, text)
+    on_progress = make_status_text_progress_updater("TikTok video", _edit_status)
+    on_retry_download = make_retry_status_notifier(
+        _edit_status,
+        enabled=show_service_status,
+    )
 
-        on_progress = make_status_text_progress_updater("TikTok video", _edit_status)
-        on_retry_download = make_retry_status_notifier(
-            _edit_status,
-            enabled=show_service_status,
+    def _reply_markup():
+        return kb.return_video_info_keyboard(
+            info.views, info.likes, info.comments,
+            info.shares, info.music_play_url, db_video_url, user_settings,
+            audio_callback_data=audio_callback_data,
         )
 
-        metrics = await asyncio.wait_for(
+    async def _download_media():
+        return await asyncio.wait_for(
             tiktok_service.download_video(
                 db_video_url,
                 download_name,
@@ -263,63 +247,80 @@ async def process_tiktok_video(message: types.Message, data: dict, bot_url: str,
             ),
             timeout=420.0,
         )
-        if not metrics:
-            await handle_download_error(message, business_id=business_id)
-            return
 
-        log_download_metrics("tiktok_video", metrics)
-        download_path = metrics.path
-        file_size = metrics.size
-
-        if file_size >= MAX_FILE_SIZE:
-            logging.warning("TikTok video too large: url=%s size=%s", summarize_url_for_log(db_video_url), file_size)
-            await handle_large_file(message, business_id)
-            return
-
-        await safe_edit_text(status_message, bm.uploading_status())
-        await send_chat_action_if_needed(bot, message.chat.id, "upload_video", business_id)
-        sent = await message.reply_video(
-            video=FSInputFile(download_path),
-            caption=bm.captions(user_settings["captions"], info.description, bot_url),
-            reply_markup=kb.return_video_info_keyboard(
-                info.views, info.likes, info.comments,
-                info.shares, info.music_play_url, db_video_url, user_settings,
-                audio_callback_data=audio_callback_data,
-            ),
-            parse_mode="HTML"
+    async def _send_cached(file_id: str):
+        logging.info(
+            "Serving cached TikTok video: url=%s file_id=%s",
+            summarize_url_for_log(db_video_url),
+            file_id,
         )
+        return await message.reply_video(
+            video=file_id,
+            caption=bm.captions(user_settings["captions"], info.description, bot_url),
+            reply_markup=_reply_markup(),
+            parse_mode="HTML",
+        )
+
+    async def _send_downloaded(path: str):
+        return await message.reply_video(
+            video=FSInputFile(path),
+            caption=bm.captions(user_settings["captions"], info.description, bot_url),
+            reply_markup=_reply_markup(),
+            parse_mode="HTML",
+        )
+
+    async def _after_send():
         await maybe_delete_user_message(message, user_settings["delete_message"])
 
-        try:
-            await db.add_file(db_video_url, sent.video.file_id, "video")
-            logging.info("Cached TikTok video: url=%s file_id=%s", summarize_url_for_log(db_video_url), sent.video.file_id)
-        except Exception as e:
-            logging.error("Error caching TikTok video: url=%s error=%s", summarize_url_for_log(db_video_url), e)
+    async def _inspect_metrics(metrics) -> bool:
+        log_download_metrics("tiktok_video", metrics)
+        if metrics.size >= MAX_FILE_SIZE:
+            logging.warning("TikTok video too large: url=%s size=%s", summarize_url_for_log(db_video_url), metrics.size)
+            await handle_large_file(message, business_id)
+            return False
+        return True
 
-    except DownloadRateLimitError as e:
-        if show_service_status:
-            await message.reply(build_rate_limit_text(e.retry_after))
-        else:
-            await handle_download_error(message, business_id=business_id)
-    except DownloadQueueBusyError as e:
-        if show_service_status:
-            await message.reply(build_queue_busy_text(e.position))
-        else:
-            await handle_download_error(message, business_id=business_id)
-    except asyncio.TimeoutError:
-        if show_service_status:
-            await safe_edit_text(status_message, bm.timeout_error())
-            await handle_download_error(message, business_id=business_id, text=bm.timeout_error())
-        else:
-            await handle_download_error(message, business_id=business_id)
-    except Exception as e:
-        logging.exception("Error processing TikTok video: url=%s error=%s", summarize_url_for_log(db_video_url), e)
+    async def _handle_backpressure(exc: Exception) -> None:
+        await handle_download_backpressure(
+            exc,
+            business_id=business_id,
+            on_rate_limit_reply=lambda retry_after: message.reply(build_rate_limit_text(retry_after)),
+            on_queue_busy_reply=lambda position: message.reply(build_queue_busy_text(position)),
+            on_business_error=lambda: handle_download_error(message, business_id=business_id),
+        )
+
+    async def _handle_unexpected_error(exc: Exception) -> None:
+        if isinstance(exc, asyncio.TimeoutError):
+            if show_service_status:
+                await safe_edit_text(status_message, bm.timeout_error())
+                await handle_download_error(message, business_id=business_id, text=bm.timeout_error())
+            else:
+                await handle_download_error(message, business_id=business_id)
+            return
+        logging.exception("Error processing TikTok video: url=%s error=%s", summarize_url_for_log(db_video_url), exc)
         await handle_download_error(message, business_id=business_id)
-    finally:
-        if download_path:
-            await remove_file(download_path)
-            logging.debug("Removed temporary TikTok video file: path=%s", download_path)
-        await safe_delete_message(status_message)
+
+    await run_single_media_flow(
+        cache_key=db_video_url,
+        cache_file_type="video",
+        db_service=db,
+        upload_status_text=bm.uploading_status(),
+        upload_action="upload_video",
+        update_status=_edit_status,
+        send_chat_action=lambda action: send_chat_action_if_needed(bot, message.chat.id, action, business_id),
+        send_cached=_send_cached,
+        download_media=_download_media,
+        send_downloaded=_send_downloaded,
+        extract_file_id=lambda sent: sent.video.file_id if getattr(sent, "video", None) else None,
+        cleanup_path=remove_file,
+        delete_status_message=lambda: safe_delete_message(status_message),
+        on_missing_media=lambda: handle_download_error(message, business_id=business_id),
+        on_after_send=_after_send,
+        inspect_metrics=_inspect_metrics,
+        on_rate_limit=_handle_backpressure,
+        on_queue_busy=_handle_backpressure,
+        on_unexpected_error=_handle_unexpected_error,
+    )
 
 
 async def process_tiktok_photos(message: types.Message, data: dict, bot_url: str, user_settings: list,

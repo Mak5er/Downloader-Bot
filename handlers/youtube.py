@@ -11,6 +11,7 @@ from yt_dlp.utils import DownloadError
 import keyboards as kb
 import messages as bm
 from config import OUTPUT_DIR, CHANNEL_ID
+from services.media.orchestration import handle_download_backpressure, run_single_media_flow
 from handlers.user import update_info
 from handlers.utils import (
     build_request_id,
@@ -224,34 +225,6 @@ async def download_video(message: types.Message):
         views = safe_int(yt.get('view_count'), None)
         likes = safe_int(yt.get('like_count'), None)
 
-        db_file_id = await db.get_file_id(yt['webpage_url'])
-
-        if db_file_id:
-            logging.info(
-                "Serving cached YouTube video: url=%s file_id=%s",
-                summarize_url_for_log(yt['webpage_url']),
-                db_file_id,
-            )
-            await safe_edit_text(status_message, bm.uploading_status())
-            await send_chat_action_if_needed(bot, message.chat.id, "upload_video", business_id)
-            await message.reply_video(
-                video=db_file_id,
-                caption=bm.captions(user_captions, yt['title'], bot_url),
-                reply_markup=kb.return_video_info_keyboard(
-                    views=views,
-                    likes=likes,
-                    comments=None,
-                    shares=None,
-                    music_play_url=None,
-                    video_url=yt['webpage_url'],
-                    user_settings=user_settings,
-                    audio_callback_data=audio_callback_data,
-                ),
-                parse_mode="HTML"
-            )
-            await maybe_delete_user_message(message, user_settings.get("delete_message"))
-            return
-
         name = f"{yt['id']}_youtube_video.mp4"
         await safe_edit_text(status_message, bm.downloading_video_status())
         size_hint_raw = video.get("filesize") or video.get("filesize_approx")
@@ -266,25 +239,37 @@ async def download_video(message: types.Message):
         on_progress = make_status_text_progress_updater("YouTube video", _edit_status)
         on_retry_download = make_retry_status_notifier(_edit_status)
 
-        # Prefer high-speed downloader when stream is direct media; fall back to yt-dlp for manifests/HLS.
-        if _is_manifest_stream(video):
-            metrics = await asyncio.wait_for(
-                retry_async_operation(
-                    lambda: download_with_ytdlp_metrics(
-                        yt['webpage_url'],
-                        name,
-                        YTDLP_FORMAT_720,
-                        "youtube_video_ytdlp_manifest",
-                        max_filesize=MAX_FILE_SIZE - 1,
-                    ),
-                    attempts=3,
-                    delay_seconds=2.0,
-                    should_retry_result=lambda result: result is None,
-                    on_retry=on_retry_download,
-                ),
-                timeout=900.0,
+        def _reply_markup():
+            return kb.return_video_info_keyboard(
+                views=views,
+                likes=likes,
+                comments=None,
+                shares=None,
+                music_play_url=None,
+                video_url=yt['webpage_url'],
+                user_settings=user_settings,
+                audio_callback_data=audio_callback_data,
             )
-        else:
+
+        async def _download_media():
+            if _is_manifest_stream(video):
+                return await asyncio.wait_for(
+                    retry_async_operation(
+                        lambda: download_with_ytdlp_metrics(
+                            yt['webpage_url'],
+                            name,
+                            YTDLP_FORMAT_720,
+                            "youtube_video_ytdlp_manifest",
+                            max_filesize=MAX_FILE_SIZE - 1,
+                        ),
+                        attempts=3,
+                        delay_seconds=2.0,
+                        should_retry_result=lambda result: result is None,
+                        on_retry=on_retry_download,
+                    ),
+                    timeout=900.0,
+                )
+
             metrics = await asyncio.wait_for(
                 download_stream(
                     video,
@@ -298,68 +283,90 @@ async def download_video(message: types.Message):
                 ),
                 timeout=540.0,
             )
-            if not metrics:
-                metrics = await asyncio.wait_for(
-                    retry_async_operation(
-                        lambda: download_with_ytdlp_metrics(
-                            yt['webpage_url'],
-                            name,
-                            YTDLP_FORMAT_720,
-                            "youtube_video_ytdlp",
-                            max_filesize=MAX_FILE_SIZE - 1,
-                        ),
-                        attempts=3,
-                        delay_seconds=2.0,
-                        should_retry_result=lambda result: result is None,
-                        on_retry=on_retry_download,
+            if metrics:
+                return metrics
+            return await asyncio.wait_for(
+                retry_async_operation(
+                    lambda: download_with_ytdlp_metrics(
+                        yt['webpage_url'],
+                        name,
+                        YTDLP_FORMAT_720,
+                        "youtube_video_ytdlp",
+                        max_filesize=MAX_FILE_SIZE - 1,
                     ),
-                    timeout=900.0,
-                )
-        if not metrics:
-            await handle_download_error(message, business_id=business_id)
-            return
+                    attempts=3,
+                    delay_seconds=2.0,
+                    should_retry_result=lambda result: result is None,
+                    on_retry=on_retry_download,
+                ),
+                timeout=900.0,
+            )
 
-        if metrics.size >= MAX_FILE_SIZE:
-            await handle_video_too_large(message, business_id=business_id)
-            await remove_file(metrics.path)
-            return
+        async def _send_cached(file_id: str):
+            logging.info(
+                "Serving cached YouTube video: url=%s file_id=%s",
+                summarize_url_for_log(yt['webpage_url']),
+                file_id,
+            )
+            return await message.reply_video(
+                video=file_id,
+                caption=bm.captions(user_captions, yt['title'], bot_url),
+                reply_markup=_reply_markup(),
+                parse_mode="HTML",
+            )
 
-        await safe_edit_text(status_message, bm.uploading_status())
-        await send_chat_action_if_needed(bot, message.chat.id, "upload_video", business_id)
-        sent_message = await message.reply_video(
-            video=FSInputFile(metrics.path),
-            caption=bm.captions(user_captions, yt['title'], bot_url),
-            reply_markup=kb.return_video_info_keyboard(
-                views=views,
-                likes=likes,
-                comments=None,
-                shares=None,
-                music_play_url=None,
-                video_url=yt['webpage_url'],
-                user_settings=user_settings,
-                audio_callback_data=audio_callback_data,
-            ),
-            parse_mode="HTML"
+        async def _send_downloaded(path: str):
+            return await message.reply_video(
+                video=FSInputFile(path),
+                caption=bm.captions(user_captions, yt['title'], bot_url),
+                reply_markup=_reply_markup(),
+                parse_mode="HTML",
+            )
+
+        async def _after_send():
+            await maybe_delete_user_message(message, user_settings.get("delete_message"))
+
+        async def _inspect_metrics(metrics):
+            if metrics.size >= MAX_FILE_SIZE:
+                await handle_video_too_large(message, business_id=business_id)
+                return False
+            return True
+
+        async def _handle_backpressure(exc: Exception) -> None:
+            await handle_download_backpressure(
+                exc,
+                business_id=business_id,
+                on_rate_limit_reply=lambda retry_after: message.reply(build_rate_limit_text(retry_after)),
+                on_queue_busy_reply=lambda position: message.reply(build_queue_busy_text(position)),
+                on_business_error=lambda: handle_download_error(message, business_id=business_id),
+            )
+
+        sent_message = await run_single_media_flow(
+            cache_key=yt['webpage_url'],
+            cache_file_type="video",
+            db_service=db,
+            upload_status_text=bm.uploading_status(),
+            upload_action="upload_video",
+            update_status=_edit_status,
+            send_chat_action=lambda action: send_chat_action_if_needed(bot, message.chat.id, action, business_id),
+            send_cached=_send_cached,
+            download_media=_download_media,
+            send_downloaded=_send_downloaded,
+            extract_file_id=lambda sent: sent.video.file_id if getattr(sent, "video", None) else None,
+            cleanup_path=remove_file,
+            delete_status_message=lambda: safe_delete_message(status_message),
+            on_missing_media=lambda: handle_download_error(message, business_id=business_id),
+            on_after_send=_after_send,
+            inspect_metrics=_inspect_metrics,
+            on_rate_limit=_handle_backpressure,
+            on_queue_busy=_handle_backpressure,
         )
-        await maybe_delete_user_message(message, user_settings.get("delete_message"))
-        await db.add_file(yt['webpage_url'], sent_message.video.file_id, "video")
-        logging.info(
-            "YouTube video cached: url=%s file_id=%s",
-            summarize_url_for_log(yt['webpage_url']),
-            sent_message.video.file_id,
-        )
-
-        await remove_file(metrics.path)
-    except DownloadRateLimitError as e:
-        if show_service_status:
-            await message.reply(build_rate_limit_text(e.retry_after))
-        else:
-            await handle_download_error(message, business_id=business_id)
-    except DownloadQueueBusyError as e:
-        if show_service_status:
-            await message.reply(build_queue_busy_text(e.position))
-        else:
-            await handle_download_error(message, business_id=business_id)
+        if sent_message and getattr(sent_message, "video", None):
+            logging.info(
+                "YouTube video cached: url=%s file_id=%s",
+                summarize_url_for_log(yt['webpage_url']),
+                sent_message.video.file_id,
+            )
     except DownloadTooLargeError:
         await handle_video_too_large(message, business_id=business_id)
     except asyncio.TimeoutError:
