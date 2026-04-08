@@ -6,6 +6,7 @@ import threading
 import time
 import sys
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Awaitable, Callable, Mapping, MutableMapping, Optional
 
 import requests
@@ -163,7 +164,8 @@ class ResilientDownloader:
         loop = asyncio.get_running_loop()
         progress_bridge = self._build_progress_bridge(loop, on_progress)
         headers_map = headers or {}
-        inflight_key = f"{os.path.abspath(os.path.join(self.output_dir, filename))}::{url}"
+        target_path = self._resolve_target_path(filename)
+        inflight_key = f"{target_path}::{url}"
         use_subprocess = (
             self._subprocess_threshold_bytes > 0
             and (size_hint or 0) >= self._subprocess_threshold_bytes
@@ -383,7 +385,7 @@ class ResilientDownloader:
         max_size_bytes: Optional[int] = None,
     ) -> DownloadMetrics:
         os.makedirs(self.output_dir, exist_ok=True)
-        target_path = os.path.join(self.output_dir, filename)
+        target_path = self._resolve_target_path(filename)
         temp_path = f"{target_path}{self.config.temp_suffix}"
         sync_started_at = time.perf_counter()
         had_existing_target = os.path.exists(target_path)
@@ -539,6 +541,19 @@ class ResilientDownloader:
     # ----------------------------------------------------------------------------------
     # Internal helpers
     # ----------------------------------------------------------------------------------
+    def _resolve_target_path(self, filename: str) -> str:
+        candidate = str(filename or "").strip()
+        if not candidate:
+            raise DownloadError("Download target filename is required")
+
+        output_root = Path(self.output_dir).resolve()
+        target_path = (output_root / candidate).resolve()
+        try:
+            target_path.relative_to(output_root)
+        except ValueError as exc:
+            raise DownloadError(f"Download path escapes output directory: {filename}") from exc
+        return str(target_path)
+
     def _probe(self, url: str, headers: Mapping[str, str]) -> tuple[int, bool]:
         """Issue a HEAD request to discover content length and Range support."""
         attempt = 0

@@ -1,5 +1,6 @@
 import asyncio
 import time
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -150,3 +151,44 @@ def test_download_sync_preserves_too_large_error_and_keeps_existing_target(monke
         )
 
     assert target.read_bytes() == b"existing"
+
+
+@pytest.mark.asyncio
+async def test_download_rejects_parent_path_traversal(tmp_path):
+    downloader = ResilientDownloader(str(tmp_path))
+
+    with pytest.raises(download_manager.DownloadError, match="escapes output directory"):
+        await downloader.download("https://cdn.example.com/video.mp4", "../evil.txt")
+
+
+@pytest.mark.asyncio
+async def test_download_rejects_absolute_target_path(tmp_path):
+    downloader = ResilientDownloader(str(tmp_path))
+    outside_path = tmp_path.parent / "evil.txt"
+
+    with pytest.raises(download_manager.DownloadError, match="escapes output directory"):
+        await downloader.download("https://cdn.example.com/video.mp4", str(outside_path))
+
+
+def test_download_sync_allows_nested_relative_paths(monkeypatch, tmp_path):
+    downloader = ResilientDownloader(str(tmp_path))
+    target = tmp_path / "tweet123" / "video.mp4"
+
+    monkeypatch.setattr(downloader, "_probe", lambda url, headers: (4, False))
+
+    def fake_download_single(url, target_path, headers, *, progress_state=None, max_size_bytes=None):
+        Path(target_path).write_bytes(b"data")
+
+    monkeypatch.setattr(downloader, "_download_single", fake_download_single)
+
+    metrics = downloader._download_sync(
+        "https://cdn.example.com/video.mp4",
+        "tweet123/video.mp4",
+        {},
+        False,
+        None,
+        None,
+    )
+
+    assert target.exists()
+    assert metrics.path == str(target)
