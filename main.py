@@ -1,4 +1,5 @@
 import asyncio
+from contextlib import suppress
 import hashlib
 import os
 from dataclasses import dataclass
@@ -300,46 +301,54 @@ async def send_analytics(user_id, chat_type, action_name):
 
 
 async def main():
+    analytics_started = False
     with logging.context(flow="startup", request_id="bot-startup"):
-        startup_started_at = asyncio.get_running_loop().time()
-        bot_me = await bot.get_me()
-        logging.event("bot_startup", bot_username=bot_me.username)
-        set_app_context(bot=bot, db=db, send_analytics=send_analytics)
-        await db.init_db()
-        await start_analytics_workers()
-
-        import handlers
-        import middlewares
-        from handlers.admin import clear_downloads_and_notify
-
-        if not os.path.exists(OUTPUT_DIR):
-            os.makedirs(OUTPUT_DIR)
-
-        dp.include_router(handlers.router)
-
-        for middleware in middlewares.__all__:
-            dp.message.outer_middleware(middleware())
-            dp.callback_query.outer_middleware(middleware())
-            dp.inline_query.outer_middleware(middleware())
-
-        await bot.set_my_commands(commands=BOT_COMMANDS)
-        await bot.delete_webhook(drop_pending_updates=True)
-
-        crontab("0 0 * * *", func=clear_downloads_and_notify, start=True)
-
-        logging.perf(
-            "bot_startup_duration",
-            duration_ms=(asyncio.get_running_loop().time() - startup_started_at) * 1000.0,
-            bot_username=bot_me.username,
-        )
-        logging.event("polling_started")
         try:
+            startup_started_at = asyncio.get_running_loop().time()
+            bot_me = await bot.get_me()
+            logging.event("bot_startup", bot_username=bot_me.username)
+            set_app_context(bot=bot, db=db, send_analytics=send_analytics)
+            await db.init_db()
+            await start_analytics_workers()
+            analytics_started = True
+
+            import handlers
+            import middlewares
+            from handlers.admin import clear_downloads_and_notify
+
+            if not os.path.exists(OUTPUT_DIR):
+                os.makedirs(OUTPUT_DIR)
+
+            dp.include_router(handlers.router)
+
+            for middleware in middlewares.__all__:
+                dp.message.outer_middleware(middleware())
+                dp.callback_query.outer_middleware(middleware())
+                dp.inline_query.outer_middleware(middleware())
+
+            await bot.set_my_commands(commands=BOT_COMMANDS)
+            await bot.delete_webhook(drop_pending_updates=True)
+
+            crontab("0 0 * * *", func=clear_downloads_and_notify, start=True)
+
+            logging.perf(
+                "bot_startup_duration",
+                duration_ms=(asyncio.get_running_loop().time() - startup_started_at) * 1000.0,
+                bot_username=bot_me.username,
+            )
+            logging.event("polling_started")
             await dp.start_polling(bot)
         finally:
             logging.event("polling_stopping")
-            await stop_analytics_workers()
-            await shutdown_download_queue()
-            await close_http_session()
+            if analytics_started:
+                with suppress(Exception):
+                    await stop_analytics_workers()
+            with suppress(Exception):
+                await shutdown_download_queue()
+            with suppress(Exception):
+                await close_http_session()
+            with suppress(Exception):
+                await session.close()
 
 
 if __name__ == "__main__":
