@@ -5,6 +5,7 @@ from unittest.mock import AsyncMock
 import messages as bm
 import pytest
 
+from handlers import bot_profile_cache, telegram_ui_utils
 from handlers import utils
 from log.logger import summarize_text_for_log, summarize_url_for_log
 from utils.download_manager import DownloadProgress
@@ -27,7 +28,7 @@ async def test_maybe_delete_user_message_handles_error(monkeypatch):
         pass
 
     message = SimpleNamespace(delete=AsyncMock(side_effect=DummyTelegramError()), answer=AsyncMock())
-    monkeypatch.setattr(utils, "TelegramAPIError", DummyTelegramError)
+    monkeypatch.setattr(telegram_ui_utils, "TelegramAPIError", DummyTelegramError)
 
     result = await utils.maybe_delete_user_message(message, "on")
 
@@ -48,8 +49,8 @@ async def test_maybe_delete_user_message_skips_when_flag_off():
 
 @pytest.mark.asyncio
 async def test_get_bot_url(monkeypatch):
-    monkeypatch.setattr(utils, "_bot_username", None)
-    monkeypatch.setattr(utils, "_bot_id", None)
+    monkeypatch.setattr(bot_profile_cache, "_bot_username", None)
+    monkeypatch.setattr(bot_profile_cache, "_bot_id", None)
     bot = SimpleNamespace(
         get_me=AsyncMock(return_value=SimpleNamespace(username="downloader_bot", id=777))
     )
@@ -62,8 +63,8 @@ async def test_get_bot_url(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_get_bot_url_and_id_share_identity_fetch(monkeypatch):
-    monkeypatch.setattr(utils, "_bot_username", None)
-    monkeypatch.setattr(utils, "_bot_id", None)
+    monkeypatch.setattr(bot_profile_cache, "_bot_username", None)
+    monkeypatch.setattr(bot_profile_cache, "_bot_id", None)
     bot = SimpleNamespace(
         get_me=AsyncMock(return_value=SimpleNamespace(username="downloader_bot", id=999))
     )
@@ -97,7 +98,7 @@ async def test_remove_file_ignores_missing(tmp_path):
 
 @pytest.mark.asyncio
 async def test_send_chat_action_if_needed_triggers():
-    utils._chat_action_cache.clear()
+    telegram_ui_utils._chat_action_cache.clear()
     bot = SimpleNamespace(send_chat_action=AsyncMock())
 
     await utils.send_chat_action_if_needed(bot, chat_id=1, action="typing", business_id=None)
@@ -107,7 +108,7 @@ async def test_send_chat_action_if_needed_triggers():
 
 @pytest.mark.asyncio
 async def test_send_chat_action_if_needed_skips_for_business():
-    utils._chat_action_cache.clear()
+    telegram_ui_utils._chat_action_cache.clear()
     bot = SimpleNamespace(send_chat_action=AsyncMock())
 
     await utils.send_chat_action_if_needed(bot, chat_id=1, action="typing", business_id=123)
@@ -117,7 +118,7 @@ async def test_send_chat_action_if_needed_skips_for_business():
 
 @pytest.mark.asyncio
 async def test_send_chat_action_if_needed_throttles_duplicates():
-    utils._chat_action_cache.clear()
+    telegram_ui_utils._chat_action_cache.clear()
     bot = SimpleNamespace(send_chat_action=AsyncMock())
 
     await utils.send_chat_action_if_needed(bot, chat_id=1, action="typing", business_id=None)
@@ -132,7 +133,7 @@ async def test_react_to_message_skips_for_business(monkeypatch):
         business_connection_id=42,
         react=AsyncMock(),
     )
-    monkeypatch.setattr(utils.types, "ReactionTypeEmoji", lambda emoji: ("emoji", emoji))
+    monkeypatch.setattr(telegram_ui_utils.types, "ReactionTypeEmoji", lambda emoji: ("emoji", emoji))
 
     await utils.react_to_message(message, "fire")
 
@@ -145,7 +146,7 @@ async def test_react_to_message_handles_errors(monkeypatch):
         business_connection_id=None,
         react=AsyncMock(side_effect=RuntimeError("fail")),
     )
-    monkeypatch.setattr(utils.types, "ReactionTypeEmoji", lambda emoji: ("emoji", emoji))
+    monkeypatch.setattr(telegram_ui_utils.types, "ReactionTypeEmoji", lambda emoji: ("emoji", emoji))
 
     await utils.react_to_message(message, "fire", skip_if_business=False)
 
@@ -155,7 +156,7 @@ async def test_react_to_message_handles_errors(monkeypatch):
 @pytest.mark.asyncio
 async def test_send_with_reaction_invokes_reply(monkeypatch):
     mock_react = AsyncMock()
-    monkeypatch.setattr(utils, "react_to_message", mock_react)
+    monkeypatch.setattr(telegram_ui_utils, "react_to_message", mock_react)
     message = SimpleNamespace(reply=AsyncMock())
 
     await utils._send_with_reaction(message, "hello", emoji="fire", business_id=7, skip_if_business=False)
@@ -178,8 +179,8 @@ async def test_send_with_reaction_requires_method():
 @pytest.mark.asyncio
 async def test_handle_download_error_uses_default_text(monkeypatch):
     mock_send = AsyncMock()
-    monkeypatch.setattr(utils, "_send_with_reaction", mock_send)
-    monkeypatch.setattr(utils.bm, "something_went_wrong", lambda: "oops")
+    monkeypatch.setattr(telegram_ui_utils, "_send_with_reaction", mock_send)
+    monkeypatch.setattr(telegram_ui_utils.bm, "something_went_wrong", lambda: "oops")
 
     message = SimpleNamespace()
 
@@ -194,8 +195,8 @@ async def test_handle_download_error_uses_default_text(monkeypatch):
 @pytest.mark.asyncio
 async def test_handle_video_too_large_uses_predefined_text(monkeypatch):
     mock_send = AsyncMock()
-    monkeypatch.setattr(utils, "_send_with_reaction", mock_send)
-    monkeypatch.setattr(utils.bm, "video_too_large", lambda: "too big")
+    monkeypatch.setattr(telegram_ui_utils, "_send_with_reaction", mock_send)
+    monkeypatch.setattr(telegram_ui_utils.bm, "video_too_large", lambda: "too big")
 
     message = SimpleNamespace()
 
@@ -211,7 +212,7 @@ async def test_handle_video_too_large_uses_predefined_text(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_safe_edit_text_skips_identical_payloads():
-    utils._message_edit_cache.clear()
+    telegram_ui_utils._message_edit_cache.clear()
     message = SimpleNamespace(
         chat=SimpleNamespace(id=123),
         message_id=456,
@@ -226,7 +227,7 @@ async def test_safe_edit_text_skips_identical_payloads():
 
 @pytest.mark.asyncio
 async def test_safe_edit_inline_text_skips_identical_payloads():
-    utils._message_edit_cache.clear()
+    telegram_ui_utils._message_edit_cache.clear()
     bot = SimpleNamespace(edit_message_text=AsyncMock())
 
     first = await utils.safe_edit_inline_text(bot, "inline-1", "same text", parse_mode="HTML")
@@ -273,7 +274,7 @@ async def test_load_user_settings_uses_group_chat_id():
 async def test_make_status_text_progress_updater_throttles_intermediate_updates(monkeypatch):
     update_text = AsyncMock()
     monotonic_values = itertools.chain([10.0, 10.2, 10.4], itertools.repeat(10.4))
-    monkeypatch.setattr(utils.time, "monotonic", lambda: next(monotonic_values))
+    monkeypatch.setattr(telegram_ui_utils.time, "monotonic", lambda: next(monotonic_values))
     on_progress = utils.make_status_text_progress_updater("Test media", update_text)
 
     await on_progress(
@@ -313,7 +314,7 @@ async def test_make_status_text_progress_updater_throttles_intermediate_updates(
 @pytest.mark.asyncio
 async def test_make_retry_status_notifier_respects_threshold(monkeypatch):
     update_text = AsyncMock()
-    monkeypatch.setattr(utils.bm, "retrying_again_status", lambda attempt, total: f"retry {attempt}/{total}")
+    monkeypatch.setattr(telegram_ui_utils.bm, "retrying_again_status", lambda attempt, total: f"retry {attempt}/{total}")
     notifier = utils.make_retry_status_notifier(update_text)
 
     await notifier(1, 4, RuntimeError("skip"))
