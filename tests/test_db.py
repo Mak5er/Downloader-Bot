@@ -8,6 +8,7 @@ import pytest_asyncio
 from sqlalchemy.dialects import postgresql
 
 from services import db as db_module
+from services.storage import file_cache_repository, user_repository
 
 
 def test_map_action_to_service_includes_soundcloud():
@@ -270,7 +271,7 @@ async def test_get_file_id_positive_cache_has_no_ttl(monkeypatch):
             return False
 
     monkeypatch.setattr(database, "SessionLocal", lambda: _UnusedSessionCtx())
-    monkeypatch.setattr(db_module.time, "monotonic", lambda: 10_000.0)
+    monkeypatch.setattr(file_cache_repository.time, "monotonic", lambda: 10_000.0)
 
     assert await database.get_file_id("https://example.com/video") == "cached-file-id"
 
@@ -291,7 +292,7 @@ async def test_get_file_id_negative_cache_expires_quickly(monkeypatch):
             return False
 
     monkeypatch.setattr(database, "SessionLocal", lambda: _SessionCtx())
-    monkeypatch.setattr(db_module.time, "monotonic", lambda: 16.0)
+    monkeypatch.setattr(file_cache_repository.time, "monotonic", lambda: 16.0)
 
     assert await database.get_file_id("https://example.com/video") == "fresh-file-id"
     session.execute.assert_awaited_once()
@@ -328,7 +329,7 @@ async def test_user_settings_returns_stale_cache_when_db_lookup_fails(monkeypatc
             return False
 
     monkeypatch.setattr(database, "SessionLocal", lambda: _SessionCtx())
-    monkeypatch.setattr(db_module.time, "monotonic", lambda: 9999.0)
+    monkeypatch.setattr(user_repository.time, "monotonic", lambda: 9999.0)
 
     settings = await database.user_settings(42)
 
