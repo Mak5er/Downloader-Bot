@@ -9,7 +9,7 @@ from typing import Optional
 
 from alembic import command
 from alembic.config import Config as AlembicConfig
-from sqlalchemy import Column, Text, TIMESTAMP, func, select, delete, update, ForeignKey, BigInteger, inspect, text, UniqueConstraint
+from sqlalchemy import Column, Text, TIMESTAMP, func, select, delete, update, ForeignKey, BigInteger, inspect, text, UniqueConstraint, Index
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
@@ -71,6 +71,10 @@ class User(Base):
 
 class AnalyticsEvent(Base):
     __tablename__ = "analytics_events"
+    __table_args__ = (
+        Index("ix_analytics_events_created_at", "created_at"),
+        Index("ix_analytics_events_action_name_created_at", "action_name", "created_at"),
+    )
 
     id = Column(BigInteger, primary_key=True, autoincrement=True)
     user_id = Column(BigInteger, nullable=False)

@@ -50,6 +50,13 @@ def upgrade() -> None:
         sa.Column("created_at", sa.TIMESTAMP(timezone=True), server_default=sa.text("CURRENT_TIMESTAMP"), nullable=True),
         sa.PrimaryKeyConstraint("id"),
     )
+    op.create_index("ix_analytics_events_created_at", "analytics_events", ["created_at"], unique=False)
+    op.create_index(
+        "ix_analytics_events_action_name_created_at",
+        "analytics_events",
+        ["action_name", "created_at"],
+        unique=False,
+    )
 
     op.create_table(
         "settings",
@@ -67,6 +74,8 @@ def upgrade() -> None:
 
 def downgrade() -> None:
     op.drop_table("settings")
+    op.drop_index("ix_analytics_events_action_name_created_at", table_name="analytics_events")
+    op.drop_index("ix_analytics_events_created_at", table_name="analytics_events")
     op.drop_table("analytics_events")
     op.drop_table("users")
     op.drop_table("downloaded_files")

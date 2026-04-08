@@ -16,6 +16,13 @@ def test_map_action_to_service_includes_soundcloud():
     assert db_module.DataBase._map_action_to_service("pinterest_media") == "Pinterest"
 
 
+def test_analytics_event_model_declares_stats_indexes():
+    index_names = {index.name for index in db_module.AnalyticsEvent.__table__.indexes}
+
+    assert "ix_analytics_events_created_at" in index_names
+    assert "ix_analytics_events_action_name_created_at" in index_names
+
+
 def test_select_schema_migration_action_prefers_upgrade_for_empty_schema():
     assert db_module.DataBase._select_schema_migration_action(set()) == "upgrade"
 
