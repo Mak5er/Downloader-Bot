@@ -6,7 +6,7 @@ from urllib.parse import urlparse
 
 import aiohttp
 from aiogram import types, Router, F
-from aiogram.types import FSInputFile, InlineQueryResultArticle
+from aiogram.types import FSInputFile
 from fake_useragent import UserAgent
 from yt_dlp import YoutubeDL
 
@@ -19,10 +19,8 @@ from services.media.delivery import send_cached_media_entries
 from services.media.orchestration import handle_download_backpressure, run_single_media_flow
 from handlers.user import update_info
 from handlers.utils import (
-    build_inline_album_result,
     build_queue_busy_text,
     build_rate_limit_text,
-    build_start_deeplink_url,
     get_bot_url,
     get_bot_avatar_thumbnail,
     get_message_text,
@@ -56,20 +54,16 @@ from utils.download_manager import (
 )
 from utils.http_client import get_http_session
 from utils.media_cache import build_media_cache_key
-from services.inline.album_links import create_inline_album_request
-from services.inline.service_icons import get_inline_service_icon
-from services.inline.video_requests import (
-    claim_inline_video_request_for_send,
-    complete_inline_video_request,
-    create_inline_video_request,
-    reset_inline_video_request,
-)
 from services.platforms import tiktok_media as tiktok_platform
 
 logging = logging.bind(service="tiktok")
 
 MAX_FILE_SIZE = int(1.5 * 1024 * 1024 * 1024)  # 1.5 GB
 router = Router()
+
+__all__ = [
+    "aiohttp",
+]
 
 TikTokVideo = tiktok_platform.TikTokVideo
 TikTokUser = tiktok_platform.TikTokUser

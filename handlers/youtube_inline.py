@@ -8,6 +8,7 @@ import keyboards as kb
 import messages as bm
 from handlers.deps import HandlerDependencies
 from handlers.utils import (
+    build_inline_status_editor,
     get_bot_url,
     make_status_text_progress_updater,
     remove_file,
@@ -168,13 +169,13 @@ async def send_inline_youtube_music(
 
     metrics = None
 
-    async def _edit_inline_status(text: str, *, with_retry_button: bool = False) -> None:
-        reply_markup = (
-            kb.inline_send_media_keyboard("Send audio inline", f"inline:ytmusic:{token}")
-            if with_retry_button
-            else None
-        )
-        await safe_edit_inline_text_fn(deps.bot, inline_message_id, text, reply_markup=reply_markup)
+    _edit_inline_status = build_inline_status_editor(
+        bot=deps.bot,
+        inline_message_id=inline_message_id,
+        callback_data_factory=lambda _media_kind: f"inline:ytmusic:{token}",
+        safe_edit_inline_text_fn=safe_edit_inline_text_fn,
+        button_text="Send audio inline",
+    )
 
     try:
         yt = await asyncio.to_thread(get_youtube_video_fn, request.source_url)
@@ -277,13 +278,13 @@ async def send_inline_youtube_video(
 
     metrics = None
 
-    async def _edit_inline_status(text: str, *, with_retry_button: bool = False) -> None:
-        reply_markup = (
-            kb.inline_send_media_keyboard("Send video inline", f"inline:youtube:{token}")
-            if with_retry_button
-            else None
-        )
-        await safe_edit_inline_text_fn(deps.bot, inline_message_id, text, reply_markup=reply_markup)
+    _edit_inline_status = build_inline_status_editor(
+        bot=deps.bot,
+        inline_message_id=inline_message_id,
+        callback_data_factory=lambda _media_kind: f"inline:youtube:{token}",
+        safe_edit_inline_text_fn=safe_edit_inline_text_fn,
+        button_text="Send video inline",
+    )
 
     try:
         yt = await asyncio.to_thread(get_youtube_video_fn, request.source_url)

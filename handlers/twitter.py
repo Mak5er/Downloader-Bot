@@ -6,11 +6,9 @@ import os
 import re
 import time
 from typing import Any, Optional
-from urllib.parse import urlsplit
 
 import aiohttp
 from aiogram import Router, F, types
-from aiogram.types import FSInputFile
 
 import keyboards as kb
 import messages as bm
@@ -28,16 +26,12 @@ from services.platforms.twitter_media import (
     normalize_twitter_media_kind as _normalize_twitter_media_kind,
 )
 from handlers.utils import (
-    build_inline_album_result,
-    build_request_id,
     build_queue_busy_text,
     build_rate_limit_text,
-    build_start_deeplink_url,
     get_bot_url,
     handle_download_error,
     get_message_text,
     load_user_settings,
-    make_status_text_progress_updater,
     maybe_delete_user_message,
     react_to_message,
     remove_file,
@@ -56,24 +50,12 @@ from handlers.utils import (
 )
 from log.logger import logger as logging, summarize_text_for_log, summarize_url_for_log
 from app_context import bot, db, send_analytics
+from services.inline.video_requests import create_inline_video_request
 from utils.download_manager import (
     DownloadConfig,
-    DownloadMetrics,
-    DownloadQueueBusyError,
-    DownloadRateLimitError,
-    DownloadTooLargeError,
     ResilientDownloader,
-    log_download_metrics,
 )
-from utils.media_cache import build_media_cache_key
 from services.inline.service_icons import get_inline_service_icon
-from services.inline.album_links import create_inline_album_request
-from services.inline.video_requests import (
-    claim_inline_video_request_for_send,
-    complete_inline_video_request,
-    create_inline_video_request,
-    reset_inline_video_request,
-)
 from utils.http_client import get_http_session
 
 logging = logging.bind(service="twitter")
@@ -87,6 +69,11 @@ _SCRAPE_TTL_SECONDS = 2 * 60
 _CACHE_MAXSIZE = 1024
 
 router = Router()
+
+__all__ = [
+    "create_inline_video_request",
+    "get_inline_service_icon",
+]
 
 twitter_downloader = ResilientDownloader(
     OUTPUT_DIR,

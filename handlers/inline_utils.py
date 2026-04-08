@@ -1,11 +1,12 @@
-from typing import Any, Optional
+from typing import Any, Awaitable, Callable, Optional
 from urllib.parse import urlparse
 
-from aiogram import Bot, types
+from aiogram import types
 from aiogram.client.default import Default
 from aiogram.methods.base import TelegramMethod
 from aiogram.exceptions import TelegramAPIError
 
+import keyboards as kb
 import messages as bm
 from log.logger import logger as logging, summarize_text_for_log
 
@@ -24,6 +25,39 @@ class RawAnswerInlineQuery(TelegramMethod[bool]):
     button: types.InlineQueryResultsButton | None = None
     switch_pm_parameter: str | None = None
     switch_pm_text: str | None = None
+
+
+def _default_inline_button_text(media_kind: str) -> str:
+    if media_kind == "photo":
+        return "Send photo inline"
+    if media_kind == "audio":
+        return "Send audio inline"
+    return "Send video inline"
+
+
+def build_inline_status_editor(
+    *,
+    bot: Any,
+    inline_message_id: str,
+    callback_data_factory: Callable[[str], str],
+    safe_edit_inline_text_fn: Callable[..., Awaitable[Any]],
+    button_text: Optional[str] = None,
+) -> Callable[..., Awaitable[None]]:
+    async def _edit_inline_status(
+        text: str,
+        *,
+        with_retry_button: bool = False,
+        media_kind: str = "video",
+    ) -> None:
+        reply_markup = None
+        if with_retry_button:
+            reply_markup = kb.inline_send_media_keyboard(
+                button_text or _default_inline_button_text(media_kind),
+                callback_data_factory(media_kind),
+            )
+        await safe_edit_inline_text_fn(bot, inline_message_id, text, reply_markup=reply_markup)
+
+    return _edit_inline_status
 
 
 def _normalize_inline_http_url(url: Optional[str]) -> Optional[str]:

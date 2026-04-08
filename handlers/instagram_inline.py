@@ -10,6 +10,7 @@ import messages as bm
 from handlers.deps import HandlerDependencies
 from handlers.utils import (
     build_inline_album_result,
+    build_inline_status_editor,
     build_queue_busy_text,
     build_rate_limit_text,
     build_start_deeplink_url,
@@ -214,19 +215,12 @@ async def send_inline_instagram_media(
 
     download_path: Optional[str] = None
 
-    async def _edit_inline_status(
-        text: str,
-        *,
-        with_retry_button: bool = False,
-        media_kind: str = "video",
-    ) -> None:
-        button_text = "Send photo inline" if media_kind == "photo" else "Send video inline"
-        reply_markup = (
-            kb.inline_send_media_keyboard(button_text, f"inline:instagram:{token}")
-            if with_retry_button
-            else None
-        )
-        await safe_edit_inline_text_fn(deps.bot, inline_message_id, text, reply_markup=reply_markup)
+    _edit_inline_status = build_inline_status_editor(
+        bot=deps.bot,
+        inline_message_id=inline_message_id,
+        callback_data_factory=lambda _media_kind: f"inline:instagram:{token}",
+        safe_edit_inline_text_fn=safe_edit_inline_text_fn,
+    )
 
     try:
         data = await inst_service.fetch_data(request.source_url)

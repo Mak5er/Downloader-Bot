@@ -1,12 +1,10 @@
 import asyncio
-import os
 import re
 from typing import Optional
 
 from aiogram import types, Router, F
-from aiogram.types import FSInputFile, InlineQueryResultArticle
+from aiogram.types import FSInputFile
 from yt_dlp import YoutubeDL
-from yt_dlp.utils import DownloadError
 
 import keyboards as kb
 import messages as bm
@@ -21,7 +19,6 @@ from handlers.youtube_inline import (
 from services.media.orchestration import handle_download_backpressure, run_single_media_flow
 from handlers.user import update_info
 from handlers.utils import (
-    build_request_id,
     build_queue_busy_text,
     build_rate_limit_text,
     get_bot_url,
@@ -48,23 +45,15 @@ from handlers.utils import (
     with_inline_send_logging,
     with_message_logging,
 )
-from log.logger import logger as logging, summarize_text_for_log, summarize_url_for_log
+from log.logger import logger as logging, summarize_url_for_log
 from app_context import bot, db, send_analytics
 from utils.download_manager import (
-    DownloadProgress,
     DownloadQueueBusyError,
     DownloadRateLimitError,
     DownloadTooLargeError,
     DownloadMetrics,
 )
 from utils.media_cache import build_media_cache_key
-from services.inline.service_icons import get_inline_service_icon
-from services.inline.video_requests import (
-    claim_inline_video_request_for_send,
-    complete_inline_video_request,
-    create_inline_video_request,
-    reset_inline_video_request,
-)
 from services.platforms import youtube_media as youtube_platform
 
 logging = logging.bind(service="youtube")

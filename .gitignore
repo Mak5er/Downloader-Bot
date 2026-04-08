@@ -179,4 +179,5 @@ services/alembic/__pycache__/
 
 .claude
 .ruff_cache
+.offline-markdown-preview
 code_review.md

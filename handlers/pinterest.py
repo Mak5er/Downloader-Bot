@@ -1,4 +1,3 @@
-import asyncio
 import datetime
 import re
 from typing import Optional
@@ -18,17 +17,14 @@ from services.platforms.pinterest_media import (
     PinterestMedia,
     PinterestMediaService,
     PinterestPost,
-    get_pinterest_preview_url as _get_pinterest_preview_url,
+    DownloadError,
     parse_pinterest_post,
     strip_pinterest_url,
 )
 from handlers.user import update_info
 from handlers.utils import (
-    build_inline_album_result,
-    build_request_id,
     build_queue_busy_text,
     build_rate_limit_text,
-    build_start_deeplink_url,
     get_bot_url,
     get_message_text,
     handle_download_error,
@@ -53,24 +49,13 @@ from handlers.utils import (
 )
 from log.logger import logger as logging, summarize_text_for_log, summarize_url_for_log
 from app_context import bot, db, send_analytics
+from services.inline.service_icons import get_inline_service_icon
 from utils.cobalt_client import fetch_cobalt_data
 from utils.download_manager import (
-    DownloadError,
     DownloadMetrics,
-    DownloadProgress,
-    DownloadQueueBusyError,
-    DownloadRateLimitError,
     log_download_metrics,
 )
 from utils.media_cache import build_media_cache_key
-from services.inline.album_links import create_inline_album_request
-from services.inline.service_icons import get_inline_service_icon
-from services.inline.video_requests import (
-    claim_inline_video_request_for_send,
-    complete_inline_video_request,
-    create_inline_video_request,
-    reset_inline_video_request,
-)
 
 logging = logging.bind(service="pinterest")
 
@@ -78,6 +63,12 @@ router = Router()
 
 MAX_FILE_SIZE = int(1.5 * 1024 * 1024 * 1024)
 PINTEREST_URL_REGEX = r"(https?://(?:[\w-]+\.)?pinterest\.[\w.]+/\S+|https?://pin\.it/\S+)"
+
+__all__ = [
+    "DownloadError",
+    "get_inline_service_icon",
+    "parse_pinterest_post",
+]
 
 class PinterestService(PinterestMediaService):
     def __init__(self, output_dir: str) -> None:
