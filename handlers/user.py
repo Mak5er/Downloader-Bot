@@ -22,6 +22,7 @@ from log.logger import logger as logging
 
 logging = logging.bind(service="user")
 from app_context import db, send_analytics, bot
+from services.settings import parse_setting_toggle_callback, parse_settings_view_callback
 from services.storage.db import StatsSnapshot
 from services.inline.album_links import get_inline_album_request
 from services.links.detection import detect_supported_service
@@ -296,7 +297,10 @@ async def back_to_settings(call: types.CallbackQuery):
 
 @router.callback_query(F.data.startswith("settings:"))
 async def open_setting(call: types.CallbackQuery):
-    _, field = call.data.split(":")
+    field = parse_settings_view_callback(call.data)
+    if field is None:
+        await call.answer(bm.invalid_settings_option(), show_alert=True)
+        return
     if call.message and call.message.chat.type != "private":
         is_admin = await _is_group_admin(call.message.chat.id, call.from_user.id)
         if not is_admin:
@@ -320,7 +324,11 @@ async def open_setting(call: types.CallbackQuery):
 
 @router.callback_query(F.data.startswith("setting:"))
 async def change_setting(call: types.CallbackQuery):
-    _, field, value = call.data.split(":")
+    setting_payload = parse_setting_toggle_callback(call.data)
+    if setting_payload is None:
+        await call.answer(bm.invalid_settings_option(), show_alert=True)
+        return
+    field, value = setting_payload
     if call.message and call.message.chat.type != "private":
         is_admin = await _is_group_admin(call.message.chat.id, call.from_user.id)
         if not is_admin:
@@ -330,7 +338,11 @@ async def change_setting(call: types.CallbackQuery):
     else:
         target_id = call.from_user.id
 
-    await db.set_user_setting(user_id=target_id, field=field, value=value)
+    try:
+        await db.set_user_setting(user_id=target_id, field=field, value=value)
+    except ValueError:
+        await call.answer(bm.invalid_settings_option(), show_alert=True)
+        return
 
     current_value = await db.get_user_setting(user_id=target_id, field=field)
     keyboard = kb.return_field_keyboard(field, current_value)

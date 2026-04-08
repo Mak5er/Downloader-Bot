@@ -120,6 +120,10 @@ def settings_admin_only():
     return "Only group admins can open /settings in group chats."
 
 
+def invalid_settings_option():
+    return "Invalid settings option."
+
+
 def join_group(chat_title: str) -> str:
     return (
         "Thanks for adding me to <b>{chat_title}</b> <tg-emoji emoji-id='5280764381804650651'>🌸</tg-emoji>\n"

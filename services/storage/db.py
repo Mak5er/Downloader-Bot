@@ -9,7 +9,7 @@ from typing import Optional
 
 from alembic import command
 from alembic.config import Config as AlembicConfig
-from sqlalchemy import Column, Text, TIMESTAMP, func, select, delete, update, ForeignKey, BigInteger, inspect, text
+from sqlalchemy import Column, Text, TIMESTAMP, func, select, delete, update, ForeignKey, BigInteger, inspect, text, UniqueConstraint
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
@@ -17,17 +17,18 @@ from sqlalchemy.orm import declarative_base, relationship
 
 from config import DATABASE_URL
 from log.logger import logger as logging
+from services.settings import SETTING_DISABLED, SETTING_FIELDS, SETTING_VALUES, normalize_setting_value
 
 logging = logging.bind(service="db")
 
 Base = declarative_base()
 NON_DOWNLOAD_ACTIONS = ("start", "settings")
 DEFAULT_USER_SETTINGS = {
-    "captions": "off",
-    "delete_message": "off",
-    "info_buttons": "off",
-    "url_button": "off",
-    "audio_button": "off",
+    "captions": SETTING_DISABLED,
+    "delete_message": SETTING_DISABLED,
+    "info_buttons": SETTING_DISABLED,
+    "url_button": SETTING_DISABLED,
+    "audio_button": SETTING_DISABLED,
 }
 APP_SCHEMA_TABLES = frozenset({
     "downloaded_files",
@@ -80,14 +81,15 @@ class AnalyticsEvent(Base):
 
 class Settings(Base):
     __tablename__ = "settings"
+    __table_args__ = (UniqueConstraint("user_id", name="uq_settings_user_id"),)
 
     id = Column(BigInteger, primary_key=True, autoincrement=True)
-    user_id = Column(BigInteger, ForeignKey("users.user_id"))
-    captions = Column(Text, default="off", nullable=False)
-    delete_message = Column(Text, default="off", nullable=False)
-    info_buttons = Column(Text, default="off", nullable=False)
-    url_button = Column(Text, default="off", nullable=False)
-    audio_button = Column(Text, default="off", nullable=False)
+    user_id = Column(BigInteger, ForeignKey("users.user_id", ondelete="CASCADE"))
+    captions = Column(Text, default=SETTING_DISABLED, nullable=False)
+    delete_message = Column(Text, default=SETTING_DISABLED, nullable=False)
+    info_buttons = Column(Text, default=SETTING_DISABLED, nullable=False)
+    url_button = Column(Text, default=SETTING_DISABLED, nullable=False)
+    audio_button = Column(Text, default=SETTING_DISABLED, nullable=False)
 
     user = relationship("User", back_populates="settings")
 
@@ -321,6 +323,7 @@ class DataBase:
     async def delete_user(self, user_id):
         async with self.SessionLocal() as session:
             async with session.begin():
+                await session.execute(delete(Settings).where(Settings.user_id == user_id))
                 await session.execute(delete(User).where(User.user_id == user_id))
         user_id_int = int(user_id)
         self._status_cache.pop(user_id_int, None)
@@ -390,15 +393,26 @@ class DataBase:
 
         try:
             async with self.SessionLocal() as session:
-                result = await session.execute(select(Settings).where(Settings.user_id == user_id_int))
-                settings = result.scalar_one_or_none()
+                result = await session.execute(
+                    select(Settings)
+                    .where(Settings.user_id == user_id_int)
+                    .order_by(Settings.id.desc())
+                )
+                settings_rows = result.scalars().all()
+                if len(settings_rows) > 1:
+                    logging.warning(
+                        "Detected duplicated settings rows; using latest entry: user_id=%s duplicates=%s",
+                        user_id_int,
+                        len(settings_rows),
+                    )
+                settings = settings_rows[0] if settings_rows else None
                 if settings:
                     payload = {
-                        "captions": settings.captions or "off",
-                        "delete_message": settings.delete_message or "off",
-                        "info_buttons": settings.info_buttons or "off",
-                        "url_button": settings.url_button or "off",
-                        "audio_button": settings.audio_button or "off",
+                        "captions": settings.captions or SETTING_DISABLED,
+                        "delete_message": settings.delete_message or SETTING_DISABLED,
+                        "info_buttons": settings.info_buttons or SETTING_DISABLED,
+                        "url_button": settings.url_button or SETTING_DISABLED,
+                        "audio_button": settings.audio_button or SETTING_DISABLED,
                     }
                     self._settings_cache[user_id_int] = (now, payload)
                     return dict(payload)
@@ -422,18 +436,53 @@ class DataBase:
 
     async def set_user_setting(self, user_id, field, value):
         user_id_int = int(user_id)
+        if field not in SETTING_FIELDS:
+            raise ValueError(f"Unsupported user setting field: {field}")
+
+        normalized_value = normalize_setting_value(value)
+        if normalized_value is None or normalized_value not in SETTING_VALUES:
+            raise ValueError(f"Unsupported user setting value for {field}: {value}")
+
         async with self.SessionLocal() as session:
-            existing = await session.execute(select(Settings).where(Settings.user_id == user_id_int))
-            setting = existing.scalar_one_or_none()
-            if not setting:
-                setting = Settings(user_id=user_id_int)
-                session.add(setting)
-            setattr(setting, field, value)
-            await session.commit()
+            async with session.begin():
+                values = {"user_id": user_id_int, field: normalized_value}
+                if self._dialect_name == "postgresql":
+                    stmt = (
+                        pg_insert(Settings)
+                        .values(**values)
+                        .on_conflict_do_update(
+                            index_elements=[Settings.user_id],
+                            set_={field: normalized_value},
+                        )
+                    )
+                    await session.execute(stmt)
+                elif self._dialect_name == "sqlite":
+                    stmt = (
+                        sqlite_insert(Settings)
+                        .values(**values)
+                        .on_conflict_do_update(
+                            index_elements=[Settings.user_id],
+                            set_={field: normalized_value},
+                        )
+                    )
+                    await session.execute(stmt)
+                else:
+                    existing = await session.execute(
+                        select(Settings)
+                        .where(Settings.user_id == user_id_int)
+                        .order_by(Settings.id.desc())
+                    )
+                    setting_rows = existing.scalars().all()
+                    setting = setting_rows[0] if setting_rows else None
+                    if setting is None:
+                        setting = Settings(user_id=user_id_int)
+                        session.add(setting)
+                    setattr(setting, field, normalized_value)
+                    for duplicate in setting_rows[1:]:
+                        await session.delete(duplicate)
         self._settings_cache.pop(user_id_int, None)
         updated = await self.user_settings(user_id_int)
-        if field in updated:
-            updated[field] = value
+        updated[field] = normalized_value
         self._settings_cache[user_id_int] = (time.monotonic(), updated)
 
     async def set_inactive(self, user_id):

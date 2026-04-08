@@ -32,6 +32,8 @@ class DummyCallbackMessage:
         self.chat = SimpleNamespace(id=100, type="private")
         self.answer_photo = AsyncMock()
         self.edit_media = AsyncMock()
+        self.edit_text = AsyncMock()
+        self.edit_reply_markup = AsyncMock()
         self.delete = AsyncMock()
 
 
@@ -226,6 +228,50 @@ async def test_switch_period_uses_total_mode(monkeypatch):
 
     _, kwargs = call.message.edit_media.await_args
     assert kwargs["reply_markup"] == ("keyboard", "Month", "total")
+
+
+@pytest.mark.asyncio
+async def test_open_setting_rejects_invalid_callback_payload(monkeypatch):
+    call = DummyCallback("settings:captions:extra")
+
+    await user.open_setting(call)
+
+    call.answer.assert_awaited_once()
+    _, kwargs = call.answer.await_args
+    assert kwargs["show_alert"] is True
+    call.message.edit_text.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_change_setting_rejects_invalid_callback_payload(monkeypatch):
+    call = DummyCallback("setting:captions")
+    fake_db = SimpleNamespace(set_user_setting=AsyncMock(), get_user_setting=AsyncMock())
+    monkeypatch.setattr(user, "db", fake_db)
+
+    await user.change_setting(call)
+
+    call.answer.assert_awaited_once()
+    _, kwargs = call.answer.await_args
+    assert kwargs["show_alert"] is True
+    fake_db.set_user_setting.assert_not_awaited()
+    call.message.edit_reply_markup.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_change_setting_handles_invalid_db_setting_value(monkeypatch):
+    call = DummyCallback("setting:captions:on")
+    fake_db = SimpleNamespace(
+        set_user_setting=AsyncMock(side_effect=ValueError("bad value")),
+        get_user_setting=AsyncMock(),
+    )
+    monkeypatch.setattr(user, "db", fake_db)
+
+    await user.change_setting(call)
+
+    call.answer.assert_awaited_once()
+    _, kwargs = call.answer.await_args
+    assert kwargs["show_alert"] is True
+    call.message.edit_reply_markup.assert_not_awaited()
 
 
 @pytest.mark.asyncio

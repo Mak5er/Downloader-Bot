@@ -112,6 +112,22 @@ async def test_add_user_and_settings(database):
 
 
 @pytest.mark.asyncio
+async def test_set_user_setting_rejects_invalid_field():
+    database = db_module.DataBase("postgresql://user:pass@localhost/testdb")
+
+    with pytest.raises(ValueError, match="Unsupported user setting field"):
+        await database.set_user_setting(1, "unknown_field", "on")
+
+
+@pytest.mark.asyncio
+async def test_set_user_setting_rejects_invalid_value():
+    database = db_module.DataBase("postgresql://user:pass@localhost/testdb")
+
+    with pytest.raises(ValueError, match="Unsupported user setting value"):
+        await database.set_user_setting(1, "captions", "maybe")
+
+
+@pytest.mark.asyncio
 async def test_upsert_chat_creates_and_updates(database):
     await database.upsert_chat(
         user_id=555,
@@ -169,6 +185,41 @@ async def test_downloaded_files_cache(database):
     await database.add_file("https://example.com/video", "file-id-1", "video")
     file_id = await database.get_file_id("https://example.com/video")
     assert file_id == "file-id-1"
+
+
+@pytest.mark.asyncio
+async def test_delete_user_removes_settings_before_user(monkeypatch):
+    database = db_module.DataBase("postgresql://user:pass@localhost/testdb")
+    session = SimpleNamespace(execute=AsyncMock())
+
+    class _BeginCtx:
+        async def __aenter__(self):
+            return session
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+    class _SessionCtx:
+        execute = session.execute
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        def begin(self):
+            return _BeginCtx()
+
+    monkeypatch.setattr(database, "SessionLocal", lambda: _SessionCtx())
+
+    await database.delete_user(123)
+
+    assert session.execute.await_count == 2
+    first_stmt = session.execute.await_args_list[0].args[0]
+    second_stmt = session.execute.await_args_list[1].args[0]
+    assert "DELETE FROM settings" in str(first_stmt)
+    assert "DELETE FROM users" in str(second_stmt)
 
 
 @pytest.mark.asyncio
