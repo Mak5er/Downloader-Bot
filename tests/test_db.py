@@ -38,6 +38,28 @@ def test_select_schema_migration_action_rejects_partial_legacy_schema():
         db_module.DataBase._select_schema_migration_action({"users", "settings"})
 
 
+def test_database_configures_engine_pool(monkeypatch):
+    captured: dict[str, object] = {}
+    fake_engine = SimpleNamespace(dialect=SimpleNamespace(name="postgresql"))
+
+    def fake_create_async_engine(url, **kwargs):
+        captured["url"] = url
+        captured["kwargs"] = kwargs
+        return fake_engine
+
+    monkeypatch.setattr(db_module, "create_async_engine", fake_create_async_engine)
+    monkeypatch.setattr(db_module, "async_sessionmaker", lambda **kwargs: SimpleNamespace(**kwargs))
+
+    database = db_module.DataBase("postgresql://user:pass@localhost/testdb")
+
+    assert database.engine is fake_engine
+    assert captured["url"] == "postgresql+asyncpg://user:pass@localhost/testdb"
+    assert captured["kwargs"]["pool_size"] == db_module.DB_POOL_SIZE
+    assert captured["kwargs"]["max_overflow"] == db_module.DB_MAX_OVERFLOW
+    assert captured["kwargs"]["pool_timeout"] == db_module.DB_POOL_TIMEOUT
+    assert captured["kwargs"]["pool_use_lifo"] is True
+
+
 @pytest.mark.asyncio
 async def test_init_db_prefers_alembic_migrations(monkeypatch):
     database = db_module.DataBase("postgresql://user:pass@localhost/testdb")

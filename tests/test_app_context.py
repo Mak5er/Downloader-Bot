@@ -47,3 +47,37 @@ def test_create_app_builds_explicit_application_container(monkeypatch):
         assert app.session is not None
     finally:
         asyncio.run(app.session.close())
+
+
+def test_create_app_applies_session_limit(monkeypatch):
+    captured: dict[str, object] = {}
+
+    class FakeSession:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+
+        async def close(self):
+            return None
+
+    class FakeBot:
+        def __init__(self, *, token, default, session):
+            self.token = token
+            self.default = default
+            self.session = session
+
+    class FakeDispatcher:
+        pass
+
+    monkeypatch.setattr(main, "AiohttpSession", FakeSession)
+    monkeypatch.setattr(main, "Bot", FakeBot)
+    monkeypatch.setattr(main, "Dispatcher", FakeDispatcher)
+
+    app = main.create_app(
+        bot_token="123:TEST",
+        api_url="https://example.invalid",
+        database_factory=lambda: SimpleNamespace(name="db"),
+        session_limit=321,
+    )
+
+    assert captured["limit"] == 321
+    assert app.session is app.bot.session

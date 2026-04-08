@@ -16,7 +16,9 @@ from aiogram.enums.parse_mode import ParseMode
 from app_context import set_app_context
 from config import (
     API_SECRET,
+    BOT_POLLING_TASKS_CONCURRENCY_LIMIT,
     BOT_COMMANDS,
+    BOT_SESSION_CONNECTION_LIMIT,
     BOT_TOKEN,
     CUSTOM_API_URL,
     MEASUREMENT_ID,
@@ -51,8 +53,10 @@ def create_app(
     api_url: str = CUSTOM_API_URL,
     database_factory: Callable[[], DataBase] = DataBase,
     session_timeout: int = 600,
+    session_limit: int = BOT_SESSION_CONNECTION_LIMIT,
 ) -> Application:
     session = AiohttpSession(
+        limit=max(1, int(session_limit)),
         api=TelegramAPIServer.from_base(api_url),
         timeout=session_timeout,
     )
@@ -337,7 +341,11 @@ async def main():
                 bot_username=bot_me.username,
             )
             logging.event("polling_started")
-            await dp.start_polling(bot)
+            await dp.start_polling(
+                bot,
+                allowed_updates=dp.resolve_used_update_types(),
+                tasks_concurrency_limit=max(1, int(BOT_POLLING_TASKS_CONCURRENCY_LIMIT)),
+            )
         finally:
             logging.event("polling_stopping")
             if analytics_started:

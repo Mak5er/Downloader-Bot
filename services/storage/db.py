@@ -2,7 +2,7 @@ import re
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
-from config import DATABASE_URL
+from config import DATABASE_URL, DB_MAX_OVERFLOW, DB_POOL_SIZE, DB_POOL_TIMEOUT
 from services.storage.analytics_repository import AnalyticsRepositoryMixin
 from services.storage.file_cache_repository import FileCacheRepositoryMixin
 from services.storage.local_cache import LocalCacheMixin
@@ -18,6 +18,18 @@ from services.storage.models import (
 )
 from services.storage.schema import SchemaManagerMixin
 from services.storage.user_repository import UserRepositoryMixin
+
+__all__ = [
+    "APP_SCHEMA_TABLES",
+    "AnalyticsEvent",
+    "Base",
+    "DEFAULT_USER_SETTINGS",
+    "DataBase",
+    "DownloadedFile",
+    "Settings",
+    "StatsSnapshot",
+    "User",
+]
 
 
 class DataBase(
@@ -41,6 +53,10 @@ class DataBase(
             future=True,
             pool_pre_ping=True,
             pool_recycle=1800,
+            pool_size=max(1, int(DB_POOL_SIZE)),
+            max_overflow=max(0, int(DB_MAX_OVERFLOW)),
+            pool_timeout=max(1.0, float(DB_POOL_TIMEOUT)),
+            pool_use_lifo=True,
         )
         self._dialect_name = self.engine.dialect.name
         self.SessionLocal = async_sessionmaker(

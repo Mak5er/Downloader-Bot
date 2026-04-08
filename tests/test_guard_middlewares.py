@@ -7,38 +7,131 @@ from aiogram.enums import ChatType
 from aiogram.exceptions import TelegramBadRequest
 from aiogram.types import CallbackQuery, InlineQuery, Message
 
+import middlewares
 from middlewares import antiflood
 from middlewares import ban_middleware
 from middlewares import private_chat_guard
 
 
+def _monotonic_sequence(*values: float):
+    iterator = iter(values)
+    last = values[-1]
+
+    def _next():
+        nonlocal iterator
+        return next(iterator, last)
+
+    return _next
+
+
 @pytest.mark.asyncio
 async def test_antiflood_blocks_messages_over_limit(monkeypatch):
-    timestamps = iter([0.0, 0.2, 0.4])
-    monkeypatch.setattr(antiflood.time, "time", lambda: next(timestamps))
+    monkeypatch.setattr(antiflood.time, "monotonic", _monotonic_sequence(0.0, 0.2, 0.4, 0.4, 0.4))
 
-    middleware = antiflood.AntifloodMiddleware(max_messages=2, per_seconds=1)
+    middleware = antiflood.AntifloodMiddleware(max_messages=2, message_window_seconds=1, cooldown_seconds=2)
     handler = AsyncMock(return_value="handled")
-    event = SimpleNamespace(from_user=SimpleNamespace(id=7))
+    event = SimpleNamespace(
+        from_user=SimpleNamespace(id=7),
+        chat=SimpleNamespace(type=ChatType.PRIVATE),
+        answer=AsyncMock(),
+    )
 
     assert await middleware(handler, event, {}) == "handled"
     assert await middleware(handler, event, {}) == "handled"
     assert await middleware(handler, event, {}) is None
     assert handler.await_count == 2
+    event.answer.assert_awaited_once()
 
 
 @pytest.mark.asyncio
 async def test_antiflood_expires_old_timestamps(monkeypatch):
-    timestamps = iter([0.0, 2.0])
-    monkeypatch.setattr(antiflood.time, "time", lambda: next(timestamps))
+    monkeypatch.setattr(antiflood.time, "monotonic", _monotonic_sequence(0.0, 2.0, 2.0, 2.0))
 
-    middleware = antiflood.AntifloodMiddleware(max_messages=1, per_seconds=1)
+    middleware = antiflood.AntifloodMiddleware(max_messages=1, message_window_seconds=1)
     handler = AsyncMock(return_value="ok")
-    event = SimpleNamespace(from_user=SimpleNamespace(id=99))
+    event = SimpleNamespace(
+        from_user=SimpleNamespace(id=99),
+        chat=SimpleNamespace(type=ChatType.PRIVATE),
+        answer=AsyncMock(),
+    )
 
     assert await middleware(handler, event, {}) == "ok"
     assert await middleware(handler, event, {}) == "ok"
     assert handler.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_antiflood_blocks_callback_queries_over_limit(monkeypatch):
+    monkeypatch.setattr(antiflood.time, "monotonic", _monotonic_sequence(0.0, 0.2, 0.4, 0.4, 0.4))
+
+    middleware = antiflood.AntifloodMiddleware(max_callbacks=2, callback_window_seconds=1, cooldown_seconds=2)
+    handler = AsyncMock(return_value="handled")
+    event = SimpleNamespace(
+        from_user=SimpleNamespace(id=42),
+        data="tap",
+        answer=AsyncMock(),
+    )
+
+    assert await middleware(handler, event, {}) == "handled"
+    assert await middleware(handler, event, {}) == "handled"
+    assert await middleware(handler, event, {}) is None
+    assert handler.await_count == 2
+    event.answer.assert_awaited_once_with("Too many requests. Please slow down for a few seconds.", show_alert=False)
+
+
+@pytest.mark.asyncio
+async def test_antiflood_blocks_inline_queries_over_limit(monkeypatch):
+    monkeypatch.setattr(antiflood.time, "monotonic", _monotonic_sequence(0.0, 0.5, 0.8, 0.8, 0.8))
+
+    middleware = antiflood.AntifloodMiddleware(max_inline_queries=2, inline_window_seconds=1, cooldown_seconds=2)
+    handler = AsyncMock(return_value="handled")
+    event = SimpleNamespace(
+        from_user=SimpleNamespace(id=77),
+        query="https://youtube.com/watch?v=test",
+        answer=AsyncMock(),
+    )
+
+    assert await middleware(handler, event, {}) == "handled"
+    assert await middleware(handler, event, {}) == "handled"
+    assert await middleware(handler, event, {}) is None
+    assert handler.await_count == 2
+    event.answer.assert_awaited_once_with([], cache_time=1, is_personal=True)
+
+
+@pytest.mark.asyncio
+async def test_antiflood_prunes_stale_users(monkeypatch):
+    monkeypatch.setattr(antiflood.time, "monotonic", _monotonic_sequence(0.0, 10.0, 20.0, 20.0, 20.0, 20.0))
+
+    middleware = antiflood.AntifloodMiddleware(user_ttl_seconds=5, max_tracked_users=10, cleanup_every=1)
+    handler = AsyncMock(return_value="ok")
+
+    first = SimpleNamespace(
+        from_user=SimpleNamespace(id=1),
+        chat=SimpleNamespace(type=ChatType.PRIVATE),
+        answer=AsyncMock(),
+    )
+    second = SimpleNamespace(
+        from_user=SimpleNamespace(id=2),
+        chat=SimpleNamespace(type=ChatType.PRIVATE),
+        answer=AsyncMock(),
+    )
+    third = SimpleNamespace(
+        from_user=SimpleNamespace(id=3),
+        chat=SimpleNamespace(type=ChatType.PRIVATE),
+        answer=AsyncMock(),
+    )
+
+    await middleware(handler, first, {})
+    await middleware(handler, second, {})
+    await middleware(handler, third, {})
+
+    assert 1 not in middleware._users
+    assert 2 not in middleware._users
+    assert 3 in middleware._users
+
+
+def test_middleware_order_puts_antiflood_first():
+    assert middlewares.__all__[0].__name__ == "AntifloodMiddleware"
 
 
 @pytest.mark.asyncio
