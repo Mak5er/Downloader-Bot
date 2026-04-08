@@ -35,6 +35,7 @@ _update_info_cache: dict[int, tuple[float, str, Optional[str]]] = {}
 _STATS_CACHE_TTL_SECONDS = 60.0
 _stats_snapshot_cache: dict[str, tuple[float, StatsSnapshot]] = {}
 _stats_chart_cache: dict[tuple[str, str], tuple[float, bytes]] = {}
+_stats_chart_warmup_tasks: dict[str, asyncio.Task[None]] = {}
 _stats_render_lock = threading.Lock()
 
 SERVICE_ORDER = ["Instagram", "TikTok", "YouTube", "SoundCloud", "Pinterest", "Twitter", "Other"]
@@ -456,6 +457,31 @@ def _clear_chart_cache_for_period(period: str) -> None:
         _stats_chart_cache.pop(key, None)
 
 
+def _schedule_stats_chart_warmup(period: str, snapshot: StatsSnapshot) -> None:
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        return
+
+    existing = _stats_chart_warmup_tasks.get(period)
+    if existing and not existing.done():
+        return
+
+    async def _warmup() -> None:
+        try:
+            await asyncio.gather(
+                asyncio.to_thread(render_stats_chart, snapshot, period, "total"),
+                asyncio.to_thread(render_stats_chart, snapshot, period, "split"),
+            )
+        finally:
+            _stats_chart_warmup_tasks.pop(period, None)
+
+    _stats_chart_warmup_tasks[period] = loop.create_task(
+        _warmup(),
+        name=f"stats-chart-warmup-{period.lower()}",
+    )
+
+
 async def fetch_stats_snapshot(period: str) -> StatsSnapshot:
     cached = _stats_snapshot_cache.get(period)
     if cached and _is_cache_fresh(cached[0]):
@@ -464,6 +490,7 @@ async def fetch_stats_snapshot(period: str) -> StatsSnapshot:
     snapshot = await db.get_download_stats(period)
     _stats_snapshot_cache[period] = (time.monotonic(), snapshot)
     _clear_chart_cache_for_period(period)
+    _schedule_stats_chart_warmup(period, snapshot)
     return snapshot
 
 

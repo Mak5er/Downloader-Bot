@@ -27,6 +27,7 @@ from log.logger import logger as logging
 logging = logging.bind(service="admin")
 from app_context import bot, db
 from services.download.queue import get_download_queue
+from services.runtime.analytics_status import get_snapshot as get_analytics_runtime_snapshot
 from services.runtime.stats import get_runtime_snapshot
 
 router = Router()
@@ -260,6 +261,7 @@ def _format_bytes(num_bytes: int) -> str:
 @router.message(Command("session"), IsBotAdmin())
 async def session_metrics(message: types.Message):
     snapshot = get_runtime_snapshot()
+    analytics_snapshot = get_analytics_runtime_snapshot()
     uptime = str(timedelta(seconds=int(snapshot.uptime_seconds)))
     lines = [
         "<b>Runtime Session Stats</b>",
@@ -269,6 +271,7 @@ async def session_metrics(message: types.Message):
         f"Audio: <b>{snapshot.total_audio}</b>",
         f"Other: <b>{snapshot.total_other}</b>",
         f"Traffic: <b>{_format_bytes(snapshot.total_bytes)}</b>",
+        f"Analytics drops: <b>{analytics_snapshot.dropped_events}</b>",
     ]
 
     if snapshot.by_source:

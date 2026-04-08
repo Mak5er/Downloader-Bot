@@ -18,9 +18,11 @@ class FixedDateTime(datetime.datetime):
 def clear_stats_caches():
     user._stats_snapshot_cache.clear()
     user._stats_chart_cache.clear()
+    user._stats_chart_warmup_tasks.clear()
     yield
     user._stats_snapshot_cache.clear()
     user._stats_chart_cache.clear()
+    user._stats_chart_warmup_tasks.clear()
 
 
 @pytest.mark.parametrize(
@@ -116,6 +118,7 @@ async def test_fetch_stats_snapshot_refreshes_and_clears_chart_cache(monkeypatch
         {"get_download_stats": AsyncMock(return_value=StatsSnapshot(total_downloads=1))},
     )()
     monkeypatch.setattr(user, "db", fake_db)
+    monkeypatch.setattr(user, "_schedule_stats_chart_warmup", lambda period, snapshot: None)
     user._stats_snapshot_cache["Week"] = (0.0, StatsSnapshot(total_downloads=9))
     user._stats_chart_cache[("Week", "total")] = (user.time.monotonic(), b"stale")
 
@@ -123,6 +126,19 @@ async def test_fetch_stats_snapshot_refreshes_and_clears_chart_cache(monkeypatch
 
     assert ("Week", "total") not in user._stats_chart_cache
     fake_db.get_download_stats.assert_awaited_once_with("Week")
+
+
+@pytest.mark.asyncio
+async def test_fetch_stats_snapshot_starts_chart_warmup(monkeypatch):
+    snapshot = StatsSnapshot(total_downloads=4)
+    fake_db = type("FakeDb", (), {"get_download_stats": AsyncMock(return_value=snapshot)})()
+    warmup_calls = []
+    monkeypatch.setattr(user, "db", fake_db)
+    monkeypatch.setattr(user, "_schedule_stats_chart_warmup", lambda period, current_snapshot: warmup_calls.append((period, current_snapshot)))
+
+    await user.fetch_stats_snapshot("Month")
+
+    assert warmup_calls == [("Month", snapshot)]
 
 
 def test_render_stats_chart_returns_png_bytes_without_filesystem_writes(tmp_path, monkeypatch):

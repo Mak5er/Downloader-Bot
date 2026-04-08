@@ -5,6 +5,7 @@ import pytest
 from aiogram.enums import ChatType
 
 import main
+from services.runtime import analytics_status
 
 
 class DummySession:
@@ -134,3 +135,18 @@ async def test_flush_analytics_batch_uses_bounded_concurrency(monkeypatch):
 
     assert max_active <= 2
     persisted.assert_awaited_once_with(batch)
+
+
+@pytest.mark.asyncio
+async def test_send_analytics_records_queue_drops(monkeypatch):
+    monkeypatch.setattr(main, "_analytics_queue", asyncio.Queue(maxsize=1))
+    monkeypatch.setattr(main, "_analytics_http_client", None)
+    monkeypatch.setattr(analytics_status, "_dropped_events", 0)
+    monkeypatch.setattr(analytics_status, "_last_drop_monotonic", None)
+    await main._analytics_queue.put(main._AnalyticsPayload(user_id=1, chat_type="private", action_name="existing"))
+
+    await main.send_analytics(user_id=2, chat_type=ChatType.PRIVATE, action_name="overflow")
+
+    snapshot = analytics_status.get_snapshot()
+    assert snapshot.dropped_events == 1
+    assert snapshot.last_drop_monotonic is not None

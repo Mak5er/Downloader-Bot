@@ -24,6 +24,7 @@ from config import (
 from log.logger import logger as logging
 from services.storage.db import AnalyticsEvent, DataBase
 from services.download.queue import shutdown_download_queue
+from services.runtime.analytics_status import record_drop as record_analytics_drop
 from utils.http_client import close_http_session
 
 logging = logging.bind(service="main")
@@ -248,6 +249,7 @@ async def send_analytics(user_id, chat_type, action_name):
                 queue.put_nowait(payload)
                 return
             except asyncio.QueueFull:
+                record_analytics_drop()
                 logging.warning(
                     "Analytics queue is full, dropping event: user_id=%s action=%s",
                     user_id,
