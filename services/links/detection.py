@@ -25,7 +25,7 @@ _SERVICE_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
     ),
     (
         "youtube",
-        re.compile(r"(https?://(www\.)?(youtube|youtu|youtube-nocookie)\.(com|be)/\S+)", re.IGNORECASE),
+        re.compile(r"(https?://(www\.|music\.)?(youtube|youtu|youtube-nocookie)\.(com|be)/\S+)", re.IGNORECASE),
     ),
     (
         "twitter",

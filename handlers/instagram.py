@@ -15,6 +15,7 @@ from config import (
 )
 from handlers.deps import build_handler_dependencies
 from handlers.instagram_inline import handle_instagram_inline_query, send_inline_instagram_media
+from handlers.request_dedupe import claim_message_request
 from handlers.user import update_info
 from handlers.utils import (
     build_queue_busy_text,
@@ -91,6 +92,7 @@ inst_service = InstagramService(OUTPUT_DIR)
 @router.business_message(F.text.regexp(r"(https?://(www\.)?instagram\.com/(p|reels|reel)/[^/?#&]+)", mode="search"))
 @with_message_logging("instagram", "message")
 async def process_instagram(message: types.Message, direct_url: Optional[str] = None):
+    request_lease = None
     try:
         bot_url = await get_bot_url(bot)
         business_id = message.business_connection_id
@@ -103,6 +105,10 @@ async def process_instagram(message: types.Message, direct_url: Optional[str] = 
             if not url_match:
                 return
             url = strip_instagram_url(url_match.group(0))
+
+        request_lease = await claim_message_request(message, service="instagram", url=url)
+        if request_lease is None:
+            return
 
         logging.info("Instagram request: user_id=%s url=%s", message.from_user.id, summarize_url_for_log(url))
         user_settings = await load_user_settings(db, message)
@@ -124,9 +130,11 @@ async def process_instagram(message: types.Message, direct_url: Optional[str] = 
         )
 
         if has_videos and len(data.media_list) == 1:
-            await process_instagram_video(message, data, url, bot_url, user_settings, business_id)
+            if await process_instagram_video(message, data, url, bot_url, user_settings, business_id):
+                request_lease.mark_success()
         elif has_photos or len(data.media_list) > 1:
-            await process_instagram_media_group(message, data, url, bot_url, user_settings, business_id)
+            if await process_instagram_media_group(message, data, url, bot_url, user_settings, business_id):
+                request_lease.mark_success()
         else:
             await handle_download_error(message, business_id=business_id)
 
@@ -139,6 +147,8 @@ async def process_instagram(message: types.Message, direct_url: Optional[str] = 
         )
         await handle_download_error(message)
     finally:
+        if request_lease is not None:
+            request_lease.finish()
         await update_info(message)
 
 
@@ -153,7 +163,7 @@ async def process_instagram_video(message: types.Message, data: InstagramVideo, 
 
     if not data.media_list or data.media_list[0].type != "video":
         await handle_download_error(message, business_id=business_id)
-        return
+        return False
 
     audio_callback_data = f"audio:inst:{original_url}"
     media = data.media_list[0]
@@ -246,7 +256,7 @@ async def process_instagram_video(message: types.Message, data: InstagramVideo, 
         )
         await handle_download_error(message, business_id=business_id)
 
-    await run_single_media_flow(
+    sent_message = await run_single_media_flow(
         cache_key=db_video_url,
         cache_file_type="video",
         db_service=db,
@@ -268,6 +278,7 @@ async def process_instagram_video(message: types.Message, data: InstagramVideo, 
         on_queue_busy=_handle_backpressure,
         on_unexpected_error=_handle_unexpected_error,
     )
+    return sent_message is not None
 
 
 async def process_instagram_media_group(message: types.Message, data: InstagramVideo, original_url: str, bot_url: str,
@@ -314,7 +325,7 @@ async def process_instagram_media_group(message: types.Message, data: InstagramV
 
     if not media_items:
         await handle_download_error(message, business_id=business_id)
-        return
+        return False
 
     try:
         await safe_edit_text(status_message, bm.uploading_status())
@@ -338,6 +349,7 @@ async def process_instagram_media_group(message: types.Message, data: InstagramV
             message.from_user.id,
             len(media_items),
         )
+        return True
     finally:
         await safe_delete_message(status_message)
         for path in downloaded_paths:

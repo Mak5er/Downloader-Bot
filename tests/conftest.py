@@ -1,46 +1,44 @@
-import os
-import sys
-from pathlib import Path
-from types import SimpleNamespace
+from __future__ import annotations
+
 from unittest.mock import AsyncMock
 
 import pytest
 
-# Ensure project root is on sys.path so imports like `main` and `middlewares.*` work in tests.
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
-if str(PROJECT_ROOT) not in sys.path:
-    sys.path.insert(0, str(PROJECT_ROOT))
+import app_context
+from services.runtime import request_dedupe
 
 
-# Keep tests independent from the developer's local `.env`.
-os.environ.setdefault("BOT_TOKEN", "123456:TEST_TOKEN_FOR_CI_ONLY")
-os.environ.setdefault("DATABASE_URL", "postgresql://postgres:postgres@localhost/testdb")
-os.environ.setdefault("ADMIN_ID", "1")
-os.environ.setdefault("CUSTOM_API_URL", "https://api.telegram.org")
-os.environ.setdefault("MEASUREMENT_ID", "G-TEST123")
-os.environ.setdefault("API_SECRET", "test-secret")
-os.environ.setdefault("CHANNEL_ID", "-1001234567890")
-os.environ.setdefault("COBALT_API_URL", "https://cobalt.example")
-os.environ.setdefault("COBALT_API_KEY", "test-cobalt-key")
+class _AttrBag:
+    def __init__(self, **attrs):
+        self.__dict__.update(attrs)
 
-
-from app_context import set_app_context
-
-
-class _PatchableAsyncNamespace(SimpleNamespace):
-    def __getattr__(self, name):
-        value = AsyncMock(return_value=None)
+    def __getattr__(self, name: str):
+        value = AsyncMock(name=name)
         setattr(self, name, value)
         return value
 
 
 @pytest.fixture(autouse=True)
-def reset_app_context():
-    bot = _PatchableAsyncNamespace(
-        get_chat_member=AsyncMock(return_value=SimpleNamespace(status="member")),
+def isolate_runtime_request_state():
+    async def _send_analytics(*args, **kwargs):
+        return None
+
+    app_context.set_app_context(
+        bot=_AttrBag(id=1, username="test_bot"),
+        db=_AttrBag(
+            name="test-db",
+            get_file_id=AsyncMock(return_value=None),
+            add_file=AsyncMock(),
+            user_settings=AsyncMock(return_value={}),
+            get_user_setting=AsyncMock(return_value=None),
+            set_user_setting=AsyncMock(),
+            upsert_chat=AsyncMock(),
+            set_inactive=AsyncMock(),
+            status=AsyncMock(return_value="active"),
+        ),
+        send_analytics=_send_analytics,
     )
-    set_app_context(
-        bot=bot,
-        db=_PatchableAsyncNamespace(),
-        send_analytics=AsyncMock(),
-    )
+    request_dedupe.reset_request_tracking()
+    yield
+    request_dedupe.reset_request_tracking()
+    app_context._context = None

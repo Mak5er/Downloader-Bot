@@ -10,6 +10,7 @@ import keyboards as kb
 import messages as bm
 from config import OUTPUT_DIR, CHANNEL_ID
 from handlers.deps import build_handler_dependencies
+from handlers.request_dedupe import claim_message_request
 from handlers.youtube_inline import (
     handle_youtube_music_inline_query,
     handle_youtube_video_inline_query,
@@ -181,8 +182,8 @@ def get_youtube_video(url):
     | F.caption.regexp(YOUTUBE_VIDEO_URL_REGEX, mode="search")
 )
 @with_message_logging("youtube", "video_message")
-async def download_video(message: types.Message):
-    url = _extract_youtube_url(get_message_text(message), YOUTUBE_VIDEO_URL_REGEX)
+async def download_video(message: types.Message, direct_url: Optional[str] = None):
+    url = direct_url or _extract_youtube_url(get_message_text(message), YOUTUBE_VIDEO_URL_REGEX)
     if not url:
         return
     logging.info(
@@ -193,9 +194,13 @@ async def download_video(message: types.Message):
     )
     await send_analytics(user_id=message.from_user.id, chat_type=message.chat.type, action_name="youtube_video")
     status_message: Optional[types.Message] = None
+    request_lease = None
     business_id = message.business_connection_id
     show_service_status = business_id is None
     try:
+        request_lease = await claim_message_request(message, service="youtube", url=url)
+        if request_lease is None:
+            return
         await react_to_message(message, "👾", business_id=business_id)
         if show_service_status:
             status_message = await message.answer(bm.downloading_video_status())
@@ -358,6 +363,7 @@ async def download_video(message: types.Message):
             on_queue_busy=_handle_backpressure,
         )
         if sent_message and getattr(sent_message, "video", None):
+            request_lease.mark_success()
             logging.info(
                 "YouTube video cached: url=%s file_id=%s",
                 summarize_url_for_log(yt['webpage_url']),
@@ -375,6 +381,8 @@ async def download_video(message: types.Message):
         logging.error("Video download error: %s", e)
         await handle_download_error(message, business_id=business_id)
     finally:
+        if request_lease is not None:
+            request_lease.finish()
         await safe_delete_message(status_message)
     await update_info(message)
 
@@ -388,8 +396,8 @@ async def download_video(message: types.Message):
     | F.caption.regexp(YOUTUBE_MUSIC_URL_REGEX, mode="search")
 )
 @with_message_logging("youtube", "music_message")
-async def download_music(message: types.Message):
-    url = _extract_youtube_url(get_message_text(message), YOUTUBE_MUSIC_URL_REGEX)
+async def download_music(message: types.Message, direct_url: Optional[str] = None):
+    url = direct_url or _extract_youtube_url(get_message_text(message), YOUTUBE_MUSIC_URL_REGEX)
     if not url:
         return
     logging.info(
@@ -399,9 +407,13 @@ async def download_music(message: types.Message):
         summarize_url_for_log(url),
     )
     status_message: Optional[types.Message] = None
+    request_lease = None
     business_id = message.business_connection_id
     show_service_status = business_id is None
     try:
+        request_lease = await claim_message_request(message, service="youtube", url=url)
+        if request_lease is None:
+            return
         await react_to_message(message, "👾", business_id=business_id)
         user_settings = await load_user_settings(db, message)
         bot_url = await get_bot_url(bot)
@@ -433,6 +445,7 @@ async def download_music(message: types.Message):
                 parse_mode="HTML",
             )
             await maybe_delete_user_message(message, user_settings.get("delete_message"))
+            request_lease.mark_success()
             return
 
         audio_ext = audio.get("ext") or "m4a"
@@ -489,6 +502,7 @@ async def download_music(message: types.Message):
         )
         await maybe_delete_user_message(message, user_settings.get("delete_message"))
         await db.add_file(cache_key, sent_message.audio.file_id, "audio")
+        request_lease.mark_success()
 
         await remove_file(metrics.path)
     except DownloadRateLimitError as e:
@@ -507,6 +521,8 @@ async def download_music(message: types.Message):
         logging.error("Audio download error: %s", e)
         await handle_download_error(message, business_id=business_id)
     finally:
+        if request_lease is not None:
+            request_lease.finish()
         await safe_delete_message(status_message)
     await update_info(message)
 

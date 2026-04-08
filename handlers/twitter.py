@@ -17,6 +17,7 @@ from handlers.deps import build_handler_dependencies
 from services.media.orchestration import handle_download_backpressure, run_media_collection_flow
 from services.media.delivery import send_cached_media_entries
 from handlers.twitter_inline import handle_twitter_inline_query, send_inline_twitter_media
+from handlers.request_dedupe import claim_message_request
 from services.platforms.twitter_media import (
     build_twitter_media_cache_key as _build_twitter_media_cache_key,
     collect_media_entries as _collect_media_entries_impl,
@@ -436,6 +437,7 @@ async def _prefetch_tweet_payloads(tweet_ids: list[str]) -> list[tuple[str, dict
 )
 @with_message_logging("twitter", "message")
 async def handle_tweet_links(message, direct_url: Optional[str] = None):
+    request_lease = None
     business_id = message.business_connection_id
     text = direct_url or get_message_text(message)
 
@@ -446,13 +448,21 @@ async def handle_tweet_links(message, direct_url: Optional[str] = None):
         business_id,
         summarize_text_for_log(text),
     )
+    request_url_match = re.search(_TWITTER_LINK_REGEX, text or "")
+    if request_url_match:
+        request_lease = await claim_message_request(
+            message,
+            service="twitter",
+            url=request_url_match.group(0),
+        )
+        if request_lease is None:
+            return
 
     await react_to_message(message, "👾", business_id=business_id)
 
-    bot_url = await get_bot_url(bot)
-    user_settings = await load_user_settings(db, message)
-
     try:
+        bot_url = await get_bot_url(bot)
+        user_settings = await load_user_settings(db, message)
         tweet_ids = await extract_tweet_ids_async(text)
         if tweet_ids:
             logging.info("Twitter links parsed: user_id=%s count=%s", message.from_user.id, len(tweet_ids))
@@ -464,6 +474,8 @@ async def handle_tweet_links(message, direct_url: Optional[str] = None):
                     if isinstance(media, BaseException):
                         raise media
                     await reply_media(message, tweet_id, media, bot_url, business_id, user_settings)
+                    if request_lease is not None:
+                        request_lease.mark_success()
                     await maybe_delete_user_message(message, user_settings.get("delete_message"))
                 except Exception as e:
                     logging.exception("Failed to process tweet: tweet_id=%s error=%s", tweet_id, e)
@@ -475,6 +487,9 @@ async def handle_tweet_links(message, direct_url: Optional[str] = None):
     except Exception as e:
         logging.exception("Error handling tweet links: user_id=%s error=%s", message.from_user.id, e)
         await message.reply(bm.something_went_wrong())
+    finally:
+        if request_lease is not None:
+            request_lease.finish()
 
 
 @router.inline_query(F.query.regexp(_TWITTER_LINK_REGEX, mode="search"))

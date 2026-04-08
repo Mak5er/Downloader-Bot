@@ -5,7 +5,7 @@ import threading
 import time
 from copy import copy
 from collections import defaultdict
-from typing import Dict, List, Optional, Tuple
+from typing import List, Optional, Tuple
 
 import matplotlib.pyplot as plt
 from aiogram import types, Router, F
@@ -19,14 +19,14 @@ import keyboards as kb
 import messages as bm
 from handlers.utils import get_message_text
 from log.logger import logger as logging, summarize_url_for_log
-
-logging = logging.bind(service="user")
 from app_context import db, send_analytics, bot
 from services.settings import parse_setting_toggle_callback, parse_settings_view_callback
 from services.storage.db import StatsSnapshot
 from services.inline.album_links import get_inline_album_request
-from services.links.detection import detect_supported_service
+from services.links.detection import extract_supported_link
 from services.runtime.pending_requests import pop_pending
+
+logging = logging.bind(service="user")
 
 router = Router()
 
@@ -235,38 +235,42 @@ async def remove_reply_keyboard(message: types.Message):
 
 async def _process_pending_message(message: types.Message) -> None:
     text = get_message_text(message)
-    service = detect_supported_service(text)
-    if not service:
+    detected = extract_supported_link(text)
+    if not detected:
         return
+    service, url = detected
 
     if service == "tiktok":
         from handlers import tiktok
-        await tiktok.process_tiktok(message)
+        await tiktok.process_tiktok(message, direct_url=url)
         return
 
     if service == "instagram":
         from handlers import instagram
-        await instagram.process_instagram_url(message)
+        await instagram.process_instagram_url(message, url=url)
         return
 
     if service == "soundcloud":
         from handlers import soundcloud
-        await soundcloud.process_soundcloud_url(message)
+        await soundcloud.process_soundcloud_url(message, url=url)
         return
 
     if service == "pinterest":
         from handlers import pinterest
-        await pinterest.process_pinterest_url(message)
+        await pinterest.process_pinterest_url(message, url=url)
         return
 
     if service == "youtube":
         from handlers import youtube
-        await youtube.download_video(message)
+        if "music.youtube." in url.lower():
+            await youtube.download_music(message, direct_url=url)
+        else:
+            await youtube.download_video(message, direct_url=url)
         return
 
     if service == "twitter":
         from handlers import twitter
-        await twitter.handle_tweet_links(message)
+        await twitter.handle_tweet_links(message, direct_url=url)
 
 
 @router.message(Command("settings"))

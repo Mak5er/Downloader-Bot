@@ -9,6 +9,7 @@ import keyboards as kb
 import messages as bm
 from services.links.detection import extract_supported_link
 from services.runtime.pending_requests import PendingRequest, get_pending, set_pending
+from services.runtime.request_dedupe import same_request
 
 _bot_username: str | None = None
 
@@ -44,6 +45,9 @@ class PrivateChatGuardMiddleware(BaseMiddleware):
             return await handler(event, data)
         except (TelegramForbiddenError, TelegramNotFound, TelegramBadRequest):
             pending = get_pending(event.from_user.id)
+            if pending and same_request(pending.service, pending.url, service, source_url):
+                return None
+
             if pending:
                 try:
                     await bot.delete_message(pending.notice_chat_id, pending.notice_message_id)

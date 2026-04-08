@@ -10,6 +10,7 @@ import messages as bm
 from config import CHANNEL_ID, COBALT_API_KEY, COBALT_API_URL, OUTPUT_DIR
 from handlers.deps import build_handler_dependencies
 from handlers.pinterest_inline import handle_pinterest_inline_query, send_inline_pinterest_media
+from handlers.request_dedupe import claim_message_request
 from services.media.delivery import send_cached_media_entries
 from services.media.orchestration import handle_download_backpressure, run_single_media_flow
 from services.media.resolver import resolve_cached_media_items
@@ -92,6 +93,7 @@ pinterest_service = PinterestService(OUTPUT_DIR)
 )
 @with_message_logging("pinterest", "message")
 async def process_pinterest(message: types.Message, direct_url: Optional[str] = None):
+    request_lease = None
     try:
         business_id = message.business_connection_id
         text = get_message_text(message)
@@ -103,6 +105,10 @@ async def process_pinterest(message: types.Message, direct_url: Optional[str] = 
             if not url_match:
                 return
             source_url = strip_pinterest_url(url_match.group(0))
+
+        request_lease = await claim_message_request(message, service="pinterest", url=source_url)
+        if request_lease is None:
+            return
 
         logging.info("Pinterest request: user_id=%s url=%s", message.from_user.id, summarize_url_for_log(source_url))
         await send_analytics(user_id=message.from_user.id, chat_type=message.chat.type, action_name="pinterest_media")
@@ -116,12 +122,15 @@ async def process_pinterest(message: types.Message, direct_url: Optional[str] = 
 
         first = post.media_list[0]
         if len(post.media_list) == 1 and first.type == "video":
-            await process_pinterest_single_video(message, post, source_url, bot_url, user_settings, business_id)
+            if await process_pinterest_single_video(message, post, source_url, bot_url, user_settings, business_id):
+                request_lease.mark_success()
             return
         if len(post.media_list) == 1 and first.type == "photo":
-            await process_pinterest_single_photo(message, post, source_url, bot_url, user_settings, business_id)
+            if await process_pinterest_single_photo(message, post, source_url, bot_url, user_settings, business_id):
+                request_lease.mark_success()
             return
-        await process_pinterest_media_group(message, post, source_url, bot_url, user_settings, business_id)
+        if await process_pinterest_media_group(message, post, source_url, bot_url, user_settings, business_id):
+            request_lease.mark_success()
     except Exception as exc:
         logging.exception(
             "Error processing Pinterest message: user_id=%s text=%s error=%s",
@@ -131,6 +140,8 @@ async def process_pinterest(message: types.Message, direct_url: Optional[str] = 
         )
         await handle_download_error(message)
     finally:
+        if request_lease is not None:
+            request_lease.finish()
         await update_info(message)
 
 
@@ -212,7 +223,7 @@ async def process_pinterest_single_video(
             on_business_error=lambda: handle_download_error(message, business_id=business_id),
         )
 
-    await run_single_media_flow(
+    sent_message = await run_single_media_flow(
         cache_key=source_url,
         cache_file_type="video",
         db_service=db,
@@ -232,6 +243,7 @@ async def process_pinterest_single_video(
         on_rate_limit=_handle_backpressure,
         on_queue_busy=_handle_backpressure,
     )
+    return sent_message is not None
 
 
 async def process_pinterest_single_photo(
@@ -295,7 +307,7 @@ async def process_pinterest_single_photo(
         log_download_metrics("pinterest_photo", metrics)
         return True
 
-    await run_single_media_flow(
+    sent_message = await run_single_media_flow(
         cache_key=cache_key,
         cache_file_type="photo",
         db_service=db,
@@ -313,6 +325,7 @@ async def process_pinterest_single_photo(
         on_after_send=_after_send,
         inspect_metrics=_inspect_metrics,
     )
+    return sent_message is not None
 
 
 async def process_pinterest_media_group(
@@ -355,7 +368,7 @@ async def process_pinterest_media_group(
 
     if not media_items:
         await handle_download_error(message, business_id=business_id)
-        return
+        return False
 
     try:
         caption = bm.captions(user_settings["captions"], post.description, bot_url)
@@ -374,6 +387,7 @@ async def process_pinterest_media_group(
             kind_key="type",
         )
         await maybe_delete_user_message(message, user_settings["delete_message"])
+        return True
     finally:
         await safe_delete_message(status_message)
         for path in downloaded_paths:

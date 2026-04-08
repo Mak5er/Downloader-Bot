@@ -318,3 +318,41 @@ async def test_private_chat_guard_creates_pending_request_when_user_has_no_dm(mo
     assert sent_requests[0][1].url == "https://tiktok.com/@demo/video/1"
     assert sent_requests[0][1].notice_chat_id == -200
     assert sent_requests[0][1].notice_message_id == 777
+
+
+@pytest.mark.asyncio
+async def test_private_chat_guard_does_not_recreate_same_pending_request(monkeypatch):
+    middleware = private_chat_guard.PrivateChatGuardMiddleware()
+    handler = AsyncMock()
+    existing_pending = private_chat_guard.PendingRequest(
+        service="youtube",
+        url="https://youtu.be/demo",
+        notice_chat_id=-100,
+        notice_message_id=555,
+    )
+    bot = SimpleNamespace(
+        send_chat_action=AsyncMock(
+            side_effect=TelegramBadRequest(
+                method=SimpleNamespace(__api_method__="sendChatAction"),
+                message="chat not found",
+            )
+        ),
+        delete_message=AsyncMock(),
+        get_me=AsyncMock(),
+    )
+    event = Mock(spec=Message)
+    event.chat = SimpleNamespace(type=ChatType.SUPERGROUP)
+    event.from_user = SimpleNamespace(id=42, is_bot=False)
+    event.text = "https://www.youtube.com/watch?v=demo"
+    event.caption = None
+    event.reply = AsyncMock()
+
+    monkeypatch.setattr(private_chat_guard, "get_pending", lambda user_id: existing_pending)
+    monkeypatch.setattr(private_chat_guard, "set_pending", Mock())
+
+    result = await middleware(handler, event, {"bot": bot})
+
+    assert result is None
+    bot.delete_message.assert_not_awaited()
+    event.reply.assert_not_awaited()
+    handler.assert_not_awaited()

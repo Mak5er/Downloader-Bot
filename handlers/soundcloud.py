@@ -8,9 +8,9 @@ from aiogram.types import FSInputFile
 import messages as bm
 import keyboards as kb
 from config import CHANNEL_ID, COBALT_API_KEY, COBALT_API_URL, OUTPUT_DIR
+from handlers.request_dedupe import claim_message_request
 from handlers.user import update_info
 from handlers.utils import (
-    build_request_id,
     build_queue_busy_text,
     build_rate_limit_text,
     get_bot_avatar_thumbnail,
@@ -40,7 +40,6 @@ from log.logger import logger as logging, summarize_text_for_log, summarize_url_
 from app_context import bot, db, send_analytics
 from utils.cobalt_client import fetch_cobalt_data
 from utils.download_manager import (
-    DownloadError,
     DownloadQueueBusyError,
     DownloadRateLimitError,
     log_download_metrics,
@@ -65,6 +64,7 @@ SOUNDCLOUD_URL_REGEX = (
 )
 
 SoundCloudTrack = soundcloud_platform.SoundCloudTrack
+DownloadError = soundcloud_platform.DownloadError
 strip_soundcloud_url = soundcloud_platform.strip_soundcloud_url
 parse_soundcloud_track = soundcloud_platform.parse_soundcloud_track
 
@@ -89,17 +89,25 @@ soundcloud_service = SoundCloudService(OUTPUT_DIR)
     F.text.regexp(SOUNDCLOUD_URL_REGEX, mode="search") | F.caption.regexp(SOUNDCLOUD_URL_REGEX, mode="search")
 )
 @with_message_logging("soundcloud", "message")
-async def process_soundcloud(message: types.Message):
+async def process_soundcloud(message: types.Message, direct_url: Optional[str] = None):
     status_message: Optional[types.Message] = None
     audio_path: Optional[str] = None
+    request_lease = None
     try:
         business_id = message.business_connection_id
         show_service_status = business_id is None
-        text = get_message_text(message)
-        match = re.search(SOUNDCLOUD_URL_REGEX, text)
-        if not match:
+        if direct_url:
+            source_url = strip_soundcloud_url(direct_url)
+        else:
+            text = get_message_text(message)
+            match = re.search(SOUNDCLOUD_URL_REGEX, text)
+            if not match:
+                return
+            source_url = strip_soundcloud_url(match.group(0))
+
+        request_lease = await claim_message_request(message, service="soundcloud", url=source_url)
+        if request_lease is None:
             return
-        source_url = strip_soundcloud_url(match.group(0))
 
         logging.info("SoundCloud request: user_id=%s url=%s", message.from_user.id, summarize_url_for_log(source_url))
         await send_analytics(user_id=message.from_user.id, chat_type=message.chat.type, action_name="soundcloud_audio")
@@ -126,6 +134,7 @@ async def process_soundcloud(message: types.Message):
                 **send_kwargs,
             )
             await maybe_delete_user_message(message, user_settings["delete_message"])
+            request_lease.mark_success()
             return
 
         track = await soundcloud_service.fetch_track(source_url)
@@ -188,6 +197,7 @@ async def process_soundcloud(message: types.Message):
                 raise
 
         await maybe_delete_user_message(message, user_settings["delete_message"])
+        request_lease.mark_success()
         try:
             await db.add_file(cache_key, sent.audio.file_id, "audio")
         except Exception as exc:
@@ -207,15 +217,17 @@ async def process_soundcloud(message: types.Message):
         logging.exception("Error processing SoundCloud request: error=%s", exc)
         await handle_download_error(message, business_id=message.business_connection_id)
     finally:
+        if request_lease is not None:
+            request_lease.finish()
         await safe_delete_message(status_message)
         if audio_path:
             await remove_file(audio_path)
         await update_info(message)
 
 
-async def process_soundcloud_url(message: types.Message):
+async def process_soundcloud_url(message: types.Message, url: Optional[str] = None):
     """Backward-compatible entrypoint used by pending-request flow."""
-    await process_soundcloud(message)
+    await process_soundcloud(message, direct_url=url)
 
 
 @router.inline_query(F.query.regexp(SOUNDCLOUD_URL_REGEX, mode="search"))

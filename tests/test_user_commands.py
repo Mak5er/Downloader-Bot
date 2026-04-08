@@ -285,7 +285,7 @@ async def test_process_pending_message_dispatches_soundcloud(monkeypatch):
 
     await user._process_pending_message(message)
 
-    process_soundcloud_url.assert_awaited_once_with(message)
+    process_soundcloud_url.assert_awaited_once_with(message, url="https://soundcloud.com/artist/track")
 
 
 @pytest.mark.asyncio
@@ -298,4 +298,20 @@ async def test_process_pending_message_dispatches_pinterest(monkeypatch):
 
     await user._process_pending_message(message)
 
-    process_pinterest_url.assert_awaited_once_with(message)
+    process_pinterest_url.assert_awaited_once_with(message, url="https://pin.it/demo123")
+
+
+@pytest.mark.asyncio
+async def test_process_pending_message_dispatches_youtube_music(monkeypatch):
+    message = DummyMessage()
+    message.text = "https://music.youtube.com/watch?v=abc123"
+    download_music = AsyncMock()
+    download_video = AsyncMock()
+
+    monkeypatch.setattr(handlers.youtube, "download_music", download_music)
+    monkeypatch.setattr(handlers.youtube, "download_video", download_video)
+
+    await user._process_pending_message(message)
+
+    download_music.assert_awaited_once_with(message, direct_url="https://music.youtube.com/watch?v=abc123")
+    download_video.assert_not_awaited()

@@ -14,6 +14,7 @@ import keyboards as kb
 import messages as bm
 from config import OUTPUT_DIR, CHANNEL_ID
 from handlers.deps import build_handler_dependencies
+from handlers.request_dedupe import claim_message_request
 from handlers.tiktok_inline import handle_tiktok_inline_query, send_inline_tiktok_media
 from services.media.delivery import send_cached_media_entries
 from services.media.orchestration import handle_download_backpressure, run_single_media_flow
@@ -116,6 +117,7 @@ async def fetch_tiktok_data_with_retry(video_url: str, *, on_retry=None) -> dict
 )
 @with_message_logging("tiktok", "message")
 async def process_tiktok(message: types.Message, direct_url: Optional[str] = None):
+    request_lease = None
     try:
         bot_url = await get_bot_url(bot)
         business_id = message.business_connection_id
@@ -141,9 +143,13 @@ async def process_tiktok(message: types.Message, direct_url: Optional[str] = Non
 
         url_match = re.search(r"(https?://(www\.|vm\.|vt\.|vn\.)?tiktok\.com/\S+)", stripped)
         if url_match:
-            url = url_match.group(0)
+            url = strip_tiktok_tracking(url_match.group(0))
         else:
-            url = stripped
+            url = strip_tiktok_tracking(stripped)
+
+        request_lease = await claim_message_request(message, service="tiktok", url=url)
+        if request_lease is None:
+            return
 
         await react_to_message(message, "👾", business_id=business_id)
 
@@ -171,10 +177,12 @@ async def process_tiktok(message: types.Message, direct_url: Optional[str] = Non
         )
 
         if images:
-            await process_tiktok_photos(message, data, bot_url, user_settings, business_id, images)
+            if await process_tiktok_photos(message, data, bot_url, user_settings, business_id, images):
+                request_lease.mark_success()
             return
 
-        await process_tiktok_video(message, data, bot_url, user_settings, business_id)
+        if await process_tiktok_video(message, data, bot_url, user_settings, business_id):
+            request_lease.mark_success()
 
     except Exception as e:
         logging.exception(
@@ -185,6 +193,8 @@ async def process_tiktok(message: types.Message, direct_url: Optional[str] = Non
         )
         await handle_download_error(message)
     finally:
+        if request_lease is not None:
+            request_lease.finish()
         await update_info(message)
 
 
@@ -199,7 +209,7 @@ async def process_tiktok_video(message: types.Message, data: dict, bot_url: str,
             list(data.keys()),
         )
         await handle_download_error(message, business_id=business_id)
-        return
+        return False
 
     audio_callback_data = get_tiktok_audio_callback_data(info)
 
@@ -296,7 +306,7 @@ async def process_tiktok_video(message: types.Message, data: dict, bot_url: str,
         logging.exception("Error processing TikTok video: url=%s error=%s", summarize_url_for_log(db_video_url), exc)
         await handle_download_error(message, business_id=business_id)
 
-    await run_single_media_flow(
+    sent_message = await run_single_media_flow(
         cache_key=db_video_url,
         cache_file_type="video",
         db_service=db,
@@ -317,6 +327,7 @@ async def process_tiktok_video(message: types.Message, data: dict, bot_url: str,
         on_queue_busy=_handle_backpressure,
         on_unexpected_error=_handle_unexpected_error,
     )
+    return sent_message is not None
 
 
 async def process_tiktok_photos(message: types.Message, data: dict, bot_url: str, user_settings: list,
@@ -332,7 +343,7 @@ async def process_tiktok_photos(message: types.Message, data: dict, bot_url: str
             summarize_url_for_log(video_url),
         )
         await handle_download_error(message, business_id=business_id)
-        return
+        return False
     logging.info(
         "Sending TikTok photo set: user_id=%s url=%s image_count=%s",
         message.from_user.id,
@@ -377,6 +388,7 @@ async def process_tiktok_photos(message: types.Message, data: dict, bot_url: str
             ),
         )
         await maybe_delete_user_message(message, user_settings["delete_message"])
+        return True
     finally:
         await safe_delete_message(status_message)
 
