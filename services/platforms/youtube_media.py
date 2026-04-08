@@ -6,6 +6,7 @@ from typing import Any, Awaitable, Callable, Optional
 
 from log.logger import logger as logging
 from utils.download_manager import (
+    DownloadError,
     DownloadConfig,
     DownloadMetrics,
     DownloadQueueBusyError,
@@ -128,6 +129,17 @@ class YouTubeMediaService:
         with self._youtube_dl_factory(ydl_opts) as ydl:
             ydl.download([url])
 
+    @staticmethod
+    def _resolve_downloaded_path(expected_path: str) -> str:
+        if os.path.exists(expected_path):
+            return expected_path
+        stem, ext = os.path.splitext(expected_path)
+        matches = sorted(glob.glob(f"{stem}*{ext}") + glob.glob(f"{stem}.*"))
+        for match in matches:
+            if os.path.isfile(match):
+                return match
+        raise DownloadError(f"yt-dlp output file missing: {expected_path}")
+
     def get_youtube_video(self, url: str) -> Optional[dict[str, Any]]:
         try:
             ydl_opts = {
@@ -196,7 +208,7 @@ class YouTubeMediaService:
             return None
 
     async def download_with_ytdlp(self, url: str, filename: str) -> Optional[str]:
-        out_path = os.path.join(self._output_dir, filename)
+        out_path = self._downloader._resolve_target_path(filename)
         os.makedirs(os.path.dirname(out_path) or self._output_dir, exist_ok=True)
         ydl_opts = {
             **YTDLP_SPEED_OPTS,
@@ -206,8 +218,9 @@ class YouTubeMediaService:
         }
         try:
             await asyncio.to_thread(self._run_ytdlp_download, url, ydl_opts)
-            logging.info("yt-dlp fallback succeeded: url=%s path=%s", url, out_path)
-            return out_path
+            resolved_path = self._resolve_downloaded_path(out_path)
+            logging.info("yt-dlp fallback succeeded: url=%s path=%s", url, resolved_path)
+            return resolved_path
         except Exception as exc:
             logging.error("yt-dlp fallback failed: url=%s error=%s", url, exc)
             return None
@@ -221,7 +234,7 @@ class YouTubeMediaService:
         *,
         max_filesize: Optional[int] = None,
     ) -> Optional[DownloadMetrics]:
-        out_path = os.path.join(self._output_dir, filename)
+        out_path = self._downloader._resolve_target_path(filename)
         os.makedirs(os.path.dirname(out_path) or self._output_dir, exist_ok=True)
         ydl_opts = {
             **YTDLP_SPEED_OPTS,
@@ -234,11 +247,12 @@ class YouTubeMediaService:
         start = time.monotonic()
         try:
             await asyncio.to_thread(self._run_ytdlp_download, url, ydl_opts)
+            resolved_path = self._resolve_downloaded_path(out_path)
             elapsed = time.monotonic() - start
             metrics = DownloadMetrics(
                 url=url,
-                path=out_path,
-                size=os.path.getsize(out_path),
+                path=resolved_path,
+                size=os.path.getsize(resolved_path),
                 elapsed=elapsed,
                 used_multipart=False,
                 resumed=False,
