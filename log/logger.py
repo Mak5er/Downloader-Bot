@@ -401,11 +401,36 @@ _base_logger.setLevel(logging.DEBUG)
 _base_logger.propagate = False
 _base_logger.handlers.clear()
 
+def _safe_add_handler(
+    factory,
+    *,
+    description: str,
+    path: str | None = None,
+) -> bool:
+    try:
+        _base_logger.addHandler(factory())
+        return True
+    except OSError as exc:
+        _base_logger.warning(
+            "Disabled %s because it is not writable.",
+            description,
+            extra={
+                "service": "logger",
+                "flow": "bootstrap",
+                "event_name": "logger_handler_disabled",
+                "path": path or "-",
+                "error_type": type(exc).__name__,
+                "error_message": str(exc),
+            },
+        )
+        return False
+
+
 _base_logger.addHandler(_build_console_handler(logging.INFO))
-_base_logger.addHandler(_build_file_handler(INFO_LOG, logging.INFO))
-_base_logger.addHandler(_build_file_handler(ERROR_LOG, logging.ERROR))
-_base_logger.addHandler(_build_json_handler(EVENT_LOG, "event"))
-_base_logger.addHandler(_build_json_handler(PERF_LOG, "perf"))
+_safe_add_handler(lambda: _build_file_handler(INFO_LOG, logging.INFO), description="info file logger", path=INFO_LOG)
+_safe_add_handler(lambda: _build_file_handler(ERROR_LOG, logging.ERROR), description="error file logger", path=ERROR_LOG)
+_safe_add_handler(lambda: _build_json_handler(EVENT_LOG, "event"), description="event json logger", path=EVENT_LOG)
+_safe_add_handler(lambda: _build_json_handler(PERF_LOG, "perf"), description="perf json logger", path=PERF_LOG)
 
 logger = ContextLoggerAdapter(_base_logger, {})
 
