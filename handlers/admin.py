@@ -20,15 +20,15 @@ from aiogram.types import BufferedInputFile
 
 import keyboards as kb
 import messages as bm
+from app_context import bot, db
 from config import ADMINS_UID, OUTPUT_DIR
 from filters import IsBotAdmin
 from log.logger import logger as logging
-
-logging = logging.bind(service="admin")
-from app_context import bot, db
 from services.download.queue import get_download_queue
 from services.runtime.analytics_status import get_snapshot as get_analytics_runtime_snapshot
 from services.runtime.stats import get_runtime_snapshot
+
+logging = logging.bind(service="admin")
 
 router = Router()
 

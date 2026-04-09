@@ -1,5 +1,4 @@
 import asyncio
-import os
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
