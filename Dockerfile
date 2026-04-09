@@ -53,6 +53,5 @@ COPY . .
 RUN mkdir -p /app/downloads /app/log && \
     chown -R appuser:appgroup /app
 
-USER appuser
-
+ENTRYPOINT ["python", "container_entrypoint.py"]
 CMD ["python", "main.py"]
