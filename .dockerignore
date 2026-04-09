@@ -14,8 +14,6 @@ __pycache__
 coverage.xml
 htmlcov
 downloads
-log/*
-!log/logger.py
 tests
 README.md
 LICENCE
