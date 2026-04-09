@@ -19,6 +19,7 @@ env:
   ADMIN_ID: "1"
   CUSTOM_API_URL: "https://api.example.com"
   CHANNEL_ID: "-1001234567890"
+  PYTHONPATH: ${{ github.workspace }}
 
 jobs:
   pytest:
