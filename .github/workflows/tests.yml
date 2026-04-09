@@ -14,10 +14,18 @@ concurrency:
   group: tests-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
+env:
+  BOT_TOKEN: "123456:TESTTOKEN"
+  ADMIN_ID: "1"
+  CUSTOM_API_URL: "https://api.example.com"
+  CHANNEL_ID: "-1001234567890"
+
 jobs:
   pytest:
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    env:
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/downloader_bot_test
 
     steps:
       - name: Checkout repository
@@ -49,6 +57,31 @@ jobs:
           path: |
             coverage.xml
             pytest.xml
+
+  docker-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/downloader_bot_test
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Build Docker image
+        run: docker build -t downloader-bot:test .
+
+      - name: Smoke-test container imports
+        run: |
+          docker run --rm \
+            -e BOT_TOKEN \
+            -e DATABASE_URL \
+            -e ADMIN_ID \
+            -e CUSTOM_API_URL \
+            -e CHANNEL_ID \
+            --entrypoint python \
+            downloader-bot:test \
+            -c "import handlers; from log.logger import summarize_text_for_log; print(summarize_text_for_log('https://example.com/demo'))"
 
   postgres-integration:
     runs-on: ubuntu-latest
