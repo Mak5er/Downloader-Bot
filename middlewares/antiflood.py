@@ -22,7 +22,7 @@ from config import (
     ANTIFLOOD_MESSAGE_WINDOW_SECONDS,
     ANTIFLOOD_USER_TTL_SECONDS,
 )
-from log.logger import logger as logging
+from services.logger import logger as logging
 
 logging = logging.bind(service="antiflood")
 

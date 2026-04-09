@@ -3,7 +3,7 @@ from __future__ import annotations
 import io
 import logging
 
-from log import logger as logger_module
+from services import logger as logger_module
 
 
 def test_safe_add_handler_falls_back_to_console_on_permission_error(monkeypatch):
@@ -19,18 +19,20 @@ def test_safe_add_handler_falls_back_to_console_on_permission_error(monkeypatch)
     test_logger.addHandler(handler)
 
     monkeypatch.setattr(logger_module, "_base_logger", test_logger)
+    log_path = "/app/logs/bot_log.log"
 
     def _raise_permission_error():
-        raise PermissionError(13, "Permission denied", "/app/log/bot_log.log")
+        raise PermissionError(13, "Permission denied", log_path)
 
     added = logger_module._safe_add_handler(
         _raise_permission_error,
         description="info file logger",
-        path="/app/log/bot_log.log",
+        path=log_path,
     )
 
     assert added is False
     output = stream.getvalue()
     assert "Disabled info file logger because it is not writable." in output
-    assert "/app/log/bot_log.log" in output
+    assert log_path in output
     assert "PermissionError" in output
+

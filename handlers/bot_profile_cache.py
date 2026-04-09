@@ -5,7 +5,7 @@ from typing import Optional
 from aiogram import Bot
 from aiogram.types import FSInputFile
 
-from log.logger import logger as logging
+from services.logger import logger as logging
 
 
 _bot_avatar_file_id: Optional[str] = None

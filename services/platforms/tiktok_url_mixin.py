@@ -3,7 +3,7 @@ import re
 
 import aiohttp
 
-from log.logger import logger as logging
+from services.logger import logger as logging
 from services.platforms.tiktok_common import (
     SHORT_HOSTS,
     URL_EXPAND_CACHE_MAXSIZE,

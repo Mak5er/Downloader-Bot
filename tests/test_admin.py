@@ -119,8 +119,8 @@ async def test_delete_log_requires_admin(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_delete_log_truncates_log_files(monkeypatch, tmp_path):
-    log_dir = tmp_path / "log"
-    log_dir.mkdir()
+    log_dir = tmp_path / "logs"
+    log_dir.mkdir(parents=True)
     for name in ("bot_log.log", "error_log.log", "events_log.jsonl", "perf_log.jsonl"):
         (log_dir / name).write_text("data", encoding="utf-8")
 

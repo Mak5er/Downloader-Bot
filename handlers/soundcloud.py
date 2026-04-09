@@ -36,7 +36,7 @@ from handlers.utils import (
     with_inline_send_logging,
     with_message_logging,
 )
-from log.logger import logger as logging, summarize_text_for_log, summarize_url_for_log
+from services.logger import logger as logging, summarize_text_for_log, summarize_url_for_log
 from app_context import bot, db, send_analytics
 from utils.cobalt_client import fetch_cobalt_data
 from utils.download_manager import (

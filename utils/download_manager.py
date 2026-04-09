@@ -11,7 +11,7 @@ from typing import Awaitable, Callable, Mapping, MutableMapping, Optional
 
 import requests
 
-from log.logger import logger as logging
+from services.logger import logger as logging
 from services.download.queue import (
     QueueBackpressureError,
     QueueRateLimitError,

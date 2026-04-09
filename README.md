@@ -61,18 +61,18 @@ If you want to rebuild the container locally from the repository `Dockerfile`, u
 
 For the GHCR image you only need `docker-compose.yml` and `.env`.
 For a local build you also need the repository sources and `Dockerfile`.
-You do not need to create `log/` or `downloads/` manually: Docker named volumes are created automatically, and the app also creates these directories on startup when needed.
+You do not need to create the log or download directories manually: Docker named volumes are created automatically, and the app also creates these directories on startup when needed.
 
 Notes about performance:
 
 - Docker build is faster with the included `.dockerignore`, because `.venv`, tests, logs and downloads are no longer sent into the build context.
-- `docker-compose.yml` now uses named volumes for `downloads` and `log` instead of bind-mounting the whole repo, which is noticeably faster on Docker Desktop/Windows.
+- `docker-compose.yml` now uses named volumes for `downloads` and `logs` instead of bind-mounting the whole repo, which is noticeably faster on Docker Desktop/Windows.
 
 ### Logging
 
 - Console logs are colorized and now include `service`, `flow` and `request_id`.
-- General text logs are written to `log/bot_log.log` and `log/error_log.log`.
-- Structured JSONL logs are written to `log/events_log.jsonl` and `log/perf_log.jsonl`.
+- General text logs are written to `logs/bot_log.log` and `logs/error_log.log`.
+- Structured JSONL logs are written to `logs/events_log.jsonl` and `logs/perf_log.jsonl`.
 - Main handlers attach request-scoped logging context automatically, so one user request can be traced across fetch, queue, download and upload stages.
 
 ### Database Tables

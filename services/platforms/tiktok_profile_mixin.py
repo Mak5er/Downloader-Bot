@@ -1,6 +1,6 @@
 import asyncio
 
-from log.logger import logger as logging
+from services.logger import logger as logging
 from services.platforms.tiktok_common import TikTokUser
 
 logging = logging.bind(service="tiktok_media")

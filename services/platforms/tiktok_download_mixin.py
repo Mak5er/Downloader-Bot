@@ -3,7 +3,7 @@ import glob
 import os
 from typing import Any, Callable, Optional
 
-from log.logger import logger as logging
+from services.logger import logger as logging
 from services.download.queue import QueueBackpressureError, QueueRateLimitError, get_download_queue
 from services.platforms.tiktok_common import _safe_int
 from utils.download_manager import (

@@ -4,7 +4,7 @@ import os
 import time
 from typing import Any, Awaitable, Callable, Optional
 
-from log.logger import logger as logging
+from services.logger import logger as logging
 from utils.download_manager import (
     DownloadError,
     DownloadConfig,

@@ -82,7 +82,7 @@ jobs:
             -e CHANNEL_ID \
             --entrypoint python \
             downloader-bot:test \
-            -c "import handlers; from log.logger import summarize_text_for_log; print(summarize_text_for_log('https://example.com/demo'))"
+            -c "import handlers; from services.logger import summarize_text_for_log; print(summarize_text_for_log('https://example.com/demo'))"
 
   postgres-integration:
     runs-on: ubuntu-latest

@@ -5,7 +5,7 @@ import sys
 from pathlib import Path
 
 DEFAULT_COMMAND = ["python", "main.py"]
-MANAGED_PATHS = ("/app/downloads", "/app/log")
+MANAGED_PATHS = ("/app/downloads", "/app/logs")
 
 
 def _resolve_command(argv: list[str]) -> list[str]:

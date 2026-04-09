@@ -18,7 +18,7 @@ from matplotlib.ticker import MaxNLocator
 import keyboards as kb
 import messages as bm
 from handlers.utils import get_message_text
-from log.logger import logger as logging, summarize_url_for_log
+from services.logger import logger as logging, summarize_url_for_log
 from app_context import db, send_analytics, bot
 from services.settings import parse_setting_toggle_callback, parse_settings_view_callback
 from services.storage.db import StatsSnapshot

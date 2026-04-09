@@ -3,7 +3,7 @@ import time
 from collections import OrderedDict
 from typing import Any, Awaitable, Callable, Optional
 
-from log.logger import logger as logging
+from services.logger import logger as logging
 from services.platforms.tiktok_common import (
     SHORT_HOSTS,
     TIKTOK_USER_AGENT,

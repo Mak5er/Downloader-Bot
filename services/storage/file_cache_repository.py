@@ -4,7 +4,7 @@ from sqlalchemy import func, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
-from log.logger import logger as logging
+from services.logger import logger as logging
 from services.storage.models import DownloadedFile
 
 logging = logging.bind(service="db_files")

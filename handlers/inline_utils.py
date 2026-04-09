@@ -8,7 +8,7 @@ from aiogram.exceptions import TelegramAPIError
 
 import keyboards as kb
 import messages as bm
-from log.logger import logger as logging, summarize_text_for_log
+from services.logger import logger as logging, summarize_text_for_log
 
 _INLINE_IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".gif"}
 

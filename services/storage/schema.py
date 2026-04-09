@@ -7,7 +7,7 @@ from alembic import command
 from alembic.config import Config as AlembicConfig
 from sqlalchemy import inspect, text
 
-from log.logger import logger as logging
+from services.logger import logger as logging
 from services.storage.models import APP_SCHEMA_TABLES, Base
 
 logging = logging.bind(service="db_schema")

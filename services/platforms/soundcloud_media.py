@@ -3,7 +3,7 @@ from dataclasses import dataclass
 from typing import Awaitable, Callable, Optional
 from urllib.parse import urlparse, urlunparse
 
-from log.logger import logger as logging
+from services.logger import logger as logging
 from utils.download_manager import (
     DownloadConfig,
     DownloadError,

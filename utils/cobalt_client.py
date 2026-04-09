@@ -5,7 +5,7 @@ from typing import Any, Optional
 
 import aiohttp
 
-from log.logger import logger as logging
+from services.logger import logger as logging
 from utils.http_client import get_http_session
 
 logging = logging.bind(service="cobalt")

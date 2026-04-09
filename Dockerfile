@@ -50,7 +50,7 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
 COPY --from=builder /opt/venv /opt/venv
 COPY . .
 
-RUN mkdir -p /app/downloads /app/log && \
+RUN mkdir -p /app/downloads /app/logs && \
     chown -R appuser:appgroup /app
 
 ENTRYPOINT ["python", "container_entrypoint.py"]

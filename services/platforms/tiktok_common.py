@@ -2,7 +2,7 @@ from dataclasses import dataclass
 from typing import Any, Optional
 from urllib.parse import urlparse, urlunparse
 
-from log.logger import logger as logging
+from services.logger import logger as logging
 
 logging = logging.bind(service="tiktok_media")
 

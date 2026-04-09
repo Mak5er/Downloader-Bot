@@ -3,7 +3,7 @@ from dataclasses import dataclass
 from typing import Awaitable, Callable, Optional
 from urllib.parse import urlparse, urlunparse
 
-from log.logger import logger as logging
+from services.logger import logger as logging
 from utils.cobalt_media import classify_cobalt_media_type
 from utils.download_manager import (
     DownloadConfig,

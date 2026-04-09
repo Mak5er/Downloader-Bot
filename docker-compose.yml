@@ -7,7 +7,7 @@ services:
       dockerfile: Dockerfile
     volumes:
       - downloader_downloads:/app/downloads
-      - downloader_log:/app/log
+      - downloader_log:/app/logs
     env_file: .env
     container_name: downloader-bot
     restart: always

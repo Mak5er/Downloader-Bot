@@ -16,7 +16,7 @@ from handlers.utils import (
     safe_edit_inline_media,
     safe_edit_inline_text,
 )
-from log.logger import logger as logging, summarize_text_for_log
+from services.logger import logger as logging, summarize_text_for_log
 from services.inline.service_icons import get_inline_service_icon
 from services.inline.video_requests import (
     claim_inline_video_request_for_send,

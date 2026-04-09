@@ -5,6 +5,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 import pytest_asyncio
+from sqlalchemy import text
 from sqlalchemy.dialects import postgresql
 
 from services import db as db_module
@@ -94,6 +95,18 @@ async def test_init_db_can_fallback_to_metadata_bootstrap(monkeypatch):
     sync_sequences.assert_awaited_once()
 
 
+async def _reset_app_tables(database):
+    async with database.engine.begin() as conn:
+        if database._dialect_name == "postgresql":
+            table_names = ", ".join(sorted(db_module.APP_SCHEMA_TABLES))
+            await conn.execute(text(f"TRUNCATE TABLE {table_names} RESTART IDENTITY CASCADE"))
+            return
+
+        for table_name in ("settings", "analytics_events", "downloaded_files", "users"):
+            if table_name in db_module.APP_SCHEMA_TABLES:
+                await conn.execute(text(f"DELETE FROM {table_name}"))
+
+
 @pytest_asyncio.fixture
 async def database(monkeypatch):
     if os.getenv("RUN_DB_TESTS") not in {"1", "true", "TRUE", "yes", "YES"}:
@@ -105,7 +118,9 @@ async def database(monkeypatch):
 
     database = db_module.DataBase(db_url)
     await database.init_db()
+    await _reset_app_tables(database)
     yield database
+    await _reset_app_tables(database)
     await database.engine.dispose()
 
 

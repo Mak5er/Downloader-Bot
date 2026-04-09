@@ -1,7 +1,7 @@
 import asyncio
 from typing import Any, Awaitable, Callable, Sequence, TypeVar
 
-from log.logger import logger as logging
+from services.logger import logger as logging
 from utils.download_manager import log_download_metrics
 
 logging = logging.bind(service="media_resolver")

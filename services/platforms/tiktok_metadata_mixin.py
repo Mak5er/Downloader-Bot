@@ -4,7 +4,7 @@ from urllib.parse import urlparse
 
 from yt_dlp.extractor.tiktok import TikTokIE
 
-from log.logger import logger as logging
+from services.logger import logger as logging
 from services.platforms.tiktok_common import (
     SHORT_HOSTS,
     _first_non_empty_str,

@@ -23,7 +23,7 @@ import messages as bm
 from app_context import bot, db
 from config import ADMINS_UID, OUTPUT_DIR
 from filters import IsBotAdmin
-from log.logger import logger as logging
+from services.logger import ERROR_LOG, EVENT_LOG, INFO_LOG, PERF_LOG, logger as logging
 from services.download.queue import get_download_queue
 from services.runtime.analytics_status import get_snapshot as get_analytics_runtime_snapshot
 from services.runtime.stats import get_runtime_snapshot
@@ -37,6 +37,8 @@ _DOWNLOAD_CLEANUP_MIN_AGE_SECONDS = 6 * 60 * 60.0
 _ADMIN_ACTIVE_CHECK_CONCURRENCY = 8
 _ADMIN_MAILING_CONCURRENCY = 5
 _ADMIN_THROTTLE_SECONDS = 0.05
+_RUNTIME_LOG_FILES = (INFO_LOG, ERROR_LOG, EVENT_LOG, PERF_LOG)
+_DOWNLOADABLE_LOG_FILES = (INFO_LOG, ERROR_LOG)
 
 
 def _is_admin_user(user_id: int | None) -> bool:
@@ -292,13 +294,10 @@ async def del_log(call: types.CallbackQuery):
 
     await bot.send_chat_action(call.message.chat.id, "typing")
     py_logging.shutdown()
-    for log_path in (
-        "log/bot_log.log",
-        "log/error_log.log",
-        "log/events_log.jsonl",
-        "log/perf_log.jsonl",
-    ):
-        open(log_path, "w", encoding="utf-8").close()
+    for log_path in _RUNTIME_LOG_FILES:
+        path = Path(log_path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("", encoding="utf-8")
     await call.message.reply(bm.log_deleted())
     await call.answer()
 
@@ -310,17 +309,16 @@ async def download_log_handler(call: types.CallbackQuery):
 
     await bot.send_chat_action(call.message.chat.id, "typing")
 
-    log_files = [
-        ('log/bot_log.log', 'bot_log.log'),
-        ('log/error_log.log', 'error_log.log')
-    ]
     user_id = call.from_user.id
 
     await call.answer()
 
-    for file_path, filename in log_files:
-        with open(file_path, 'rb') as file:
-            await call.message.answer_document(BufferedInputFile(file.read(), filename=filename))
+    for file_path in _DOWNLOADABLE_LOG_FILES:
+        path = Path(file_path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.touch(exist_ok=True)
+        with path.open('rb') as file:
+            await call.message.answer_document(BufferedInputFile(file.read(), filename=path.name))
 
     logging.info("User action: Downloaded logs (User ID: %s)", user_id)
 

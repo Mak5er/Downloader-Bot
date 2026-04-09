@@ -24,7 +24,7 @@ from config import (
     MEASUREMENT_ID,
     OUTPUT_DIR,
 )
-from log.logger import logger as logging
+from services.logger import logger as logging
 from services.storage.db import AnalyticsEvent, DataBase
 from services.download.queue import shutdown_download_queue
 from services.runtime.analytics_status import record_drop as record_analytics_drop

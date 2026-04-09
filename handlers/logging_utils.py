@@ -7,7 +7,7 @@ from typing import Any, Awaitable, Callable, TypeVar
 
 from aiogram import types
 
-from log.logger import logger as logging
+from services.logger import logger as logging
 
 T = TypeVar("T")
 FAsync = TypeVar("FAsync", bound=Callable[..., Awaitable[Any]])

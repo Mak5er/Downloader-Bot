@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 from itertools import count
 from typing import Any, Awaitable, Callable, Optional, TypeVar
 
-from log.logger import logger as logging
+from services.logger import logger as logging
 
 logging = logging.bind(service="download_queue")
 

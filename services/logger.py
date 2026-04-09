@@ -13,7 +13,7 @@ from urllib.parse import urlsplit
 
 import colorlog
 
-LOG_DIR = "log"
+LOG_DIR = os.getenv("LOG_DIR", "logs").strip() or "logs"
 INFO_LOG = os.path.join(LOG_DIR, "bot_log.log")
 ERROR_LOG = os.path.join(LOG_DIR, "error_log.log")
 EVENT_LOG = os.path.join(LOG_DIR, "events_log.jsonl")

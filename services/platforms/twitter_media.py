@@ -3,7 +3,7 @@ import os
 from typing import Any, Optional
 from urllib.parse import urlsplit
 
-from log.logger import logger as logging
+from services.logger import logger as logging
 from utils.download_manager import (
     DownloadMetrics,
     DownloadQueueBusyError,

@@ -42,7 +42,7 @@ from handlers.utils import (
     with_inline_send_logging,
     with_message_logging,
 )
-from log.logger import logger as logging, summarize_text_for_log, summarize_url_for_log
+from services.logger import logger as logging, summarize_text_for_log, summarize_url_for_log
 from app_context import bot, db, send_analytics
 from services.media.delivery import send_cached_media_entries
 from services.media.orchestration import handle_download_backpressure, run_single_media_flow

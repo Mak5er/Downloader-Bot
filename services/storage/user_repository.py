@@ -4,7 +4,7 @@ from sqlalchemy import delete, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
-from log.logger import logger as logging
+from services.logger import logger as logging
 from services.settings import SETTING_DISABLED, SETTING_FIELDS, SETTING_VALUES, normalize_setting_value
 from services.storage.models import DEFAULT_USER_SETTINGS, Settings, User
 

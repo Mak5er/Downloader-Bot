@@ -7,7 +7,7 @@ import pytest
 
 from handlers import bot_profile_cache, telegram_ui_utils
 from handlers import utils
-from log.logger import summarize_text_for_log, summarize_url_for_log
+from services.logger import summarize_text_for_log, summarize_url_for_log
 from utils.download_manager import DownloadProgress
 
 
