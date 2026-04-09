@@ -4,8 +4,8 @@ from .chat_tracker import ChatTrackerMiddleware
 from .private_chat_guard import PrivateChatGuardMiddleware
 
 __all__ = [
-    ChatTrackerMiddleware,
-    PrivateChatGuardMiddleware,
-    UserBannedMiddleware,
     AntifloodMiddleware,
+    UserBannedMiddleware,
+    PrivateChatGuardMiddleware,
+    ChatTrackerMiddleware,
 ]

@@ -3,6 +3,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+import handlers
 from handlers import user
 
 
@@ -12,9 +13,11 @@ class DummyMessage:
             id=user_id,
             full_name="Tester",
             username="tester",
+            language_code="uk",
         )
         self.chat = SimpleNamespace(id=100, type=chat_type)
         self.text = "payload"
+        self.caption = None
         self._replies = []
         self.reply = AsyncMock(side_effect=self._collect_reply)
         self.answer = AsyncMock(side_effect=self._collect_reply)
@@ -29,6 +32,8 @@ class DummyCallbackMessage:
         self.chat = SimpleNamespace(id=100, type="private")
         self.answer_photo = AsyncMock()
         self.edit_media = AsyncMock()
+        self.edit_text = AsyncMock()
+        self.edit_reply_markup = AsyncMock()
         self.delete = AsyncMock()
 
 
@@ -95,6 +100,40 @@ async def test_send_welcome_deeplink_skips_default_welcome(monkeypatch):
     fake_update_info.assert_awaited_once_with(message)
     fake_process_deeplink.assert_awaited_once_with(message, "album_token")
     message.reply.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_send_welcome_replays_pending_request_in_private_context(monkeypatch):
+    fake_send_analytics = AsyncMock()
+    fake_update_info = AsyncMock()
+    fake_process_pending = AsyncMock()
+    fake_bot = SimpleNamespace(delete_message=AsyncMock())
+
+    monkeypatch.setattr(user, "send_analytics", fake_send_analytics)
+    monkeypatch.setattr(user, "update_info", fake_update_info)
+    monkeypatch.setattr(user, "bot", fake_bot)
+    monkeypatch.setattr(user, "_process_pending_message", fake_process_pending)
+    monkeypatch.setattr(
+        user,
+        "pop_pending",
+        lambda _user_id: SimpleNamespace(
+            service="youtube",
+            url="https://youtu.be/demo",
+            notice_chat_id=-100,
+            notice_message_id=555,
+        ),
+    )
+
+    message = DummyMessage()
+    message.text = "/start"
+    await user.send_welcome(message)
+
+    fake_bot.delete_message.assert_awaited_once_with(-100, 555)
+    fake_process_pending.assert_awaited_once()
+    replayed_message = fake_process_pending.await_args.args[0]
+    assert replayed_message.chat.id == message.chat.id
+    assert replayed_message.chat.type == message.chat.type
+    assert replayed_message.text == "https://youtu.be/demo"
 
 
 @pytest.mark.asyncio
@@ -190,3 +229,89 @@ async def test_switch_period_uses_total_mode(monkeypatch):
 
     _, kwargs = call.message.edit_media.await_args
     assert kwargs["reply_markup"] == ("keyboard", "Month", "total")
+
+
+@pytest.mark.asyncio
+async def test_open_setting_rejects_invalid_callback_payload(monkeypatch):
+    call = DummyCallback("settings:captions:extra")
+
+    await user.open_setting(call)
+
+    call.answer.assert_awaited_once()
+    _, kwargs = call.answer.await_args
+    assert kwargs["show_alert"] is True
+    call.message.edit_text.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_change_setting_rejects_invalid_callback_payload(monkeypatch):
+    call = DummyCallback("setting:captions")
+    fake_db = SimpleNamespace(set_user_setting=AsyncMock(), get_user_setting=AsyncMock())
+    monkeypatch.setattr(user, "db", fake_db)
+
+    await user.change_setting(call)
+
+    call.answer.assert_awaited_once()
+    _, kwargs = call.answer.await_args
+    assert kwargs["show_alert"] is True
+    fake_db.set_user_setting.assert_not_awaited()
+    call.message.edit_reply_markup.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_change_setting_handles_invalid_db_setting_value(monkeypatch):
+    call = DummyCallback("setting:captions:on")
+    fake_db = SimpleNamespace(
+        set_user_setting=AsyncMock(side_effect=ValueError("bad value")),
+        get_user_setting=AsyncMock(),
+    )
+    monkeypatch.setattr(user, "db", fake_db)
+
+    await user.change_setting(call)
+
+    call.answer.assert_awaited_once()
+    _, kwargs = call.answer.await_args
+    assert kwargs["show_alert"] is True
+    call.message.edit_reply_markup.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_process_pending_message_dispatches_soundcloud(monkeypatch):
+    message = DummyMessage()
+    message.text = "https://soundcloud.com/artist/track"
+    process_soundcloud_url = AsyncMock()
+
+    monkeypatch.setattr(handlers.soundcloud, "process_soundcloud_url", process_soundcloud_url)
+
+    await user._process_pending_message(message)
+
+    process_soundcloud_url.assert_awaited_once_with(message, url="https://soundcloud.com/artist/track")
+
+
+@pytest.mark.asyncio
+async def test_process_pending_message_dispatches_pinterest(monkeypatch):
+    message = DummyMessage()
+    message.text = "https://pin.it/demo123"
+    process_pinterest_url = AsyncMock()
+
+    monkeypatch.setattr(handlers.pinterest, "process_pinterest_url", process_pinterest_url)
+
+    await user._process_pending_message(message)
+
+    process_pinterest_url.assert_awaited_once_with(message, url="https://pin.it/demo123")
+
+
+@pytest.mark.asyncio
+async def test_process_pending_message_dispatches_youtube_music(monkeypatch):
+    message = DummyMessage()
+    message.text = "https://music.youtube.com/watch?v=abc123"
+    download_music = AsyncMock()
+    download_video = AsyncMock()
+
+    monkeypatch.setattr(handlers.youtube, "download_music", download_music)
+    monkeypatch.setattr(handlers.youtube, "download_video", download_video)
+
+    await user._process_pending_message(message)
+
+    download_music.assert_awaited_once_with(message, direct_url="https://music.youtube.com/watch?v=abc123")
+    download_video.assert_not_awaited()

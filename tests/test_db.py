@@ -8,12 +8,90 @@ import pytest_asyncio
 from sqlalchemy.dialects import postgresql
 
 from services import db as db_module
+from services.storage import file_cache_repository, user_repository
 
 
 def test_map_action_to_service_includes_soundcloud():
     assert db_module.DataBase._map_action_to_service("soundcloud_audio") == "SoundCloud"
     assert db_module.DataBase._map_action_to_service("inline_soundcloud_audio") == "SoundCloud"
     assert db_module.DataBase._map_action_to_service("pinterest_media") == "Pinterest"
+
+
+def test_analytics_event_model_declares_stats_indexes():
+    index_names = {index.name for index in db_module.AnalyticsEvent.__table__.indexes}
+
+    assert "ix_analytics_events_created_at" in index_names
+    assert "ix_analytics_events_action_name_created_at" in index_names
+
+
+def test_select_schema_migration_action_prefers_upgrade_for_empty_schema():
+    assert db_module.DataBase._select_schema_migration_action(set()) == "upgrade"
+
+
+def test_select_schema_migration_action_stamps_existing_legacy_schema():
+    existing_tables = set(db_module.APP_SCHEMA_TABLES)
+    assert db_module.DataBase._select_schema_migration_action(existing_tables) == "stamp"
+
+
+def test_select_schema_migration_action_rejects_partial_legacy_schema():
+    with pytest.raises(RuntimeError, match="partially initialized schema"):
+        db_module.DataBase._select_schema_migration_action({"users", "settings"})
+
+
+def test_database_configures_engine_pool(monkeypatch):
+    captured: dict[str, object] = {}
+    fake_engine = SimpleNamespace(dialect=SimpleNamespace(name="postgresql"))
+
+    def fake_create_async_engine(url, **kwargs):
+        captured["url"] = url
+        captured["kwargs"] = kwargs
+        return fake_engine
+
+    monkeypatch.setattr(db_module, "create_async_engine", fake_create_async_engine)
+    monkeypatch.setattr(db_module, "async_sessionmaker", lambda **kwargs: SimpleNamespace(**kwargs))
+
+    database = db_module.DataBase("postgresql://user:pass@localhost/testdb")
+
+    assert database.engine is fake_engine
+    assert captured["url"] == "postgresql+asyncpg://user:pass@localhost/testdb"
+    assert captured["kwargs"]["pool_size"] == db_module.DB_POOL_SIZE
+    assert captured["kwargs"]["max_overflow"] == db_module.DB_MAX_OVERFLOW
+    assert captured["kwargs"]["pool_timeout"] == db_module.DB_POOL_TIMEOUT
+    assert captured["kwargs"]["pool_use_lifo"] is True
+
+
+@pytest.mark.asyncio
+async def test_init_db_prefers_alembic_migrations(monkeypatch):
+    database = db_module.DataBase("postgresql://user:pass@localhost/testdb")
+    apply_migrations = AsyncMock()
+    create_schema = AsyncMock()
+    sync_sequences = AsyncMock()
+    monkeypatch.setattr(database, "_apply_schema_migrations", apply_migrations)
+    monkeypatch.setattr(database, "_create_schema_with_metadata", create_schema)
+    monkeypatch.setattr(database, "_sync_postgresql_sequences", sync_sequences)
+
+    await database.init_db()
+
+    apply_migrations.assert_awaited_once()
+    create_schema.assert_not_awaited()
+    sync_sequences.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_init_db_can_fallback_to_metadata_bootstrap(monkeypatch):
+    database = db_module.DataBase("postgresql://user:pass@localhost/testdb")
+    apply_migrations = AsyncMock()
+    create_schema = AsyncMock()
+    sync_sequences = AsyncMock()
+    monkeypatch.setattr(database, "_apply_schema_migrations", apply_migrations)
+    monkeypatch.setattr(database, "_create_schema_with_metadata", create_schema)
+    monkeypatch.setattr(database, "_sync_postgresql_sequences", sync_sequences)
+
+    await database.init_db(use_migrations=False)
+
+    apply_migrations.assert_not_awaited()
+    create_schema.assert_awaited_once()
+    sync_sequences.assert_awaited_once()
 
 
 @pytest_asyncio.fixture
@@ -24,11 +102,6 @@ async def database(monkeypatch):
     db_url = os.getenv("DATABASE_URL")
     if not db_url:
         pytest.skip("DATABASE_URL env not set for tests.")
-
-    async def noop_migration():
-        return None
-
-    monkeypatch.setattr(db_module, "run_alembic_migration", noop_migration)
 
     database = db_module.DataBase(db_url)
     await database.init_db()
@@ -66,6 +139,22 @@ async def test_add_user_and_settings(database):
     await database.set_user_setting(1, "captions", "on")
     updated = await database.user_settings(1)
     assert updated["captions"] == "on"
+
+
+@pytest.mark.asyncio
+async def test_set_user_setting_rejects_invalid_field():
+    database = db_module.DataBase("postgresql://user:pass@localhost/testdb")
+
+    with pytest.raises(ValueError, match="Unsupported user setting field"):
+        await database.set_user_setting(1, "unknown_field", "on")
+
+
+@pytest.mark.asyncio
+async def test_set_user_setting_rejects_invalid_value():
+    database = db_module.DataBase("postgresql://user:pass@localhost/testdb")
+
+    with pytest.raises(ValueError, match="Unsupported user setting value"):
+        await database.set_user_setting(1, "captions", "maybe")
 
 
 @pytest.mark.asyncio
@@ -129,6 +218,41 @@ async def test_downloaded_files_cache(database):
 
 
 @pytest.mark.asyncio
+async def test_delete_user_removes_settings_before_user(monkeypatch):
+    database = db_module.DataBase("postgresql://user:pass@localhost/testdb")
+    session = SimpleNamespace(execute=AsyncMock())
+
+    class _BeginCtx:
+        async def __aenter__(self):
+            return session
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+    class _SessionCtx:
+        execute = session.execute
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        def begin(self):
+            return _BeginCtx()
+
+    monkeypatch.setattr(database, "SessionLocal", lambda: _SessionCtx())
+
+    await database.delete_user(123)
+
+    assert session.execute.await_count == 2
+    first_stmt = session.execute.await_args_list[0].args[0]
+    second_stmt = session.execute.await_args_list[1].args[0]
+    assert "DELETE FROM settings" in str(first_stmt)
+    assert "DELETE FROM users" in str(second_stmt)
+
+
+@pytest.mark.asyncio
 async def test_add_file_uses_upsert_and_refreshes_cache(monkeypatch):
     database = db_module.DataBase("postgresql://user:pass@localhost/testdb")
     session = SimpleNamespace(
@@ -169,7 +293,7 @@ async def test_get_file_id_positive_cache_has_no_ttl(monkeypatch):
             return False
 
     monkeypatch.setattr(database, "SessionLocal", lambda: _UnusedSessionCtx())
-    monkeypatch.setattr(db_module.time, "monotonic", lambda: 10_000.0)
+    monkeypatch.setattr(file_cache_repository.time, "monotonic", lambda: 10_000.0)
 
     assert await database.get_file_id("https://example.com/video") == "cached-file-id"
 
@@ -190,10 +314,77 @@ async def test_get_file_id_negative_cache_expires_quickly(monkeypatch):
             return False
 
     monkeypatch.setattr(database, "SessionLocal", lambda: _SessionCtx())
-    monkeypatch.setattr(db_module.time, "monotonic", lambda: 16.0)
+    monkeypatch.setattr(file_cache_repository.time, "monotonic", lambda: 16.0)
 
     assert await database.get_file_id("https://example.com/video") == "fresh-file-id"
     session.execute.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_user_settings_returns_defaults_when_db_lookup_fails(monkeypatch):
+    database = db_module.DataBase("postgresql://user:pass@localhost/testdb")
+
+    class _SessionCtx:
+        async def __aenter__(self):
+            raise TimeoutError("db timeout")
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+    monkeypatch.setattr(database, "SessionLocal", lambda: _SessionCtx())
+
+    settings = await database.user_settings(42)
+
+    assert settings == db_module.DEFAULT_USER_SETTINGS
+
+
+@pytest.mark.asyncio
+async def test_user_settings_returns_stale_cache_when_db_lookup_fails(monkeypatch):
+    database = db_module.DataBase("postgresql://user:pass@localhost/testdb")
+    database._settings_cache[42] = (0.0, {"captions": "on", "delete_message": "off", "info_buttons": "off", "url_button": "off", "audio_button": "off"})
+
+    class _SessionCtx:
+        async def __aenter__(self):
+            raise TimeoutError("db timeout")
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+    monkeypatch.setattr(database, "SessionLocal", lambda: _SessionCtx())
+    monkeypatch.setattr(user_repository.time, "monotonic", lambda: 9999.0)
+
+    settings = await database.user_settings(42)
+
+    assert settings["captions"] == "on"
+
+
+def test_prune_local_caches_removes_expired_and_overflow_entries():
+    database = db_module.DataBase("postgresql://user:pass@localhost/testdb")
+    database._settings_cache_max_entries = 2
+    database._status_cache_max_entries = 2
+    database._file_cache_max_entries = 2
+    database._settings_cache = {
+        1: (0.0, dict(db_module.DEFAULT_USER_SETTINGS)),
+        2: (10.0, dict(db_module.DEFAULT_USER_SETTINGS)),
+        3: (20.0, dict(db_module.DEFAULT_USER_SETTINGS)),
+    }
+    database._status_cache = {
+        1: (0.0, "active"),
+        2: (10.0, "inactive"),
+        3: (20.0, "ban"),
+    }
+    database._file_cache = {
+        "expired-miss": (0.0, None),
+        "old-hit": (5.0, "file-1"),
+        "fresh-hit": (20.0, "file-2"),
+    }
+
+    database._prune_local_caches(now=40.0, force=True)
+
+    assert 1 not in database._settings_cache
+    assert 1 not in database._status_cache
+    assert "expired-miss" not in database._file_cache
+    assert "fresh-hit" in database._file_cache
 
 
 @pytest.mark.asyncio

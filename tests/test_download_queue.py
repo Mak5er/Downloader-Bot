@@ -2,7 +2,7 @@ import asyncio
 
 import pytest
 
-from services.download_queue import AdaptiveDownloadQueue, QueueBackpressureError, QueueRateLimitError
+from services.download.queue import AdaptiveDownloadQueue, QueueBackpressureError, QueueRateLimitError
 
 
 @pytest.mark.asyncio

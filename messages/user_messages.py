@@ -116,8 +116,20 @@ def dm_start_required():
     return "<tg-emoji emoji-id='5472308992514464048'>🔒</tg-emoji> First-time setup needed: open DM, press Start, and resend the link."
 
 
+def duplicate_link_processing():
+    return "This link is already being processed. Wait a few seconds."
+
+
+def duplicate_link_recently_processed():
+    return "This link was just handled. If you still need it, try again in a few seconds."
+
+
 def settings_admin_only():
     return "Only group admins can open /settings in group chats."
+
+
+def invalid_settings_option():
+    return "Invalid settings option."
 
 
 def join_group(chat_title: str) -> str:

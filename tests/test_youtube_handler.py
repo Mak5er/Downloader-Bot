@@ -4,7 +4,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 from handlers import youtube
-from services.inline_video_requests import create_inline_video_request, get_inline_video_request
+from services.inline.video_requests import create_inline_video_request, get_inline_video_request
 from utils.download_manager import DownloadMetrics
 
 

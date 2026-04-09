@@ -3,8 +3,8 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 from handlers import instagram
-from services.inline_album_links import get_inline_album_request
-from services.inline_video_requests import create_inline_video_request
+from services.inline.album_links import get_inline_album_request
+from services.inline.video_requests import create_inline_video_request
 from utils.download_manager import DownloadMetrics
 
 
@@ -382,6 +382,47 @@ async def test_inline_instagram_query_prefers_video_thumb_for_album_preview(monk
     result = results[0]
     assert result.photo_url == "https://cdn.example.com/1.jpg"
     assert result.thumbnail_url == "https://cdn.example.com/1.jpg"
+
+
+@pytest.mark.asyncio
+async def test_inline_instagram_query_uses_first_media_preview_for_mixed_album(monkeypatch):
+    settings = {
+        "captions": "on",
+        "delete_message": "off",
+        "info_buttons": "on",
+        "url_button": "on",
+        "audio_button": "on",
+    }
+    query = SimpleNamespace(
+        from_user=SimpleNamespace(id=42),
+        chat_type="inline",
+        query="https://www.instagram.com/p/mixed123/",
+        answer=AsyncMock(),
+    )
+    data = instagram.InstagramVideo(
+        id="ig-inline-mixed",
+        description="mixed media post",
+        author="author",
+        media_list=[
+            instagram.InstagramMedia(url="https://cdn.example.com/1.mp4", type="video", thumb="https://cdn.example.com/1.jpg"),
+            instagram.InstagramMedia(url="https://cdn.example.com/2.jpg", type="photo"),
+        ],
+    )
+
+    monkeypatch.setattr(instagram, "send_analytics", AsyncMock())
+    monkeypatch.setattr(instagram.db, "user_settings", AsyncMock(return_value=settings))
+    monkeypatch.setattr(instagram, "get_bot_url", AsyncMock(return_value="https://t.me/maxloadbot"))
+    monkeypatch.setattr(instagram.inst_service, "fetch_data", AsyncMock(return_value=data))
+
+    await instagram.inline_instagram_query(query)
+
+    results = query.answer.await_args.args[0]
+    assert len(results) == 1
+    result = results[0]
+    assert result.photo_url == "https://cdn.example.com/1.jpg"
+    assert result.thumbnail_url == "https://cdn.example.com/1.jpg"
+    assert result.caption == instagram.bm.captions(settings["captions"], data.description, "https://t.me/maxloadbot")
+    assert result.caption == instagram.bm.captions(settings["captions"], data.description, "https://t.me/maxloadbot")
 
 
 @pytest.mark.asyncio

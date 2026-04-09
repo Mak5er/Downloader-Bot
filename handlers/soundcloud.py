@@ -1,9 +1,6 @@
 import datetime
 import re
-import time
-from dataclasses import dataclass
 from typing import Optional
-from urllib.parse import urlparse, urlunparse
 
 from aiogram import F, Router, types
 from aiogram.types import FSInputFile
@@ -11,16 +8,18 @@ from aiogram.types import FSInputFile
 import messages as bm
 import keyboards as kb
 from config import CHANNEL_ID, COBALT_API_KEY, COBALT_API_URL, OUTPUT_DIR
+from handlers.request_dedupe import claim_message_request
 from handlers.user import update_info
 from handlers.utils import (
-    build_request_id,
-    build_progress_status,
     build_queue_busy_text,
     build_rate_limit_text,
     get_bot_avatar_thumbnail,
     get_bot_url,
     get_message_text,
     handle_download_error,
+    load_user_settings,
+    make_retry_status_notifier,
+    make_status_text_progress_updater,
     maybe_delete_user_message,
     react_to_message,
     remove_file,
@@ -31,33 +30,28 @@ from handlers.utils import (
     safe_edit_inline_text,
     safe_answer_inline_query,
     send_chat_action_if_needed,
-    resolve_settings_target_id,
     with_callback_logging,
     with_chosen_inline_logging,
     with_inline_query_logging,
     with_inline_send_logging,
     with_message_logging,
 )
-from log.logger import logger as logging
-from main import bot, db, send_analytics
+from log.logger import logger as logging, summarize_text_for_log, summarize_url_for_log
+from app_context import bot, db, send_analytics
 from utils.cobalt_client import fetch_cobalt_data
 from utils.download_manager import (
-    DownloadConfig,
-    DownloadError,
-    DownloadMetrics,
-    DownloadProgress,
     DownloadQueueBusyError,
     DownloadRateLimitError,
-    ResilientDownloader,
     log_download_metrics,
 )
-from services.inline_service_icons import get_inline_service_icon
-from services.inline_video_requests import (
+from services.inline.service_icons import get_inline_service_icon
+from services.inline.video_requests import (
     claim_inline_video_request_for_send,
     complete_inline_video_request,
     create_inline_video_request,
     reset_inline_video_request,
 )
+from services.platforms import soundcloud_media as soundcloud_platform
 
 logging = logging.bind(service="soundcloud")
 
@@ -69,191 +63,20 @@ SOUNDCLOUD_URL_REGEX = (
     r"https?://soundcloud\.app\.goo\.gl/\S+)"
 )
 
+SoundCloudTrack = soundcloud_platform.SoundCloudTrack
+DownloadError = soundcloud_platform.DownloadError
+strip_soundcloud_url = soundcloud_platform.strip_soundcloud_url
+parse_soundcloud_track = soundcloud_platform.parse_soundcloud_track
 
-@dataclass
-class SoundCloudTrack:
-    id: str
-    source_url: str
-    audio_url: str
-    title: str
-    artist: str
-    thumbnail_url: Optional[str] = None
-
-
-def strip_soundcloud_url(url: str) -> str:
-    try:
-        parsed = urlparse(url)
-    except Exception:
-        return url
-    return urlunparse((parsed.scheme, parsed.netloc, parsed.path, parsed.params, "", ""))
-
-
-def _looks_like_image_url(url: str) -> bool:
-    probe = (url or "").lower().split("?", 1)[0]
-    return probe.endswith((".jpg", ".jpeg", ".png", ".webp", ".avif"))
-
-
-def _looks_like_audio_url(url: str) -> bool:
-    probe = (url or "").lower().split("?", 1)[0]
-    return probe.endswith((".mp3", ".m4a", ".aac", ".ogg", ".wav", ".opus"))
-
-
-def _derive_title(filename: Optional[str]) -> str:
-    if not filename:
-        return "SoundCloud Audio"
-    stem = filename.rsplit("/", 1)[-1].rsplit(".", 1)[0]
-    stem = stem.replace("_", " ").replace("-", " ").strip()
-    return stem or "SoundCloud Audio"
-
-
-def parse_soundcloud_track(data: dict, source_url: str) -> Optional[SoundCloudTrack]:
-    if not isinstance(data, dict):
-        return None
-
-    status = data.get("status")
-    if status == "error":
-        error = data.get("error") or {}
-        logging.error(
-            "Cobalt SoundCloud API error: code=%s context=%s",
-            error.get("code") if isinstance(error, dict) else None,
-            error.get("context") if isinstance(error, dict) else None,
-        )
-        return None
-
-    audio_url: Optional[str] = None
-    thumb_url: Optional[str] = None
-    title = _derive_title(data.get("filename"))
-    artist = ""
-
-    if status in {"tunnel", "redirect"}:
-        maybe_url = data.get("url")
-        if isinstance(maybe_url, str) and maybe_url:
-            audio_url = maybe_url
-
-    elif status == "picker":
-        maybe_audio = data.get("audio")
-        if isinstance(maybe_audio, str) and maybe_audio:
-            audio_url = maybe_audio
-        picker_items = data.get("picker") or []
-        for item in picker_items:
-            if not isinstance(item, dict):
-                continue
-            maybe_thumb = item.get("thumb")
-            if isinstance(maybe_thumb, str) and maybe_thumb and not thumb_url:
-                thumb_url = maybe_thumb
-
-    elif status == "local-processing":
-        output = data.get("output") or {}
-        metadata = output.get("metadata") if isinstance(output, dict) else {}
-        if isinstance(metadata, dict):
-            title = metadata.get("title") or title
-            artist = metadata.get("artist") or ""
-
-        tunnels = data.get("tunnel") or []
-        for tunnel_url in tunnels:
-            if not isinstance(tunnel_url, str) or not tunnel_url:
-                continue
-            if _looks_like_image_url(tunnel_url):
-                if not thumb_url:
-                    thumb_url = tunnel_url
-                continue
-            if _looks_like_audio_url(tunnel_url) and not audio_url:
-                audio_url = tunnel_url
-                continue
-            if not audio_url:
-                audio_url = tunnel_url
-
-    else:
-        logging.error("Unsupported Cobalt SoundCloud response status: status=%s payload=%s", status, data)
-        return None
-
-    if not audio_url:
-        logging.error("Cobalt SoundCloud response has no audio URL: status=%s payload=%s", status, data)
-        return None
-
-    return SoundCloudTrack(
-        id=str(int(datetime.datetime.now().timestamp())),
-        source_url=source_url,
-        audio_url=audio_url,
-        title=title,
-        artist=artist,
-        thumbnail_url=thumb_url,
-    )
-
-
-async def get_user_settings(message: types.Message):
-    return await db.user_settings(resolve_settings_target_id(message))
-
-
-class SoundCloudService:
+class SoundCloudService(soundcloud_platform.SoundCloudMediaService):
     def __init__(self, output_dir: str) -> None:
-        config = DownloadConfig(
-            chunk_size=1024 * 1024,
-            multipart_threshold=16 * 1024 * 1024,
-            max_workers=6,
-            retry_backoff=0.8,
+        super().__init__(
+            output_dir,
+            cobalt_api_url=COBALT_API_URL,
+            cobalt_api_key=COBALT_API_KEY,
+            fetch_cobalt_data_func=lambda *args, **kwargs: fetch_cobalt_data(*args, **kwargs),
+            retry_async_operation_func=lambda *args, **kwargs: retry_async_operation(*args, **kwargs),
         )
-        self._downloader = ResilientDownloader(output_dir, config=config, source="soundcloud")
-
-    async def fetch_track(self, url: str) -> Optional[SoundCloudTrack]:
-        payload = {
-            "url": url,
-            "downloadMode": "audio",
-            "audioFormat": "mp3",
-            "audioBitrate": "128",
-            "alwaysProxy": True,
-            "localProcessing": "preferred",
-            "disableMetadata": False,
-        }
-        data = await fetch_cobalt_data(
-            COBALT_API_URL,
-            COBALT_API_KEY,
-            payload,
-            source="soundcloud",
-            timeout=20,
-            attempts=3,
-            retry_delay=0.0,
-        )
-        if not data:
-            return None
-        return parse_soundcloud_track(data, url)
-
-    async def download_media(
-        self,
-        url: str,
-        filename: str,
-        *,
-        user_id: Optional[int] = None,
-        request_id: Optional[str] = None,
-        size_hint: Optional[int] = None,
-        on_queued=None,
-        on_progress=None,
-        on_retry=None,
-    ) -> Optional[DownloadMetrics]:
-        async def _download_once():
-            return await self._downloader.download(
-                url,
-                filename,
-                user_id=user_id,
-                request_id=request_id,
-                size_hint=size_hint,
-                on_queued=on_queued,
-                on_progress=on_progress,
-            )
-
-        try:
-            return await retry_async_operation(
-                _download_once,
-                attempts=3,
-                delay_seconds=2.0,
-                retry_on_exception=lambda exc: not isinstance(exc, (DownloadRateLimitError, DownloadQueueBusyError)),
-                on_retry=on_retry,
-            )
-        except (DownloadRateLimitError, DownloadQueueBusyError):
-            raise
-        except DownloadError as exc:
-            logging.error("Error downloading SoundCloud media: url=%s error=%s", url, exc)
-            return None
 
 
 soundcloud_service = SoundCloudService(OUTPUT_DIR)
@@ -266,22 +89,30 @@ soundcloud_service = SoundCloudService(OUTPUT_DIR)
     F.text.regexp(SOUNDCLOUD_URL_REGEX, mode="search") | F.caption.regexp(SOUNDCLOUD_URL_REGEX, mode="search")
 )
 @with_message_logging("soundcloud", "message")
-async def process_soundcloud(message: types.Message):
+async def process_soundcloud(message: types.Message, direct_url: Optional[str] = None):
     status_message: Optional[types.Message] = None
     audio_path: Optional[str] = None
+    request_lease = None
     try:
         business_id = message.business_connection_id
         show_service_status = business_id is None
-        text = get_message_text(message)
-        match = re.search(SOUNDCLOUD_URL_REGEX, text)
-        if not match:
-            return
-        source_url = strip_soundcloud_url(match.group(0))
+        if direct_url:
+            source_url = strip_soundcloud_url(direct_url)
+        else:
+            text = get_message_text(message)
+            match = re.search(SOUNDCLOUD_URL_REGEX, text)
+            if not match:
+                return
+            source_url = strip_soundcloud_url(match.group(0))
 
-        logging.info("SoundCloud request: user_id=%s url=%s", message.from_user.id, source_url)
+        request_lease = await claim_message_request(message, service="soundcloud", url=source_url)
+        if request_lease is None:
+            return
+
+        logging.info("SoundCloud request: user_id=%s url=%s", message.from_user.id, summarize_url_for_log(source_url))
         await send_analytics(user_id=message.from_user.id, chat_type=message.chat.type, action_name="soundcloud_audio")
         await react_to_message(message, "\U0001F47E", business_id=business_id)
-        user_settings = await get_user_settings(message)
+        user_settings = await load_user_settings(db, message)
         bot_url = await get_bot_url(bot)
         bot_avatar = await get_bot_avatar_thumbnail(bot)
         if show_service_status:
@@ -303,6 +134,7 @@ async def process_soundcloud(message: types.Message):
                 **send_kwargs,
             )
             await maybe_delete_user_message(message, user_settings["delete_message"])
+            request_lease.mark_success()
             return
 
         track = await soundcloud_service.fetch_track(source_url)
@@ -313,21 +145,15 @@ async def process_soundcloud(message: types.Message):
         timestamp = datetime.datetime.now().strftime("%Y%m%d%H%M%S")
         request_id = f"soundcloud_audio:{message.chat.id}:{message.message_id}:{track.id}"
         audio_name = f"{track.id}_{timestamp}_soundcloud_audio.mp3"
-        progress_state = {"last": 0.0}
 
-        async def on_progress(progress: DownloadProgress):
-            now = time.monotonic()
-            if not progress.done and now - progress_state["last"] < 1.0:
-                return
-            progress_state["last"] = now
-            await safe_edit_text(status_message, build_progress_status("SoundCloud audio", progress))
+        async def _edit_status(text: str) -> None:
+            await safe_edit_text(status_message, text)
 
-        async def on_retry(failed_attempt: int, total_attempts: int, _error):
-            if show_service_status and failed_attempt >= 2:
-                await safe_edit_text(
-                    status_message,
-                    bm.retrying_again_status(failed_attempt + 1, total_attempts),
-                )
+        on_progress = make_status_text_progress_updater("SoundCloud audio", _edit_status)
+        on_retry = make_retry_status_notifier(
+            _edit_status,
+            enabled=show_service_status,
+        )
 
         audio_metrics = await soundcloud_service.download_media(
             track.audio_url,
@@ -371,6 +197,7 @@ async def process_soundcloud(message: types.Message):
                 raise
 
         await maybe_delete_user_message(message, user_settings["delete_message"])
+        request_lease.mark_success()
         try:
             await db.add_file(cache_key, sent.audio.file_id, "audio")
         except Exception as exc:
@@ -390,15 +217,17 @@ async def process_soundcloud(message: types.Message):
         logging.exception("Error processing SoundCloud request: error=%s", exc)
         await handle_download_error(message, business_id=message.business_connection_id)
     finally:
+        if request_lease is not None:
+            request_lease.finish()
         await safe_delete_message(status_message)
         if audio_path:
             await remove_file(audio_path)
         await update_info(message)
 
 
-async def process_soundcloud_url(message: types.Message):
+async def process_soundcloud_url(message: types.Message, url: Optional[str] = None):
     """Backward-compatible entrypoint used by pending-request flow."""
-    await process_soundcloud(message)
+    await process_soundcloud(message, direct_url=url)
 
 
 @router.inline_query(F.query.regexp(SOUNDCLOUD_URL_REGEX, mode="search"))
@@ -451,7 +280,7 @@ async def inline_soundcloud_query(query: types.InlineQuery):
         logging.exception(
             "Error processing SoundCloud inline query: user_id=%s query=%s error=%s",
             query.from_user.id,
-            query.query,
+            summarize_text_for_log(query.query),
             exc,
         )
         await query.answer([], cache_time=1, is_personal=True)
@@ -463,10 +292,15 @@ async def _send_inline_soundcloud_audio(
     token: str,
     inline_message_id: str,
     actor_name: str,
+    actor_user_id: int,
     request_event_id: str,
     duplicate_handler: str,
 ) -> None:
-    request = claim_inline_video_request_for_send(token, duplicate_handler=duplicate_handler)
+    request = claim_inline_video_request_for_send(
+        token,
+        duplicate_handler=duplicate_handler,
+        actor_user_id=actor_user_id,
+    )
     if request is None:
         return
 
@@ -495,16 +329,10 @@ async def _send_inline_soundcloud_audio(
             timestamp = datetime.datetime.now().strftime("%Y%m%d%H%M%S")
             request_id = f"soundcloud_inline:{request.owner_user_id}:{request_event_id}:{track.id}"
             audio_name = f"{track.id}_{timestamp}_soundcloud_inline.mp3"
-            progress_state = {"last": 0.0}
 
             await _edit_inline_status(bm.downloading_audio_status())
 
-            async def on_progress(progress: DownloadProgress):
-                now = time.monotonic()
-                if not progress.done and now - progress_state["last"] < 1.0:
-                    return
-                progress_state["last"] = now
-                await _edit_inline_status(build_progress_status("SoundCloud audio", progress))
+            on_progress = make_status_text_progress_updater("SoundCloud audio", _edit_inline_status)
 
             metrics = await soundcloud_service.download_media(
                 track.audio_url,
@@ -587,6 +415,7 @@ async def chosen_inline_soundcloud_result(result: types.ChosenInlineResult):
         token=token,
         inline_message_id=result.inline_message_id,
         actor_name=result.from_user.full_name,
+        actor_user_id=getattr(result.from_user, "id", None),
         request_event_id=result.result_id,
         duplicate_handler="chosen",
     )
@@ -606,9 +435,13 @@ async def send_inline_soundcloud_audio_callback(call: types.CallbackQuery):
             token=token,
             inline_message_id=call.inline_message_id,
             actor_name=call.from_user.full_name,
+            actor_user_id=call.from_user.id,
             request_event_id=str(call.id),
             duplicate_handler="callback",
         )
+    except PermissionError:
+        await call.answer(bm.something_went_wrong(), show_alert=True)
+        return
     except ValueError as exc:
         if str(exc) == "already_processing":
             await call.answer(bm.inline_video_already_processing(), show_alert=False)

@@ -9,14 +9,22 @@ BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 if BASE_DIR not in sys.path:
     sys.path.append(BASE_DIR)
 
-from services.db import Base
+from services.storage.db import Base  # noqa: E402
 
 
 config = context.config
 target_metadata = Base.metadata
 
-if config.config_file_name:
-    fileConfig(config.config_file_name)
+
+def _configure_alembic_logging() -> None:
+    if not config.config_file_name:
+        return
+    if config.attributes.get("skip_logging_config"):
+        return
+    fileConfig(config.config_file_name, disable_existing_loggers=False)
+
+
+_configure_alembic_logging()
 
 
 def run_migrations_offline():

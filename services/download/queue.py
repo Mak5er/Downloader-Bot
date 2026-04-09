@@ -42,6 +42,13 @@ class QueueMetricSnapshot:
     queue_wait_p95_ms: float
 
 
+@dataclass(slots=True)
+class QueueLoadSnapshot:
+    queued_jobs: int
+    active_jobs: int
+    active_workers: int
+
+
 @dataclass(order=True)
 class _QueuedJob:
     priority: int
@@ -116,10 +123,18 @@ class AdaptiveDownloadQueue:
         self._idle_scale_down_seconds = 40.0
         self._last_non_empty_queue = time.monotonic()
         self._completed_jobs = 0
+        self._active_jobs = 0
 
     @property
     def active_workers(self) -> int:
         return len(self._workers)
+
+    def load_snapshot(self) -> QueueLoadSnapshot:
+        return QueueLoadSnapshot(
+            queued_jobs=self._queue.qsize(),
+            active_jobs=max(0, self._active_jobs),
+            active_workers=self.active_workers,
+        )
 
     async def submit(
         self,
@@ -295,6 +310,7 @@ class AdaptiveDownloadQueue:
 
             started = time.monotonic()
             queue_wait = max(0.0, started - job.created_at)
+            self._active_jobs += 1
 
             try:
                 assert job.runner is not None
@@ -306,6 +322,7 @@ class AdaptiveDownloadQueue:
                 if job.future and not job.future.done():
                     job.future.set_result(result)
             finally:
+                self._active_jobs = max(0, self._active_jobs - 1)
                 self._queue.task_done()
                 if job.user_id is not None:
                     if job.request_key is not None:

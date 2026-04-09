@@ -1,12 +1,15 @@
 import asyncio
+import hashlib
 import json
 import logging
 import os
+import re
 from contextlib import contextmanager
 from contextvars import ContextVar, Token
 from datetime import datetime
 from logging.handlers import RotatingFileHandler
 from typing import Any, Iterator
+from urllib.parse import urlsplit
 
 import colorlog
 
@@ -30,9 +33,62 @@ _DEFAULT_TEXT_FIELDS = {
     "chat_type": "-",
     "task_name": "-",
     "duration_ms": "-",
+    "text_context": "",
+    "text_context_block": "",
+    "text_message_block": "",
 }
 
 _STANDARD_RECORD_ATTRS = set(vars(logging.makeLogRecord({})).keys()) | {"message", "asctime"}
+_TEXT_RESERVED_FIELDS = _STANDARD_RECORD_ATTRS | {
+    "service",
+    "flow",
+    "request_id",
+    "event_name",
+    "kind",
+    "user_id",
+    "chat_type",
+    "task_name",
+    "duration_ms",
+    "text_context",
+    "text_context_block",
+    "text_message_block",
+}
+
+_TEXT_BASE_FIELD_ORDER = (
+    "service",
+    "flow",
+    "request_id",
+    "event_name",
+    "user_id",
+    "chat_type",
+    "duration_ms",
+)
+_TEXT_DYNAMIC_FIELD_PRIORITY = (
+    "bot_username",
+    "entrypoint",
+    "source",
+    "url",
+    "path",
+    "file_id",
+    "filename",
+    "extra_filename",
+    "size_hint",
+    "size",
+    "elapsed",
+    "count",
+    "workers",
+    "max_workers",
+    "queue_cap",
+    "queue_depth",
+    "priority",
+    "position",
+    "retry_after",
+)
+_TEXT_DYNAMIC_FIELD_MAX = 5
+_TEXT_VALUE_MAX_LENGTH = 120
+_LOG_HASH_LENGTH = 10
+_URL_RE = re.compile(r"https?://\S+", re.IGNORECASE)
+_URL_PATH_NOISE = {"status", "statuses", "video", "watch", "reel", "reels", "p"}
 
 
 def _sanitize_field_key(key: str) -> str:
@@ -48,6 +104,100 @@ def _sanitize_mapping(values: dict[str, Any]) -> dict[str, Any]:
             continue
         sanitized[_sanitize_field_key(str(key))] = value
     return sanitized
+
+
+def _serialize_text_field_value(value: Any) -> str:
+    if isinstance(value, str):
+        rendered = value
+        if len(rendered) > _TEXT_VALUE_MAX_LENGTH:
+            rendered = f"{rendered[:_TEXT_VALUE_MAX_LENGTH - 1]}…"
+        if rendered and all(ch not in rendered for ch in (' ', '"', "\n", "\r", "\t")):
+            return rendered
+        return json.dumps(rendered, ensure_ascii=False)
+    if isinstance(value, (int, float, bool)):
+        return str(value)
+    rendered = json.dumps(value, ensure_ascii=False, sort_keys=True, default=str)
+    if len(rendered) > _TEXT_VALUE_MAX_LENGTH:
+        rendered = f"{rendered[:_TEXT_VALUE_MAX_LENGTH - 1]}…"
+    return rendered
+
+
+def _short_hash(value: str) -> str:
+    return hashlib.sha256(value.encode("utf-8", errors="ignore")).hexdigest()[:_LOG_HASH_LENGTH]
+
+
+def summarize_url_for_log(url: Any) -> str:
+    if not isinstance(url, str):
+        return "-"
+    candidate = url.strip()
+    if not candidate:
+        return "-"
+
+    parsed = urlsplit(candidate if "://" in candidate else f"https://{candidate}")
+    host = (parsed.netloc or "").lower() or "url"
+    segments = [
+        segment
+        for segment in (parsed.path or "").split("/")
+        if segment and segment.lower() not in _URL_PATH_NOISE
+    ]
+    hint = segments[-1][:24] if segments else "root"
+    return f"{host}|{hint}|{_short_hash(candidate)}"
+
+
+def summarize_text_for_log(text: Any) -> str:
+    if not isinstance(text, str):
+        return "-"
+    candidate = text.strip()
+    if not candidate:
+        return "-"
+
+    match = _URL_RE.search(candidate)
+    if match:
+        return summarize_url_for_log(match.group(0))
+    return f"text|len={len(candidate)}|{_short_hash(candidate)}"
+
+
+def _extract_dynamic_text_fields(record: logging.LogRecord) -> dict[str, Any]:
+    return {
+        key: value
+        for key, value in record.__dict__.items()
+        if key not in _TEXT_RESERVED_FIELDS
+        and value not in (None, "", "-")
+    }
+
+
+def _is_meaningful_text_value(value: Any) -> bool:
+    return value not in (None, "", "-")
+
+
+def _ordered_dynamic_text_fields(dynamic_fields: dict[str, Any]) -> list[tuple[str, Any]]:
+    priority_map = {key: index for index, key in enumerate(_TEXT_DYNAMIC_FIELD_PRIORITY)}
+    return sorted(
+        dynamic_fields.items(),
+        key=lambda item: (priority_map.get(item[0], len(priority_map)), item[0]),
+    )
+
+
+def _build_text_context(record: logging.LogRecord) -> str:
+    fields: list[str] = []
+
+    for key in _TEXT_BASE_FIELD_ORDER:
+        value = getattr(record, key, None)
+        if not _is_meaningful_text_value(value):
+            continue
+        rendered_key = "event" if key == "event_name" else key
+        fields.append(f"{rendered_key}={_serialize_text_field_value(value)}")
+
+    dynamic_items = _ordered_dynamic_text_fields(_extract_dynamic_text_fields(record))
+    if dynamic_items:
+        visible_items = dynamic_items[:_TEXT_DYNAMIC_FIELD_MAX]
+        for key, value in visible_items:
+            fields.append(f"{key}={_serialize_text_field_value(value)}")
+        remaining = len(dynamic_items) - len(visible_items)
+        if remaining > 0:
+            fields.append(f"more=+{remaining}")
+
+    return " ".join(fields)
 
 
 class LocalTimeFormatter(logging.Formatter):
@@ -79,13 +229,7 @@ class JsonLinesFormatter(logging.Formatter):
         if duration_ms not in (None, "-", ""):
             payload["duration_ms"] = duration_ms
 
-        extra = {
-            key: value
-            for key, value in record.__dict__.items()
-            if key not in _STANDARD_RECORD_ATTRS
-            and key not in payload
-            and value not in (None, "", "-")
-        }
+        extra = _extract_dynamic_text_fields(record)
         if extra:
             payload["extra"] = extra
 
@@ -118,6 +262,16 @@ class ContextFilter(logging.Filter):
             record.duration_ms = f"{duration_ms:.2f}"
         elif duration_ms in (None, ""):
             record.duration_ms = "-"
+
+        record.text_context = _build_text_context(record)
+        record.text_context_block = f" | {record.text_context}" if record.text_context else ""
+
+        message = record.getMessage()
+        event_name = getattr(record, "event_name", None)
+        if _is_meaningful_text_value(event_name) and message == event_name:
+            record.text_message_block = ""
+        else:
+            record.text_message_block = f" | {message}" if message else ""
 
         return True
 
@@ -199,14 +353,10 @@ class ContextLoggerAdapter(logging.LoggerAdapter):
 
 
 CONSOLE_FORMAT = (
-    "%(log_color)s%(asctime)s | %(levelname)s | %(name)s | "
-    "%(service)s | %(flow)s | %(request_id)s | %(message)s%(reset)s"
+    "%(log_color)s%(asctime)s | %(levelname)s | %(name)s%(text_context_block)s%(text_message_block)s%(reset)s"
 )
 FILE_FORMAT = (
-    "%(asctime)s | %(levelname)s | %(name)s | "
-    "service=%(service)s flow=%(flow)s request_id=%(request_id)s "
-    "event=%(event_name)s kind=%(kind)s user_id=%(user_id)s chat_type=%(chat_type)s "
-    "task=%(task_name)s duration_ms=%(duration_ms)s | %(message)s"
+    "%(asctime)s | %(levelname)s | %(name)s%(text_context_block)s%(text_message_block)s"
 )
 
 

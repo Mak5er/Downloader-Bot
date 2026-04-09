@@ -1,4 +1,3 @@
-import re
 from typing import Any, Awaitable, Callable, Dict
 
 from aiogram import BaseMiddleware
@@ -8,16 +7,9 @@ from aiogram.types import Message
 
 import keyboards as kb
 import messages as bm
-from services.pending_requests import PendingRequest, get_pending, set_pending
-
-SUPPORTED_LINK_RE = re.compile(
-    r"(https?://(www\.)?(youtube|youtu|youtube-nocookie)\.(com|be)/\S+"
-    r"|https?://(www\.)?(twitter|x)\.com/\S+"
-    r"|https?://t\.co/\S+"
-    r"|https?://(www\.)?instagram\.com/\S+"
-    r"|https?://(www\.|vm\.|vt\.|vn\.)?tiktok\.com/\S+)",
-    re.IGNORECASE,
-)
+from services.links.detection import extract_supported_link
+from services.runtime.pending_requests import PendingRequest, get_pending, set_pending
+from services.runtime.request_dedupe import same_request
 
 _bot_username: str | None = None
 
@@ -39,8 +31,10 @@ class PrivateChatGuardMiddleware(BaseMiddleware):
             return await handler(event, data)
 
         text = event.text or event.caption or ""
-        if not text or not SUPPORTED_LINK_RE.search(text):
+        detected = extract_supported_link(text)
+        if detected is None:
             return await handler(event, data)
+        service, source_url = detected
 
         bot = data.get("bot")
         if not bot:
@@ -51,6 +45,9 @@ class PrivateChatGuardMiddleware(BaseMiddleware):
             return await handler(event, data)
         except (TelegramForbiddenError, TelegramNotFound, TelegramBadRequest):
             pending = get_pending(event.from_user.id)
+            if pending and same_request(pending.service, pending.url, service, source_url):
+                return None
+
             if pending:
                 try:
                     await bot.delete_message(pending.notice_chat_id, pending.notice_message_id)
@@ -68,9 +65,12 @@ class PrivateChatGuardMiddleware(BaseMiddleware):
             set_pending(
                 event.from_user.id,
                 PendingRequest(
-                    message=event,
+                    service=service,
+                    url=source_url,
                     notice_chat_id=notice.chat.id,
                     notice_message_id=notice.message_id,
+                    source_chat_id=getattr(event.chat, "id", None),
+                    source_message_id=getattr(event, "message_id", None),
                 ),
             )
             return None

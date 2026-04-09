@@ -1,10 +1,11 @@
 import datetime
 from unittest.mock import AsyncMock
+from unittest.mock import Mock
 
 import pytest
 
 from handlers import user
-from services.db import StatsSnapshot
+from services.storage.db import StatsSnapshot
 
 
 class FixedDateTime(datetime.datetime):
@@ -17,9 +18,11 @@ class FixedDateTime(datetime.datetime):
 def clear_stats_caches():
     user._stats_snapshot_cache.clear()
     user._stats_chart_cache.clear()
+    user._stats_chart_warmup_tasks.clear()
     yield
     user._stats_snapshot_cache.clear()
     user._stats_chart_cache.clear()
+    user._stats_chart_warmup_tasks.clear()
 
 
 @pytest.mark.parametrize(
@@ -115,6 +118,7 @@ async def test_fetch_stats_snapshot_refreshes_and_clears_chart_cache(monkeypatch
         {"get_download_stats": AsyncMock(return_value=StatsSnapshot(total_downloads=1))},
     )()
     monkeypatch.setattr(user, "db", fake_db)
+    monkeypatch.setattr(user, "_schedule_stats_chart_warmup", lambda period, snapshot: None)
     user._stats_snapshot_cache["Week"] = (0.0, StatsSnapshot(total_downloads=9))
     user._stats_chart_cache[("Week", "total")] = (user.time.monotonic(), b"stale")
 
@@ -122,6 +126,19 @@ async def test_fetch_stats_snapshot_refreshes_and_clears_chart_cache(monkeypatch
 
     assert ("Week", "total") not in user._stats_chart_cache
     fake_db.get_download_stats.assert_awaited_once_with("Week")
+
+
+@pytest.mark.asyncio
+async def test_fetch_stats_snapshot_starts_chart_warmup(monkeypatch):
+    snapshot = StatsSnapshot(total_downloads=4)
+    fake_db = type("FakeDb", (), {"get_download_stats": AsyncMock(return_value=snapshot)})()
+    warmup_calls = []
+    monkeypatch.setattr(user, "db", fake_db)
+    monkeypatch.setattr(user, "_schedule_stats_chart_warmup", lambda period, current_snapshot: warmup_calls.append((period, current_snapshot)))
+
+    await user.fetch_stats_snapshot("Month")
+
+    assert warmup_calls == [("Month", snapshot)]
 
 
 def test_render_stats_chart_returns_png_bytes_without_filesystem_writes(tmp_path, monkeypatch):
@@ -151,3 +168,22 @@ def test_render_stats_chart_uses_cache(monkeypatch):
     second = user.render_stats_chart(snapshot, "Week", "total")
 
     assert first == second
+
+
+@pytest.mark.asyncio
+async def test_render_stats_offloads_chart_generation_to_thread(monkeypatch):
+    snapshot = StatsSnapshot(total_downloads=8)
+    fake_fetch = AsyncMock(return_value=snapshot)
+    fake_to_thread = AsyncMock(return_value=b"chart")
+    fake_render = Mock(return_value=b"chart")
+
+    monkeypatch.setattr(user, "fetch_stats_snapshot", fake_fetch)
+    monkeypatch.setattr(user.asyncio, "to_thread", fake_to_thread)
+    monkeypatch.setattr(user, "render_stats_chart", fake_render)
+    monkeypatch.setattr(user, "build_stats_caption", lambda period, current_snapshot, mode: f"{period}:{mode}:{current_snapshot.total_downloads}")
+
+    chart_bytes, caption = await user._render_stats("Week", "split")
+
+    assert chart_bytes == b"chart"
+    assert caption == "Week:split:8"
+    fake_to_thread.assert_awaited_once_with(fake_render, snapshot, "Week", "split")

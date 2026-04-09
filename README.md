@@ -36,9 +36,9 @@ Set up the necessary configuration by creating a  `.env`  file and defining the 
 Example  `.env`  file:
 
     BOT_TOKEN = TELEGRAM_BOT_TOKEN
-    admin_id = BOT_ADMIN_ID
+    ADMIN_ID = BOT_ADMIN_ID
     DATABASE_URL = Pgsql connection uri
-    custom_api_url = YOUR_CUSTOM_TELEGRAM_API_URL
+    CUSTOM_API_URL = YOUR_CUSTOM_TELEGRAM_API_URL
     CHANNEL_ID = YOUR_CHANNEL_ID_FOR_INLINE_QUERY_VIDEOS
     COBALT_API_URL = YOUR_COBALT_NODE_URL
     COBALT_API_KEY = YOUR_COBALT_API_KEY
