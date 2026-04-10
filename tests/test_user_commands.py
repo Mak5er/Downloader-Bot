@@ -41,7 +41,13 @@ class DummyCallback:
     def __init__(self, data="stats:Week:total"):
         self.data = data
         self.message = DummyCallbackMessage()
-        self.from_user = SimpleNamespace(id=1)
+        self.from_user = SimpleNamespace(
+            id=1,
+            full_name="Tester",
+            username="tester",
+            language_code="uk",
+            is_bot=False,
+        )
         self.answer = AsyncMock()
 
 
@@ -262,6 +268,7 @@ async def test_change_setting_rejects_invalid_callback_payload(monkeypatch):
 async def test_change_setting_handles_invalid_db_setting_value(monkeypatch):
     call = DummyCallback("setting:captions:on")
     fake_db = SimpleNamespace(
+        upsert_chat=AsyncMock(),
         set_user_setting=AsyncMock(side_effect=ValueError("bad value")),
         get_user_setting=AsyncMock(),
     )
@@ -273,6 +280,43 @@ async def test_change_setting_handles_invalid_db_setting_value(monkeypatch):
     _, kwargs = call.answer.await_args
     assert kwargs["show_alert"] is True
     call.message.edit_reply_markup.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_change_setting_ensures_entities_and_updates_keyboard(monkeypatch):
+    call = DummyCallback("setting:captions:on")
+    fake_db = SimpleNamespace(
+        upsert_chat=AsyncMock(),
+        set_user_setting=AsyncMock(),
+        get_user_setting=AsyncMock(return_value="on"),
+    )
+    monkeypatch.setattr(user, "db", fake_db)
+
+    await user.change_setting(call)
+
+    assert fake_db.upsert_chat.await_count == 1
+    fake_db.set_user_setting.assert_awaited_once_with(user_id=1, field="captions", value="on")
+    fake_db.get_user_setting.assert_awaited_once_with(user_id=1, field="captions")
+    call.message.edit_reply_markup.assert_awaited_once()
+    call.answer.assert_awaited()
+
+
+@pytest.mark.asyncio
+async def test_change_setting_handles_unexpected_db_error(monkeypatch):
+    call = DummyCallback("setting:captions:on")
+    fake_db = SimpleNamespace(
+        upsert_chat=AsyncMock(),
+        set_user_setting=AsyncMock(side_effect=RuntimeError("db down")),
+        get_user_setting=AsyncMock(),
+    )
+    monkeypatch.setattr(user, "db", fake_db)
+
+    await user.change_setting(call)
+
+    call.message.edit_reply_markup.assert_not_awaited()
+    call.answer.assert_awaited_once()
+    _, kwargs = call.answer.await_args
+    assert kwargs["show_alert"] is True
 
 
 @pytest.mark.asyncio

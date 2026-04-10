@@ -72,6 +72,44 @@ async def _is_group_admin(chat_id: int, user_id: int) -> bool:
     return member.status in _admin_statuses()
 
 
+def _settings_chat_name(chat: types.Chat) -> str:
+    title = getattr(chat, "title", None) or getattr(chat, "full_name", None)
+    if title:
+        return title
+    first_name = getattr(chat, "first_name", None)
+    last_name = getattr(chat, "last_name", None)
+    name_parts = [part for part in (first_name, last_name) if part]
+    if name_parts:
+        return " ".join(name_parts)
+    return f"Chat {chat.id}"
+
+
+async def _ensure_settings_entities(
+    message: types.Message | None,
+    actor: types.User | None,
+) -> None:
+    if actor and not getattr(actor, "is_bot", False):
+        await db.upsert_chat(
+            user_id=actor.id,
+            user_name=getattr(actor, "full_name", None) or getattr(actor, "username", None) or str(actor.id),
+            user_username=getattr(actor, "username", None),
+            chat_type="private",
+            language=getattr(actor, "language_code", None),
+            status="active",
+        )
+
+    if message and message.chat and message.chat.type != ChatType.PRIVATE:
+        chat = message.chat
+        await db.upsert_chat(
+            user_id=chat.id,
+            user_name=_settings_chat_name(chat),
+            user_username=getattr(chat, "username", None),
+            chat_type="public",
+            language=getattr(chat, "language_code", None),
+            status="active",
+        )
+
+
 async def update_info(message: types.Message):
     user_id = message.from_user.id
     user_name = message.from_user.full_name
@@ -315,16 +353,26 @@ async def open_setting(call: types.CallbackQuery):
     else:
         target_id = call.from_user.id
 
-    current_value = await db.get_user_setting(user_id=target_id, field=field)
+    try:
+        await _ensure_settings_entities(call.message, call.from_user)
+        current_value = await db.get_user_setting(user_id=target_id, field=field)
+        keyboard = kb.return_field_keyboard(field, current_value)
 
-    keyboard = kb.return_field_keyboard(field, current_value)
-
-    await call.message.edit_text(
-        text=bm.get_field_text(field),
-        reply_markup=keyboard,
-        parse_mode="HTML"
-    )
-    await call.answer()
+        await call.message.edit_text(
+            text=bm.get_field_text(field),
+            reply_markup=keyboard,
+            parse_mode="HTML"
+        )
+        await call.answer()
+    except Exception as exc:
+        logging.exception(
+            "Failed to open settings field: field=%s user_id=%s chat_id=%s error=%s",
+            field,
+            getattr(call.from_user, "id", None),
+            getattr(getattr(call.message, "chat", None), "id", None),
+            exc,
+        )
+        await call.answer(bm.something_went_wrong(), show_alert=True)
 
 
 @router.callback_query(F.data.startswith("setting:"))
@@ -344,16 +392,38 @@ async def change_setting(call: types.CallbackQuery):
         target_id = call.from_user.id
 
     try:
+        await _ensure_settings_entities(call.message, call.from_user)
         await db.set_user_setting(user_id=target_id, field=field, value=value)
     except ValueError:
         await call.answer(bm.invalid_settings_option(), show_alert=True)
         return
+    except Exception as exc:
+        logging.exception(
+            "Failed to change setting: field=%s value=%s user_id=%s chat_id=%s error=%s",
+            field,
+            value,
+            getattr(call.from_user, "id", None),
+            getattr(getattr(call.message, "chat", None), "id", None),
+            exc,
+        )
+        await call.answer(bm.something_went_wrong(), show_alert=True)
+        return
 
-    current_value = await db.get_user_setting(user_id=target_id, field=field)
-    keyboard = kb.return_field_keyboard(field, current_value)
+    try:
+        current_value = await db.get_user_setting(user_id=target_id, field=field)
+        keyboard = kb.return_field_keyboard(field, current_value)
 
-    await call.message.edit_reply_markup(reply_markup=keyboard)
-    await call.answer()
+        await call.message.edit_reply_markup(reply_markup=keyboard)
+        await call.answer()
+    except Exception as exc:
+        logging.exception(
+            "Failed to refresh settings keyboard: field=%s user_id=%s chat_id=%s error=%s",
+            field,
+            getattr(call.from_user, "id", None),
+            getattr(getattr(call.message, "chat", None), "id", None),
+            exc,
+        )
+        await call.answer(bm.something_went_wrong(), show_alert=True)
 
 
 @router.callback_query(F.data == "noop")
