@@ -227,14 +227,14 @@ def test_request_dedupe_tracks_active_and_recent_requests(monkeypatch):
     now = 100.0
     monkeypatch.setattr(request_dedupe.time, "monotonic", lambda: now)
 
-    assert request_dedupe.claim_request(7, "instagram", "https://www.instagram.com/p/demo/?utm=1") == "accepted"
-    assert request_dedupe.claim_request(7, "instagram", "https://instagram.com/p/demo/") == "active"
+    assert request_dedupe.claim_request(7, -1001, "instagram", "https://www.instagram.com/p/demo/?utm=1") == "accepted"
+    assert request_dedupe.claim_request(7, -1001, "instagram", "https://instagram.com/p/demo/") == "active"
 
-    request_dedupe.finish_request(7, "instagram", "https://instagram.com/p/demo/", success=True)
-    assert request_dedupe.claim_request(7, "instagram", "https://instagram.com/p/demo/?share=1") == "recent"
+    request_dedupe.finish_request(7, -1001, "instagram", "https://instagram.com/p/demo/", success=True)
+    assert request_dedupe.claim_request(7, -1001, "instagram", "https://instagram.com/p/demo/?share=1") == "recent"
 
     now += request_dedupe._COMPLETED_TTL_SECONDS + 1.0
-    assert request_dedupe.claim_request(7, "instagram", "https://instagram.com/p/demo/") == "accepted"
+    assert request_dedupe.claim_request(7, -1001, "instagram", "https://instagram.com/p/demo/") == "accepted"
 
 
 def test_request_dedupe_releases_failed_requests_immediately(monkeypatch):
@@ -242,9 +242,19 @@ def test_request_dedupe_releases_failed_requests_immediately(monkeypatch):
     now = 200.0
     monkeypatch.setattr(request_dedupe.time, "monotonic", lambda: now)
 
-    assert request_dedupe.claim_request(3, "tiktok", "https://www.tiktok.com/@demo/video/1?lang=en") == "accepted"
-    request_dedupe.finish_request(3, "tiktok", "https://www.tiktok.com/@demo/video/1", success=False)
-    assert request_dedupe.claim_request(3, "tiktok", "https://www.tiktok.com/@demo/video/1?share=1") == "accepted"
+    assert request_dedupe.claim_request(3, -2001, "tiktok", "https://www.tiktok.com/@demo/video/1?lang=en") == "accepted"
+    request_dedupe.finish_request(3, -2001, "tiktok", "https://www.tiktok.com/@demo/video/1", success=False)
+    assert request_dedupe.claim_request(3, -2001, "tiktok", "https://www.tiktok.com/@demo/video/1?share=1") == "accepted"
+
+
+def test_request_dedupe_isolated_per_chat(monkeypatch):
+    request_dedupe.reset_request_tracking()
+    now = 300.0
+    monkeypatch.setattr(request_dedupe.time, "monotonic", lambda: now)
+
+    assert request_dedupe.claim_request(9, -3001, "youtube", "https://youtu.be/demo123") == "accepted"
+    assert request_dedupe.claim_request(9, -3002, "youtube", "https://www.youtube.com/watch?v=demo123") == "accepted"
+    assert request_dedupe.claim_request(9, -3001, "youtube", "https://www.youtube.com/watch?v=demo123") == "active"
 
 
 def test_request_dedupe_normalizes_youtube_and_twitter_variants():

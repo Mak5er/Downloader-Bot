@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import time
 from collections import OrderedDict
-from typing import Hashable, Literal
+from typing import Hashable, Literal, Optional
 from urllib.parse import parse_qs, urlparse, urlunparse
 
 from config import (
@@ -16,7 +16,7 @@ from services.platforms.soundcloud_media import strip_soundcloud_url
 from services.platforms.tiktok_common import strip_tiktok_tracking
 
 RequestClaimStatus = Literal["accepted", "active", "recent"]
-RequestFingerprint = tuple[int, str, str]
+RequestFingerprint = tuple[int, Optional[int], str, str]
 
 _ACTIVE_TTL_SECONDS = max(1.0, float(REQUEST_DEDUPE_ACTIVE_TTL_SECONDS))
 _COMPLETED_TTL_SECONDS = max(0.0, float(REQUEST_DEDUPE_COMPLETED_TTL_SECONDS))
@@ -51,8 +51,8 @@ def normalize_request_url(service: str, url: str) -> str:
     return _normalize_generic_url(raw_url)
 
 
-def build_request_fingerprint(user_id: int, service: str, url: str) -> RequestFingerprint:
-    return int(user_id), normalize_request_service(service), normalize_request_url(service, url)
+def build_request_fingerprint(user_id: int, chat_id: Optional[int], service: str, url: str) -> RequestFingerprint:
+    return int(user_id), int(chat_id) if chat_id is not None else None, normalize_request_service(service), normalize_request_url(service, url)
 
 
 def same_request(first_service: str, first_url: str, second_service: str, second_url: str) -> bool:
@@ -62,11 +62,11 @@ def same_request(first_service: str, first_url: str, second_service: str, second
     )
 
 
-def claim_request(user_id: int, service: str, url: str) -> RequestClaimStatus:
+def claim_request(user_id: int, chat_id: Optional[int], service: str, url: str) -> RequestClaimStatus:
     now = time.monotonic()
     _cleanup(now)
-    fingerprint = build_request_fingerprint(user_id, service, url)
-    if not fingerprint[2]:
+    fingerprint = build_request_fingerprint(user_id, chat_id, service, url)
+    if not fingerprint[3]:
         return "accepted"
 
     active_at = _active_requests.get(fingerprint)
@@ -85,11 +85,11 @@ def claim_request(user_id: int, service: str, url: str) -> RequestClaimStatus:
     return "accepted"
 
 
-def finish_request(user_id: int, service: str, url: str, *, success: bool) -> None:
+def finish_request(user_id: int, chat_id: Optional[int], service: str, url: str, *, success: bool) -> None:
     now = time.monotonic()
-    fingerprint = build_request_fingerprint(user_id, service, url)
+    fingerprint = build_request_fingerprint(user_id, chat_id, service, url)
     _active_requests.pop(fingerprint, None)
-    if success and fingerprint[2]:
+    if success and fingerprint[3]:
         _completed_requests[fingerprint] = now
         _completed_requests.move_to_end(fingerprint)
     _cleanup(now)
