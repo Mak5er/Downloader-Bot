@@ -2,6 +2,7 @@ import asyncio
 import logging as py_logging
 import os
 import time
+from dataclasses import dataclass
 from datetime import timedelta
 from pathlib import Path
 
@@ -41,6 +42,16 @@ _RUNTIME_LOG_FILES = (INFO_LOG, ERROR_LOG, EVENT_LOG, PERF_LOG)
 _DOWNLOADABLE_LOG_FILES = (INFO_LOG, ERROR_LOG)
 
 
+@dataclass(frozen=True, slots=True)
+class _DirectorySnapshot:
+    exists: bool
+    file_count: int
+    dir_count: int
+    total_bytes: int
+    oldest_file_age_seconds: float | None
+    newest_file_age_seconds: float | None
+
+
 def _is_admin_user(user_id: int | None) -> bool:
     return user_id is not None and int(user_id) in ADMINS_UID
 
@@ -67,6 +78,97 @@ async def _run_bounded(items, *, limit: int, worker):
             return await worker(item)
 
     return await asyncio.gather(*(_wrapped(item) for item in items))
+
+
+def _format_age(seconds: float | None) -> str:
+    if seconds is None:
+        return "n/a"
+    seconds = max(0, int(seconds))
+    if seconds < 60:
+        return f"{seconds}s ago"
+    minutes, sec = divmod(seconds, 60)
+    if minutes < 60:
+        return f"{minutes}m {sec}s ago"
+    hours, minutes = divmod(minutes, 60)
+    if hours < 24:
+        return f"{hours}h {minutes}m ago"
+    days, hours = divmod(hours, 24)
+    return f"{days}d {hours}h ago"
+
+
+def _format_average_bytes(total_bytes: int, total_count: int) -> str:
+    if total_count <= 0:
+        return "0 B"
+    return _format_bytes(int(total_bytes / total_count))
+
+
+def _classify_perf_bottleneck(queue_wait_p95_ms: float, processing_p95_ms: float) -> str:
+    if queue_wait_p95_ms > processing_p95_ms * 1.5:
+        return "queue-bound"
+    if processing_p95_ms > queue_wait_p95_ms * 1.5:
+        return "download-bound"
+    return "balanced"
+
+
+def _build_directory_snapshot(path_str: str, *, now: float | None = None) -> _DirectorySnapshot:
+    root = Path(path_str)
+    if not root.exists():
+        return _DirectorySnapshot(False, 0, 0, 0, None, None)
+
+    current_time = time.time() if now is None else now
+    file_count = 0
+    dir_count = 0
+    total_bytes = 0
+    oldest_mtime: float | None = None
+    newest_mtime: float | None = None
+
+    for current_root, dirnames, filenames in os.walk(root, topdown=True, followlinks=False):
+        current_path = Path(current_root)
+        if current_path != root:
+            dir_count += 1
+        for dirname in list(dirnames):
+            if (current_path / dirname).is_symlink():
+                dirnames.remove(dirname)
+        for filename in filenames:
+            file_path = current_path / filename
+            try:
+                stat = file_path.stat()
+            except OSError:
+                continue
+            file_count += 1
+            total_bytes += max(0, int(stat.st_size))
+            if oldest_mtime is None or stat.st_mtime < oldest_mtime:
+                oldest_mtime = stat.st_mtime
+            if newest_mtime is None or stat.st_mtime > newest_mtime:
+                newest_mtime = stat.st_mtime
+
+    return _DirectorySnapshot(
+        exists=True,
+        file_count=file_count,
+        dir_count=dir_count,
+        total_bytes=total_bytes,
+        oldest_file_age_seconds=(current_time - oldest_mtime) if oldest_mtime is not None else None,
+        newest_file_age_seconds=(current_time - newest_mtime) if newest_mtime is not None else None,
+    )
+
+
+def _build_log_size_lines() -> list[str]:
+    lines: list[str] = []
+    for path_str in _RUNTIME_LOG_FILES:
+        path = Path(path_str)
+        size = path.stat().st_size if path.exists() else 0
+        lines.append(f"{path.name}: {_format_bytes(size)}")
+    return lines
+
+
+async def _get_admin_counts() -> dict[str, int]:
+    return {
+        "user_count": await db.user_count(),
+        "private_chat_count": await db.private_chat_count(),
+        "group_chat_count": await db.group_chat_count(),
+        "active_user_count": await db.active_user_count(),
+        "inactive_user_count": await db.inactive_user_count(),
+    }
 
 
 def _is_path_within_root(path: Path, root: Path) -> bool:
@@ -199,55 +301,6 @@ class Admin(StatesGroup):
     write_chat_text = State()
 
 
-@router.message(Command("admin"), IsBotAdmin())
-async def admin(message: types.Message):
-    await bot.send_chat_action(message.chat.id, "typing")
-
-    if message.chat.type == 'private':
-        user_count = await db.user_count()
-        private_chat_count = await db.private_chat_count()
-        group_chat_count = await db.group_chat_count()
-        active_user_count = await db.active_user_count()
-        inactive_user_count = await db.inactive_user_count()
-
-        await message.answer(
-            text=bm.admin_panel(
-                user_count,
-                private_chat_count,
-                group_chat_count,
-                active_user_count,
-                inactive_user_count,
-            ),
-            reply_markup=kb.admin_keyboard(),
-            parse_mode='HTML')
-
-    else:
-        await message.answer(bm.not_groups())
-
-
-@router.message(Command("perf"), IsBotAdmin())
-async def perf_metrics(message: types.Message):
-    queue = get_download_queue()
-    snapshot = await queue.metrics_snapshot()
-    if not snapshot:
-        await message.answer(bm.no_queue_metrics_yet())
-        return
-
-    lines = ["<b>Queue performance (p50/p95)</b>"]
-    for source in sorted(snapshot.keys()):
-        item = snapshot[source]
-        lines.append(
-            (
-                f"\n<b>{source}</b>\n"
-                f"Jobs: {item.count}\n"
-                f"Queue wait: {item.queue_wait_p50_ms:.0f}/{item.queue_wait_p95_ms:.0f} ms\n"
-                f"Processing: {item.processing_p50_ms:.0f}/{item.processing_p95_ms:.0f} ms"
-            )
-        )
-
-    await message.answer("\n".join(lines), parse_mode="HTML")
-
-
 def _format_bytes(num_bytes: int) -> str:
     units = ["B", "KB", "MB", "GB", "TB"]
     value = float(max(0, num_bytes))
@@ -260,31 +313,303 @@ def _format_bytes(num_bytes: int) -> str:
     return f"{value:.2f} TB"
 
 
-@router.message(Command("session"), IsBotAdmin())
-async def session_metrics(message: types.Message):
+def _render_session_text() -> str:
     snapshot = get_runtime_snapshot()
-    analytics_snapshot = get_analytics_runtime_snapshot()
     uptime = str(timedelta(seconds=int(snapshot.uptime_seconds)))
+    downloads_per_hour = (
+        snapshot.total_downloads / (snapshot.uptime_seconds / 3600.0)
+        if snapshot.uptime_seconds > 0 and snapshot.total_downloads > 0
+        else 0.0
+    )
     lines = [
         "<b>Runtime Session Stats</b>",
         f"Uptime: <b>{uptime}</b>",
-        f"Total downloads: <b>{snapshot.total_downloads}</b>",
+        f"Total downloads: <b>{snapshot.total_downloads}</b> ({downloads_per_hour:.1f}/h)",
         f"Videos: <b>{snapshot.total_videos}</b>",
         f"Audio: <b>{snapshot.total_audio}</b>",
         f"Other: <b>{snapshot.total_other}</b>",
         f"Traffic: <b>{_format_bytes(snapshot.total_bytes)}</b>",
-        f"Analytics drops: <b>{analytics_snapshot.dropped_events}</b>",
+        f"Avg download size: <b>{_format_average_bytes(snapshot.total_bytes, snapshot.total_downloads)}</b>",
+        f"Last download: <b>{_format_age((time.monotonic() - snapshot.last_download_monotonic) if snapshot.last_download_monotonic is not None else None)}</b>",
     ]
 
     if snapshot.by_source:
         lines.append("")
         lines.append("<b>By source:</b>")
-        for source, payload in sorted(snapshot.by_source.items()):
+        for source, payload in sorted(
+            snapshot.by_source.items(),
+            key=lambda item: (-int(item[1].get("count", 0) or 0), item[0]),
+        ):
+            count = int(payload.get("count", 0) or 0)
+            size_bytes = int(payload.get("bytes", 0) or 0)
+            share = (count / snapshot.total_downloads * 100.0) if snapshot.total_downloads else 0.0
             lines.append(
-                f"{source}: {payload.get('count', 0)} | {_format_bytes(int(payload.get('bytes', 0) or 0))}"
+                f"{source}: {count} ({share:.0f}%) | {_format_bytes(size_bytes)} | avg {_format_average_bytes(size_bytes, count)}"
             )
 
-    await message.answer("\n".join(lines), parse_mode="HTML")
+    return "\n".join(lines)
+
+
+async def _render_perf_text(*, include_load: bool = True) -> str:
+    queue = get_download_queue()
+    snapshot = await queue.metrics_snapshot()
+    if not snapshot:
+        return bm.no_queue_metrics_yet()
+
+    lines = ["<b>Queue Performance</b>"]
+    if include_load:
+        load = queue.load_snapshot()
+        lines.extend(
+            [
+                f"Queued jobs: <b>{load.queued_jobs}</b>",
+                f"Active jobs: <b>{load.active_jobs}</b>",
+                f"Workers: <b>{load.active_workers}</b>",
+            ]
+        )
+    lines.append(f"Tracked sources: <b>{len(snapshot)}</b>")
+
+    sorted_sources = sorted(
+        snapshot.items(),
+        key=lambda item: max(item[1].queue_wait_p95_ms, item[1].processing_p95_ms),
+        reverse=True,
+    )
+    for source, item in sorted_sources:
+        bottleneck = _classify_perf_bottleneck(item.queue_wait_p95_ms, item.processing_p95_ms)
+        lines.append(
+            (
+                f"\n<b>{source}</b>\n"
+                f"Jobs: {item.count}\n"
+                f"Queue wait p50/p95: {item.queue_wait_p50_ms:.0f}/{item.queue_wait_p95_ms:.0f} ms\n"
+                f"Processing p50/p95: {item.processing_p50_ms:.0f}/{item.processing_p95_ms:.0f} ms\n"
+                f"Bottleneck: <b>{bottleneck}</b>"
+            )
+        )
+
+    return "\n".join(lines)
+
+
+async def _render_health_text(*, include_queue: bool = True, include_runtime_downloads: bool = True) -> str:
+    queue_snapshot = get_download_queue().load_snapshot()
+    runtime_snapshot = get_runtime_snapshot()
+    analytics_snapshot = get_analytics_runtime_snapshot()
+    uptime = str(timedelta(seconds=int(runtime_snapshot.uptime_seconds)))
+    lines = [
+        "<b>Bot Health</b>",
+        f"Uptime: <b>{uptime}</b>",
+        f"Last download: <b>{_format_age((time.monotonic() - runtime_snapshot.last_download_monotonic) if runtime_snapshot.last_download_monotonic is not None else None)}</b>",
+        f"Analytics drops: <b>{analytics_snapshot.dropped_events}</b>",
+        f"Last analytics drop: <b>{_format_age((time.monotonic() - analytics_snapshot.last_drop_monotonic) if analytics_snapshot.last_drop_monotonic is not None else None)}</b>",
+        "",
+        "<b>Logs</b>",
+        *_build_log_size_lines(),
+    ]
+    if include_runtime_downloads:
+        lines.insert(2, f"Runtime downloads: <b>{runtime_snapshot.total_downloads}</b>")
+    if include_queue:
+        lines.insert(
+            2,
+            (
+                f"Queue: <b>{queue_snapshot.queued_jobs}</b> queued / "
+                f"<b>{queue_snapshot.active_jobs}</b> active / "
+                f"<b>{queue_snapshot.active_workers}</b> workers"
+            ),
+        )
+    return "\n".join(lines)
+
+
+def _render_downloads_text(*, footer: str | None = None, include_cleanup_load: bool = True) -> str:
+    queue_snapshot = get_download_queue().load_snapshot()
+    snapshot = _build_directory_snapshot(OUTPUT_DIR)
+    cleanup_ready = queue_snapshot.active_jobs == 0 and queue_snapshot.queued_jobs == 0
+    lines = [
+        "<b>Downloads Storage</b>",
+        f"Path: <code>{OUTPUT_DIR}</code>",
+        f"Exists: <b>{'yes' if snapshot.exists else 'no'}</b>",
+        f"Files: <b>{snapshot.file_count}</b>",
+        f"Dirs: <b>{snapshot.dir_count}</b>",
+        f"Total size: <b>{_format_bytes(snapshot.total_bytes)}</b>",
+        f"Oldest file: <b>{_format_age(snapshot.oldest_file_age_seconds)}</b>",
+        f"Newest file: <b>{_format_age(snapshot.newest_file_age_seconds)}</b>",
+        "",
+        "<b>Cleanup status</b>",
+        f"Cleanup ready: <b>{'yes' if cleanup_ready else 'no'}</b>",
+    ]
+    if include_cleanup_load:
+        lines.insert(
+            -1,
+            f"Queue load: <b>{queue_snapshot.queued_jobs}</b> queued / <b>{queue_snapshot.active_jobs}</b> active",
+        )
+    if footer:
+        lines.extend(["", footer])
+    return "\n".join(lines)
+
+
+async def _render_ops_text() -> str:
+    health_text = await _render_health_text(include_queue=False, include_runtime_downloads=False)
+    perf_text = await _render_perf_text()
+    return f"{health_text}\n\n{perf_text}"
+
+
+def _render_runtime_storage_text(*, footer: str | None = None) -> str:
+    session_text = _render_session_text()
+    downloads_text = _render_downloads_text(footer=footer, include_cleanup_load=False)
+    return f"{session_text}\n\n{downloads_text}"
+
+
+async def _render_admin_panel(message: types.Message, *, edit: bool) -> None:
+    counts = await _get_admin_counts()
+    queue_snapshot = get_download_queue().load_snapshot()
+    runtime_snapshot = get_runtime_snapshot()
+    text = (
+        f"{bm.admin_panel(
+            counts['user_count'],
+            counts['private_chat_count'],
+            counts['group_chat_count'],
+            counts['active_user_count'],
+            counts['inactive_user_count'],
+        )}\n\n"
+        f"<b>Runtime now</b>\n"
+        f"Queue: <b>{queue_snapshot.queued_jobs}</b> queued / <b>{queue_snapshot.active_jobs}</b> active / <b>{queue_snapshot.active_workers}</b> workers\n"
+        f"Downloads this runtime: <b>{runtime_snapshot.total_downloads}</b>"
+    )
+    if edit:
+        await message.edit_text(text=text, reply_markup=kb.admin_keyboard(), parse_mode="HTML")
+    else:
+        await message.answer(text=text, reply_markup=kb.admin_keyboard(), parse_mode="HTML")
+
+
+async def _cleanup_downloads_once() -> str:
+    queue_snapshot = get_download_queue().load_snapshot()
+    if queue_snapshot.active_jobs > 0 or queue_snapshot.queued_jobs > 0:
+        return bm.downloads_cleanup_blocked(queue_snapshot.active_jobs, queue_snapshot.queued_jobs)
+    if not os.path.exists(OUTPUT_DIR):
+        return f"The folder '{OUTPUT_DIR}' does not exist."
+    removed_files, skipped_recent_files, removed_dirs = _cleanup_download_tree()
+    return bm.downloads_cleanup_finished(removed_files, removed_dirs, skipped_recent_files)
+
+
+@router.message(Command("admin"), IsBotAdmin())
+async def admin(message: types.Message):
+    await bot.send_chat_action(message.chat.id, "typing")
+
+    if message.chat.type == 'private':
+        await _render_admin_panel(message, edit=False)
+    else:
+        await message.answer(bm.not_groups())
+
+
+@router.message(Command("perf"), IsBotAdmin())
+async def perf_metrics(message: types.Message):
+    await message.answer(await _render_perf_text(), parse_mode="HTML")
+
+
+@router.message(Command("session"), IsBotAdmin())
+async def session_metrics(message: types.Message):
+    await message.answer(_render_session_text(), parse_mode="HTML")
+
+
+@router.callback_query(F.data == "admin_refresh")
+async def admin_refresh(call: types.CallbackQuery):
+    if not await _ensure_admin_callback(call):
+        return
+    await call.answer()
+    await _render_admin_panel(call.message, edit=True)
+
+
+@router.callback_query(F.data == "admin_ops")
+async def admin_ops(call: types.CallbackQuery):
+    if not await _ensure_admin_callback(call):
+        return
+    await call.answer()
+    await call.message.edit_text(
+        text=await _render_ops_text(),
+        reply_markup=kb.admin_detail_keyboard("admin_ops"),
+        parse_mode="HTML",
+    )
+
+
+@router.callback_query(F.data == "admin_runtime_storage")
+async def admin_runtime_storage(call: types.CallbackQuery):
+    if not await _ensure_admin_callback(call):
+        return
+    await call.answer()
+    queue_snapshot = get_download_queue().load_snapshot()
+    await call.message.edit_text(
+        text=_render_runtime_storage_text(),
+        reply_markup=kb.downloads_admin_keyboard(
+            can_cleanup=queue_snapshot.active_jobs == 0 and queue_snapshot.queued_jobs == 0,
+            refresh_callback="admin_runtime_storage",
+        ),
+        parse_mode="HTML",
+    )
+
+
+@router.callback_query(F.data == "admin_health")
+async def admin_health(call: types.CallbackQuery):
+    if not await _ensure_admin_callback(call):
+        return
+    await call.answer()
+    await call.message.edit_text(
+        text=await _render_health_text(),
+        reply_markup=kb.return_back_to_admin_keyboard(),
+        parse_mode="HTML",
+    )
+
+
+@router.callback_query(F.data == "admin_session")
+async def admin_session(call: types.CallbackQuery):
+    if not await _ensure_admin_callback(call):
+        return
+    await call.answer()
+    await call.message.edit_text(
+        text=_render_session_text(),
+        reply_markup=kb.return_back_to_admin_keyboard(),
+        parse_mode="HTML",
+    )
+
+
+@router.callback_query(F.data == "admin_perf")
+async def admin_perf(call: types.CallbackQuery):
+    if not await _ensure_admin_callback(call):
+        return
+    await call.answer()
+    await call.message.edit_text(
+        text=await _render_perf_text(),
+        reply_markup=kb.return_back_to_admin_keyboard(),
+        parse_mode="HTML",
+    )
+
+
+@router.callback_query(F.data == "admin_downloads")
+async def admin_downloads(call: types.CallbackQuery):
+    if not await _ensure_admin_callback(call):
+        return
+    await call.answer()
+    queue_snapshot = get_download_queue().load_snapshot()
+    await call.message.edit_text(
+        text=_render_downloads_text(),
+        reply_markup=kb.downloads_admin_keyboard(
+            can_cleanup=queue_snapshot.active_jobs == 0 and queue_snapshot.queued_jobs == 0
+        ),
+        parse_mode="HTML",
+    )
+
+
+@router.callback_query(F.data == "admin_cleanup_downloads")
+async def admin_cleanup_downloads(call: types.CallbackQuery):
+    if not await _ensure_admin_callback(call):
+        return
+    status_text = await _cleanup_downloads_once()
+    await call.answer("Cleanup finished" if "finished" in status_text else "Cleanup skipped")
+    queue_snapshot = get_download_queue().load_snapshot()
+    await call.message.edit_text(
+        text=_render_runtime_storage_text(footer=status_text),
+        reply_markup=kb.downloads_admin_keyboard(
+            can_cleanup=queue_snapshot.active_jobs == 0 and queue_snapshot.queued_jobs == 0,
+            refresh_callback="admin_runtime_storage",
+        ),
+        parse_mode="HTML",
+    )
 
 
 @router.callback_query(F.data == 'delete_log')
@@ -420,7 +745,22 @@ async def admin_collect_chat_id(message: types.Message, state: FSMContext):
         return
 
     await state.update_data(target_chat_id=chat_id)
-    await message.answer(bm.enter_chat_message(), reply_markup=kb.cancel_keyboard())
+    known_info = await db.get_user_info(chat_id)
+    preview_lines: list[str] = []
+    if known_info:
+        preview_lines.append(
+            bm.known_chat_target(
+                chat_id,
+                known_info[0],
+                known_info[1],
+                known_info[2],
+            )
+        )
+    else:
+        preview_lines.append(bm.unknown_chat_target(chat_id))
+    preview_lines.append("")
+    preview_lines.append(bm.enter_chat_message())
+    await message.answer("\n".join(preview_lines), reply_markup=kb.cancel_keyboard(), parse_mode="HTML")
     await state.set_state(Admin.write_chat_text)
 
 
@@ -507,8 +847,8 @@ async def back_to_admin(call: types.CallbackQuery):
     if not await _ensure_admin_callback(call):
         return
 
-    await bot.delete_message(call.message.chat.id, call.message.message_id)
-    await admin(call.message)
+    await call.answer()
+    await _render_admin_panel(call.message, edit=True)
 
 
 @router.callback_query(F.data == 'send_to_all')
@@ -516,8 +856,24 @@ async def send_to_all_callback(call: types.CallbackQuery, state: FSMContext):
     if not await _ensure_admin_callback(call):
         return
 
-    await call.message.edit_text(text=bm.mailing_message(),
-                                 reply_markup=kb.cancel_keyboard())
+    users = await db.get_all_users_info()
+    active_users = sum(1 for user in users if (user.status or "inactive") == "active")
+    banned_users = sum(1 for user in users if (user.status or "inactive") == "ban")
+    private_users = sum(1 for user in users if user.chat_type == "private")
+    group_users = sum(1 for user in users if user.chat_type != "private")
+
+    await call.message.edit_text(
+        text=bm.mailing_audience_preview(
+            len(users) - banned_users,
+            active_users,
+            len(users) - active_users - banned_users,
+            banned_users,
+            private_users,
+            group_users,
+        ),
+        reply_markup=kb.cancel_keyboard(),
+        parse_mode="HTML",
+    )
     await state.set_state(Mailing.send_to_all_message)
     await call.answer()
 
@@ -605,22 +961,7 @@ async def write_message(message: types.Message, state: FSMContext):
 
 async def clear_downloads_and_notify():
     try:
-        queue_snapshot = get_download_queue().load_snapshot()
-        if queue_snapshot.active_jobs > 0 or queue_snapshot.queued_jobs > 0:
-            message = (
-                f"Skipped clearing '{OUTPUT_DIR}': "
-                f"active_jobs={queue_snapshot.active_jobs}, queued_jobs={queue_snapshot.queued_jobs}."
-            )
-        elif os.path.exists(OUTPUT_DIR):
-            removed_files, skipped_recent_files, removed_dirs = _cleanup_download_tree()
-            message = (
-                f"The folder '{OUTPUT_DIR}' has been cleaned. "
-                f"Removed {removed_files} files and {removed_dirs} directories; "
-                f"skipped {skipped_recent_files} recent files."
-            )
-        else:
-            message = f"The folder '{OUTPUT_DIR}' does not exist."
-
+        message = await _cleanup_downloads_once()
     except Exception as e:
         message = f"An error occurred while clearing the folder: {e}"
 

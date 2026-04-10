@@ -19,6 +19,7 @@ class RuntimeStatsSnapshot:
     total_audio: int
     total_other: int
     total_bytes: int
+    last_download_monotonic: float | None
     by_source: dict[str, dict[str, int]]
 
 
@@ -29,11 +30,12 @@ _total_videos = 0
 _total_audio = 0
 _total_other = 0
 _total_bytes = 0
+_last_download_monotonic: float | None = None
 _by_source: dict[str, dict[str, int]] = {}
 
 
 def record_download(source: str, metrics: Any) -> None:
-    global _total_downloads, _total_videos, _total_audio, _total_other, _total_bytes
+    global _total_downloads, _total_videos, _total_audio, _total_other, _total_bytes, _last_download_monotonic
 
     src = (source or "unknown").strip().lower()
     size = int(getattr(metrics, "size", 0) or 0)
@@ -50,6 +52,7 @@ def record_download(source: str, metrics: Any) -> None:
     with _lock:
         _total_downloads += 1
         _total_bytes += max(0, size)
+        _last_download_monotonic = time.monotonic()
 
         if kind == "video":
             _total_videos += 1
@@ -74,5 +77,6 @@ def get_runtime_snapshot() -> RuntimeStatsSnapshot:
             total_audio=_total_audio,
             total_other=_total_other,
             total_bytes=_total_bytes,
+            last_download_monotonic=_last_download_monotonic,
             by_source=by_source_copy,
         )

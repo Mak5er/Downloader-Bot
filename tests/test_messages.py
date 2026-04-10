@@ -109,6 +109,9 @@ def test_user_message_formatters_include_dynamic_values():
         (admin_bm.invalid_chat_id, "must be a number"),
         (admin_bm.enter_chat_message, "Enter the message"),
         (admin_bm.chat_message_sending, "Sending message"),
+        (lambda: admin_bm.unknown_chat_target(77), "not in the local database"),
+        (lambda: admin_bm.downloads_cleanup_blocked(1, 2), "downloads are still running"),
+        (lambda: admin_bm.downloads_cleanup_finished(3, 4, 5), "Removed 3 files"),
     ],
 )
 def test_admin_message_factories_return_expected_text(factory, expected):
@@ -136,4 +139,10 @@ def test_admin_message_formatters_include_dynamic_values():
     assert "2" in completed
     assert "77" in admin_bm.chat_message_sent(77)
     assert "77" in admin_bm.chat_message_failed(77)
+    preview = admin_bm.mailing_audience_preview(10, 7, 2, 1, 6, 4)
+    assert "10" in preview
+    assert "7" in preview
+    known = admin_bm.known_chat_target(88, "Ops Chat", "@ops", "active")
+    assert "Ops Chat" in known
+    assert "@ops" in known
 

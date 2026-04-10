@@ -4,7 +4,7 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 def cancel_keyboard() -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
-    builder.button(text="❌ Cancel", callback_data="cancel_action")
+    builder.button(text="Cancel", callback_data="cancel_action")
     return builder.as_markup()
 
 
@@ -25,23 +25,23 @@ def return_field_keyboard(field: str, value: str | None):
     status_text = "Enabled" if is_enabled else "Disabled"
     status_style = "success" if is_enabled else "danger"
     next_value = "off" if is_enabled else "on"
-    action_text = "🔴 Turn OFF" if is_enabled else "🟢 Turn ON"
+    action_text = "Turn OFF" if is_enabled else "Turn ON"
 
     buttons = [
         [InlineKeyboardButton(text=status_text, callback_data="noop", style=status_style)],
         [InlineKeyboardButton(text=action_text, callback_data=f"setting:{field}:{next_value}")],
-        [InlineKeyboardButton(text="⬅️ Back", callback_data="back_to_settings")],
+        [InlineKeyboardButton(text="Back", callback_data="back_to_settings")],
     ]
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
 def return_settings_keyboard():
     settings_fields = [
-        ("📝 Descriptions", "captions"),
-        ("ℹ️ Info Buttons", "info_buttons"),
-        ("🎧 MP3 Button", "audio_button"),
-        ("🔗 URL Button", "url_button"),
-        ("🗑️ Delete Messages", "delete_message"),
+        ("Descriptions", "captions"),
+        ("Info Buttons", "info_buttons"),
+        ("MP3 Button", "audio_button"),
+        ("URL Button", "url_button"),
+        ("Delete Messages", "delete_message"),
     ]
 
     buttons = [
@@ -73,18 +73,38 @@ def stats_keyboard(current_period: str = "Week", mode: str = "total"):
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
-
-
 def admin_keyboard():
     buttons = [
+        [
+            InlineKeyboardButton(text="🩺 Health", callback_data="admin_ops"),
+            InlineKeyboardButton(text="📦 Runtime", callback_data="admin_runtime_storage"),
+        ],
+        [InlineKeyboardButton(text="🔄 Refresh", callback_data="admin_refresh")],
         [InlineKeyboardButton(text="👥 Check Active Users", callback_data="check_active_users")],
-        [InlineKeyboardButton(text="✉️ Message by Chat ID", callback_data="message_chat_id")],
         [InlineKeyboardButton(text="📬 Mailing", callback_data="send_to_all")],
+        [InlineKeyboardButton(text="✉️ Message by Chat ID", callback_data="message_chat_id")],
         [
             InlineKeyboardButton(text="📄 View Log", callback_data="download_log"),
             InlineKeyboardButton(text="🗑️ Delete Log", callback_data="delete_log"),
         ],
     ]
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
+def admin_detail_keyboard(refresh_callback: str):
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="🔄 Refresh", callback_data=refresh_callback)],
+            [InlineKeyboardButton(text="⬅️ Back", callback_data="back_to_admin")],
+        ]
+    )
+
+
+def downloads_admin_keyboard(can_cleanup: bool = True, refresh_callback: str = "admin_downloads"):
+    buttons = [[InlineKeyboardButton(text="🔄 Refresh", callback_data=refresh_callback)]]
+    if can_cleanup:
+        buttons.append([InlineKeyboardButton(text="🧹 Clean downloads", callback_data="admin_cleanup_downloads")])
+    buttons.append([InlineKeyboardButton(text="⬅️ Back", callback_data="back_to_admin")])
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
@@ -94,7 +114,7 @@ def return_search_keyboard():
             InlineKeyboardButton(text="ID", callback_data="search_id"),
             InlineKeyboardButton(text="Username", callback_data="search_username"),
         ],
-        [InlineKeyboardButton(text="⬅️ Back", callback_data="back_to_admin")],
+        [InlineKeyboardButton(text="Back", callback_data="back_to_admin")],
     ]
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
@@ -104,9 +124,9 @@ def return_control_user_keyboard(user_id, status):
 
     go_to_chat = InlineKeyboardButton(text="Open Chat", url=f"tg://user?id={user_id}")
     write_user = InlineKeyboardButton(text="Write as Bot", callback_data=f"write_{user_id}")
-    ban_button = InlineKeyboardButton(text="🚫 Ban", callback_data=f"ban_{user_id}")
-    unban_button = InlineKeyboardButton(text="✅ Unban", callback_data=f"unban_{user_id}")
-    back_button = InlineKeyboardButton(text="⬅️ Back", callback_data="back_to_admin")
+    ban_button = InlineKeyboardButton(text="Ban", callback_data=f"ban_{user_id}")
+    unban_button = InlineKeyboardButton(text="Unban", callback_data=f"unban_{user_id}")
+    back_button = InlineKeyboardButton(text="Back", callback_data="back_to_admin")
 
     builder.row(go_to_chat, write_user)
 
@@ -129,13 +149,13 @@ def return_back_to_admin_keyboard():
 
 def start_private_chat_keyboard(bot_username: str):
     url = f"https://t.me/{bot_username}?start=from_group"
-    button = [[InlineKeyboardButton(text="💬 Open bot chat", url=url)]]
+    button = [[InlineKeyboardButton(text="Open bot chat", url=url)]]
     return InlineKeyboardMarkup(inline_keyboard=button)
 
 
 def return_audio_download_keyboard(platform, url):
     audio_button = [
-        [InlineKeyboardButton(text="🎧 Download MP3", callback_data=f"{platform}_audio_{url}")]
+        [InlineKeyboardButton(text="Download MP3", callback_data=f"{platform}_audio_{url}")]
     ]
     return InlineKeyboardMarkup(inline_keyboard=audio_button)
 
@@ -165,21 +185,21 @@ def return_user_info_keyboard(nickname, followers, videos, likes, url):
     if followers is not None:
         row1.append(
             InlineKeyboardButton(
-                text=f"👥 {format_number(followers)}",
+                text=f"Followers {format_number(followers)}",
                 callback_data=f"followers_{format_number(followers)}",
             )
         )
     if videos is not None:
         row1.append(
             InlineKeyboardButton(
-                text=f"🎬 {format_number(videos)}",
+                text=f"Videos {format_number(videos)}",
                 callback_data=f"videos_{format_number(videos)}",
             )
         )
     if likes is not None:
         row1.append(
             InlineKeyboardButton(
-                text=f"❤️ {format_number(likes)}",
+                text=f"Likes {format_number(likes)}",
                 callback_data=f"likes_{format_number(likes)}",
             )
         )
@@ -190,8 +210,16 @@ def return_user_info_keyboard(nickname, followers, videos, likes, url):
     return builder.as_markup()
 
 
-def return_video_info_keyboard(views, likes, comments, shares, music_play_url, video_url, user_settings,
-                               audio_callback_data: str | None = None):
+def return_video_info_keyboard(
+    views,
+    likes,
+    comments,
+    shares,
+    music_play_url,
+    video_url,
+    user_settings,
+    audio_callback_data: str | None = None,
+):
     builder = InlineKeyboardBuilder()
 
     if user_settings["info_buttons"] == "on":
@@ -200,7 +228,7 @@ def return_video_info_keyboard(views, likes, comments, shares, music_play_url, v
             formatted_views = format_number(views)
             row1.append(
                 InlineKeyboardButton(
-                    text=f"👁 {formatted_views}",
+                    text=f"Views {formatted_views}",
                     callback_data=f"views_{formatted_views}",
                 )
             )
@@ -208,7 +236,7 @@ def return_video_info_keyboard(views, likes, comments, shares, music_play_url, v
             formatted_likes = format_number(likes)
             row1.append(
                 InlineKeyboardButton(
-                    text=f"❤️ {formatted_likes}",
+                    text=f"Likes {formatted_likes}",
                     callback_data=f"likes_{formatted_likes}",
                 )
             )
@@ -216,7 +244,7 @@ def return_video_info_keyboard(views, likes, comments, shares, music_play_url, v
             formatted_comments = format_number(comments)
             row1.append(
                 InlineKeyboardButton(
-                    text=f"💬 {formatted_comments}",
+                    text=f"Comments {formatted_comments}",
                     callback_data=f"comments_{formatted_comments}",
                 )
             )
@@ -224,7 +252,7 @@ def return_video_info_keyboard(views, likes, comments, shares, music_play_url, v
             formatted_shares = format_number(shares)
             row1.append(
                 InlineKeyboardButton(
-                    text=f"🔁 {formatted_shares}",
+                    text=f"Shares {formatted_shares}",
                     callback_data=f"shares_{formatted_shares}",
                 )
             )
@@ -233,10 +261,10 @@ def return_video_info_keyboard(views, likes, comments, shares, music_play_url, v
             builder.row(*row1)
 
     if user_settings.get("audio_button") == "on" and audio_callback_data:
-        builder.row(InlineKeyboardButton(text="🎧 Download MP3", callback_data=audio_callback_data))
+        builder.row(InlineKeyboardButton(text="Download MP3", callback_data=audio_callback_data))
 
     if user_settings["url_button"] == "on" and video_url:
-        builder.row(InlineKeyboardButton(text="🔗 URL", url=video_url))
+        builder.row(InlineKeyboardButton(text="URL", url=video_url))
 
     return builder.as_markup()
 
