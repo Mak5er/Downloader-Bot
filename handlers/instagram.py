@@ -209,6 +209,7 @@ async def process_instagram_video(message: types.Message, data: InstagramVideo, 
             media.url,
             download_name,
             user_id=message.from_user.id,
+            chat_id=message.chat.id,
             on_progress=on_progress,
             on_retry=on_retry,
         )
@@ -306,6 +307,7 @@ async def process_instagram_media_group(message: types.Message, data: InstagramV
             item.url,
             filename,
             user_id=message.from_user.id,
+            chat_id=message.chat.id,
             request_id=request_id,
         )
 
@@ -422,6 +424,7 @@ async def download_instagram_audio_callback(call: types.CallbackQuery):
             audio_item.url,
             download_name,
             user_id=call.from_user.id,
+            chat_id=call.message.chat.id,
             on_progress=on_progress,
             on_retry=on_retry,
         )

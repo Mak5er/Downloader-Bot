@@ -269,6 +269,7 @@ async def _collect_media_entries(
     tweet_media,
     *,
     user_id: Optional[int] = None,
+    chat_id: Optional[int] = None,
     request_id: Optional[str] = None,
 ):
     return await _collect_media_entries_impl(
@@ -279,6 +280,7 @@ async def _collect_media_entries(
         output_dir=OUTPUT_DIR,
         max_file_size=MAX_FILE_SIZE,
         user_id=user_id,
+        chat_id=chat_id,
         request_id=request_id,
     )
 
@@ -288,6 +290,7 @@ async def _collect_media_files(
     tweet_media,
     *,
     user_id: Optional[int] = None,
+    chat_id: Optional[int] = None,
     request_id: Optional[str] = None,
 ):
     return await _collect_media_files_impl(
@@ -298,6 +301,7 @@ async def _collect_media_files(
         output_dir=OUTPUT_DIR,
         max_file_size=MAX_FILE_SIZE,
         user_id=user_id,
+        chat_id=chat_id,
         request_id=request_id,
     )
 
@@ -359,6 +363,7 @@ async def reply_media(message, tweet_id, tweet_media, bot_url, business_id, user
                 tweet_id,
                 tweet_media,
                 user_id=message.from_user.id,
+                chat_id=message.chat.id,
                 request_id=f"twitter:{message.chat.id}:{message.message_id}:{tweet_id}",
             )
             logging.info(

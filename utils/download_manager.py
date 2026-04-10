@@ -147,6 +147,7 @@ class ResilientDownloader:
         headers: Optional[Mapping[str, str]] = None,
         skip_if_exists: bool = False,
         user_id: Optional[int] = None,
+        chat_id: Optional[int] = None,
         source: Optional[str] = None,
         priority: Optional[int] = None,
         request_id: Optional[str] = None,
@@ -230,6 +231,7 @@ class ResilientDownloader:
             source=source or self.source,
             request_id=request_id,
             user_id=user_id,
+            chat_id=chat_id,
             url=url,
             filename=filename,
             queue_priority=queue_priority,
@@ -241,6 +243,7 @@ class ResilientDownloader:
                 priority=queue_priority,
                 source=source or self.source,
                 user_id=user_id,
+                chat_id=chat_id,
                 request_id=request_id,
                 on_queued=on_queued,
             )
@@ -250,6 +253,7 @@ class ResilientDownloader:
                 source=source or self.source,
                 request_id=request_id,
                 user_id=user_id,
+                chat_id=chat_id,
                 url=url,
                 size=metrics.size,
             )

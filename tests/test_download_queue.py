@@ -121,6 +121,36 @@ async def test_queue_pending_cap_timeout_raises_backpressure():
 
 
 @pytest.mark.asyncio
+async def test_queue_pending_cap_isolated_per_chat():
+    queue = AdaptiveDownloadQueue(
+        min_workers=1,
+        max_workers=1,
+        per_user_rate_limit=20,
+        per_user_max_pending=1,
+    )
+    blocker = asyncio.Event()
+
+    async def hold():
+        await blocker.wait()
+        return "ok"
+
+    first = asyncio.create_task(queue.submit(hold, priority=20, source="test", user_id=5, chat_id=-1001))
+    await asyncio.sleep(0.01)
+
+    second_other_chat = asyncio.create_task(queue.submit(hold, priority=20, source="test", user_id=5, chat_id=-1002))
+    await asyncio.sleep(0.02)
+    assert not second_other_chat.done()
+
+    third_same_first_chat = asyncio.create_task(queue.submit(hold, priority=20, source="test", user_id=5, chat_id=-1001))
+    await asyncio.sleep(0.02)
+    assert not third_same_first_chat.done()
+
+    blocker.set()
+    await asyncio.gather(first, second_other_chat, third_same_first_chat)
+    await queue.shutdown()
+
+
+@pytest.mark.asyncio
 async def test_queue_request_id_counts_as_single_user_submission():
     queue = AdaptiveDownloadQueue(
         min_workers=1,

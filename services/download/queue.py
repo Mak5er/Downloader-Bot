@@ -49,6 +49,12 @@ class QueueLoadSnapshot:
     active_workers: int
 
 
+@dataclass(frozen=True, slots=True)
+class _QueueScopeKey:
+    user_id: int
+    chat_id: Optional[int]
+
+
 @dataclass(order=True)
 class _QueuedJob:
     priority: int
@@ -56,7 +62,9 @@ class _QueuedJob:
     created_at: float = field(compare=False)
     source: str = field(compare=False)
     user_id: Optional[int] = field(compare=False)
-    request_key: Optional[tuple[int, str]] = field(compare=False, default=None)
+    chat_id: Optional[int] = field(compare=False, default=None)
+    scope_key: Optional[_QueueScopeKey] = field(compare=False, default=None)
+    request_key: Optional[tuple[_QueueScopeKey, str]] = field(compare=False, default=None)
     runner: Optional[Callable[[], Awaitable[Any]]] = field(compare=False, default=None)
     future: Optional[asyncio.Future] = field(compare=False, default=None)
     stop_worker: bool = field(compare=False, default=False)
@@ -110,11 +118,11 @@ class AdaptiveDownloadQueue:
         self._lock = asyncio.Lock()
         self._started = False
 
-        self._user_recent: dict[int, deque[float]] = defaultdict(deque)
-        self._user_pending: dict[int, int] = defaultdict(int)
-        self._user_slots: dict[int, asyncio.Semaphore] = {}
-        self._user_submit_locks: dict[int, asyncio.Lock] = {}
-        self._request_refs: dict[tuple[int, str], int] = defaultdict(int)
+        self._user_recent: dict[_QueueScopeKey, deque[float]] = defaultdict(deque)
+        self._user_pending: dict[_QueueScopeKey, int] = defaultdict(int)
+        self._user_slots: dict[_QueueScopeKey, asyncio.Semaphore] = {}
+        self._user_submit_locks: dict[_QueueScopeKey, asyncio.Lock] = {}
+        self._request_refs: dict[tuple[_QueueScopeKey, str], int] = defaultdict(int)
 
         self._processing_samples: dict[str, deque[float]] = defaultdict(lambda: deque(maxlen=metric_window))
         self._queue_wait_samples: dict[str, deque[float]] = defaultdict(lambda: deque(maxlen=metric_window))
@@ -143,6 +151,7 @@ class AdaptiveDownloadQueue:
         priority: int,
         source: str,
         user_id: Optional[int] = None,
+        chat_id: Optional[int] = None,
         request_id: Optional[str] = None,
         on_queued: Optional[Callable[[QueueTicket], Awaitable[None] | None]] = None,
     ) -> T:
@@ -151,23 +160,25 @@ class AdaptiveDownloadQueue:
 
         reserved_user_slot = False
         queued = False
-        request_key: Optional[tuple[int, str]] = None
+        scope_key: Optional[_QueueScopeKey] = None
+        request_key: Optional[tuple[_QueueScopeKey, str]] = None
         if user_id is not None:
+            scope_key = self._build_scope_key(user_id, chat_id)
             if request_id:
-                request_key = (user_id, str(request_id))
+                request_key = (scope_key, str(request_id))
 
-            submit_lock = self._user_submit_locks.setdefault(user_id, asyncio.Lock())
+            submit_lock = self._user_submit_locks.setdefault(scope_key, asyncio.Lock())
             async with submit_lock:
                 if request_key is not None:
                     refs = self._request_refs.get(request_key, 0)
                     if refs <= 0:
-                        self._enforce_rate_limit(user_id)
-                        await self._reserve_user_slot(user_id)
+                        self._enforce_rate_limit(scope_key)
+                        await self._reserve_user_slot(scope_key)
                         reserved_user_slot = True
                     self._request_refs[request_key] = refs + 1
                 else:
-                    self._enforce_rate_limit(user_id)
-                    await self._reserve_user_slot(user_id)
+                    self._enforce_rate_limit(scope_key)
+                    await self._reserve_user_slot(scope_key)
                     reserved_user_slot = True
 
         loop = asyncio.get_running_loop()
@@ -182,6 +193,8 @@ class AdaptiveDownloadQueue:
                 created_at=time.monotonic(),
                 source=source or "generic",
                 user_id=user_id,
+                chat_id=chat_id,
+                scope_key=scope_key,
                 request_key=request_key,
                 runner=runner,
                 future=future,
@@ -194,6 +207,7 @@ class AdaptiveDownloadQueue:
                 "queue_job_queued",
                 source=source or "generic",
                 user_id=user_id,
+                chat_id=chat_id,
                 request_id=request_id,
                 queue_depth=self._queue.qsize(),
                 priority=int(priority),
@@ -224,6 +238,7 @@ class AdaptiveDownloadQueue:
                 duration_ms=(time.perf_counter() - submit_started_at) * 1000.0,
                 source=source or "generic",
                 user_id=user_id,
+                chat_id=chat_id,
                 request_id=request_id,
             )
             return result
@@ -232,11 +247,12 @@ class AdaptiveDownloadQueue:
                 if request_key is not None:
                     self._decrement_request_ref(
                         request_key,
-                        user_id,
+                        scope_key,
                         release_slot_if_last=reserved_user_slot,
                     )
                 elif reserved_user_slot:
-                    self._release_user_slot(user_id)
+                    assert scope_key is not None
+                    self._release_user_slot(scope_key)
             raise
 
     async def metrics_snapshot(self) -> dict[str, QueueMetricSnapshot]:
@@ -324,61 +340,61 @@ class AdaptiveDownloadQueue:
             finally:
                 self._active_jobs = max(0, self._active_jobs - 1)
                 self._queue.task_done()
-                if job.user_id is not None:
+                if job.scope_key is not None:
                     if job.request_key is not None:
                         self._decrement_request_ref(
                             job.request_key,
-                            job.user_id,
+                            job.scope_key,
                             release_slot_if_last=True,
                         )
                     else:
-                        self._release_user_slot(job.user_id)
+                        self._release_user_slot(job.scope_key)
 
                 processing = max(0.0, time.monotonic() - started)
                 self._record_metric(job.source, queue_wait, processing)
                 await self._maybe_autotune()
 
-    async def _reserve_user_slot(self, user_id: int) -> None:
-        semaphore = self._user_slots.get(user_id)
+    async def _reserve_user_slot(self, scope_key: _QueueScopeKey) -> None:
+        semaphore = self._user_slots.get(scope_key)
         if semaphore is None:
             semaphore = asyncio.Semaphore(self.per_user_max_pending)
-            self._user_slots[user_id] = semaphore
+            self._user_slots[scope_key] = semaphore
 
         timeout = self.per_user_pending_timeout_seconds
         if timeout > 0:
             try:
                 await asyncio.wait_for(semaphore.acquire(), timeout=timeout)
             except asyncio.TimeoutError as exc:
-                pending = max(1, self._user_pending.get(user_id, self.per_user_max_pending))
+                pending = max(1, self._user_pending.get(scope_key, self.per_user_max_pending))
                 raise QueueBackpressureError(position=pending + 1) from exc
         else:
             await semaphore.acquire()
 
-        self._user_pending[user_id] += 1
+        self._user_pending[scope_key] += 1
 
-    def _release_user_slot(self, user_id: int) -> None:
-        semaphore = self._user_slots.get(user_id)
+    def _release_user_slot(self, scope_key: _QueueScopeKey) -> None:
+        semaphore = self._user_slots.get(scope_key)
         if semaphore is not None:
             semaphore.release()
 
-        remaining = self._user_pending.get(user_id, 0) - 1
+        remaining = self._user_pending.get(scope_key, 0) - 1
         if remaining <= 0:
-            self._user_pending.pop(user_id, None)
+            self._user_pending.pop(scope_key, None)
             return
-        self._user_pending[user_id] = remaining
+        self._user_pending[scope_key] = remaining
 
     def _decrement_request_ref(
         self,
-        request_key: tuple[int, str],
-        user_id: int,
+        request_key: tuple[_QueueScopeKey, str],
+        scope_key: Optional[_QueueScopeKey],
         *,
         release_slot_if_last: bool,
     ) -> None:
         refs = self._request_refs.get(request_key, 0) - 1
         if refs <= 0:
             self._request_refs.pop(request_key, None)
-            if release_slot_if_last:
-                self._release_user_slot(user_id)
+            if release_slot_if_last and scope_key is not None:
+                self._release_user_slot(scope_key)
             return
         self._request_refs[request_key] = refs
 
@@ -474,9 +490,9 @@ class AdaptiveDownloadQueue:
                     idle_for_s=round(idle_for, 2),
                 )
 
-    def _enforce_rate_limit(self, user_id: int) -> None:
+    def _enforce_rate_limit(self, scope_key: _QueueScopeKey) -> None:
         now = time.monotonic()
-        bucket = self._user_recent[user_id]
+        bucket = self._user_recent[scope_key]
         while bucket and now - bucket[0] > self.per_user_window_seconds:
             bucket.popleft()
 
@@ -485,6 +501,13 @@ class AdaptiveDownloadQueue:
             raise QueueRateLimitError(retry_after=retry_after)
 
         bucket.append(now)
+
+    @staticmethod
+    def _build_scope_key(user_id: int, chat_id: Optional[int]) -> _QueueScopeKey:
+        return _QueueScopeKey(
+            user_id=int(user_id),
+            chat_id=int(chat_id) if chat_id is not None else None,
+        )
 
     def _build_global_snapshot(self) -> QueueMetricSnapshot:
         all_processing: list[float] = []

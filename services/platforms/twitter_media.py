@@ -166,6 +166,7 @@ async def collect_media_entries(
     output_dir: str,
     max_file_size: int,
     user_id: Optional[int] = None,
+    chat_id: Optional[int] = None,
     request_id: Optional[str] = None,
 ) -> list[dict[str, Any]]:
     entries: list[dict[str, Any] | None] = []
@@ -210,6 +211,7 @@ async def collect_media_entries(
                 file_name,
                 skip_if_exists=True,
                 user_id=user_id,
+                chat_id=chat_id,
                 request_id=request_id,
                 max_size_bytes=max_file_size,
             )
@@ -268,6 +270,7 @@ async def collect_media_files(
     output_dir: str,
     max_file_size: int,
     user_id: Optional[int] = None,
+    chat_id: Optional[int] = None,
     request_id: Optional[str] = None,
 ) -> tuple[list[str], list[str]]:
     entries = await collect_media_entries(
@@ -278,6 +281,7 @@ async def collect_media_files(
         output_dir=output_dir,
         max_file_size=max_file_size,
         user_id=user_id,
+        chat_id=chat_id,
         request_id=request_id,
     )
     photos = [str(entry["path"]) for entry in entries if entry["kind"] == "photo" and entry["path"]]

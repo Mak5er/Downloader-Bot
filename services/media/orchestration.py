@@ -1,3 +1,4 @@
+import asyncio
 from typing import Any, Awaitable, Callable, Optional, TypeVar
 
 from utils.download_manager import (
@@ -8,6 +9,45 @@ from utils.download_manager import (
 )
 
 T = TypeVar("T")
+
+_single_media_inflight: dict[str, asyncio.Future[Optional[str]]] = {}
+_single_media_inflight_lock: Optional[asyncio.Lock] = None
+
+
+def _get_single_media_inflight_lock() -> asyncio.Lock:
+    global _single_media_inflight_lock
+    if _single_media_inflight_lock is None:
+        _single_media_inflight_lock = asyncio.Lock()
+    return _single_media_inflight_lock
+
+
+async def _claim_single_media_inflight(cache_key: str) -> tuple[bool, asyncio.Future[Optional[str]]]:
+    lock = _get_single_media_inflight_lock()
+    async with lock:
+        existing = _single_media_inflight.get(cache_key)
+        if existing is None or existing.done():
+            future: asyncio.Future[Optional[str]] = asyncio.get_running_loop().create_future()
+            _single_media_inflight[cache_key] = future
+            return True, future
+        return False, existing
+
+
+async def _resolve_single_media_inflight(
+    cache_key: str,
+    future: asyncio.Future[Optional[str]],
+    file_id: Optional[str],
+) -> None:
+    lock = _get_single_media_inflight_lock()
+    async with lock:
+        current = _single_media_inflight.get(cache_key)
+        if current is future:
+            _single_media_inflight.pop(cache_key, None)
+    if not future.done():
+        future.set_result(file_id)
+
+
+def reset_single_media_flow_tracking() -> None:
+    _single_media_inflight.clear()
 
 
 async def _maybe_await(value: Any) -> Any:
@@ -63,15 +103,32 @@ async def run_single_media_flow(
     on_unexpected_error: Optional[Callable[[Exception], Awaitable[None]]] = None,
 ) -> Optional[T]:
     metrics: DownloadMetrics | None = None
+    inflight_future: asyncio.Future[Optional[str]] | None = None
+    owns_inflight = False
+    resolved_file_id: Optional[str] = None
     try:
-        cached_file_id = await db_service.get_file_id(cache_key)
-        if cached_file_id:
-            await update_status(upload_status_text)
-            await send_chat_action(upload_action)
-            sent_cached = await send_cached(cached_file_id)
-            if on_after_send:
-                await on_after_send()
-            return sent_cached
+        while True:
+            cached_file_id = await db_service.get_file_id(cache_key)
+            if cached_file_id:
+                await update_status(upload_status_text)
+                await send_chat_action(upload_action)
+                sent_cached = await send_cached(cached_file_id)
+                if on_after_send:
+                    await on_after_send()
+                return sent_cached
+
+            owns_inflight, inflight_future = await _claim_single_media_inflight(cache_key)
+            if owns_inflight:
+                break
+
+            resolved_file_id = await asyncio.shield(inflight_future)
+            if resolved_file_id:
+                await update_status(upload_status_text)
+                await send_chat_action(upload_action)
+                sent_cached = await send_cached(resolved_file_id)
+                if on_after_send:
+                    await on_after_send()
+                return sent_cached
 
         metrics = await download_media()
         if not metrics:
@@ -86,16 +143,16 @@ async def run_single_media_flow(
         await update_status(upload_status_text)
         await send_chat_action(upload_action)
         sent = await send_downloaded(metrics.path)
-        if on_after_send:
-            await on_after_send()
 
-        file_id = extract_file_id(sent)
-        if file_id:
+        resolved_file_id = extract_file_id(sent)
+        if resolved_file_id:
             try:
-                await db_service.add_file(cache_key, file_id, cache_file_type)
+                await db_service.add_file(cache_key, resolved_file_id, cache_file_type)
             except Exception as exc:
                 if on_cache_store_error:
                     await _maybe_await(on_cache_store_error(exc))
+        if on_after_send:
+            await on_after_send()
         return sent
     except DownloadRateLimitError as exc:
         if on_rate_limit:
@@ -118,6 +175,8 @@ async def run_single_media_flow(
             return None
         raise
     finally:
+        if owns_inflight and inflight_future is not None:
+            await _resolve_single_media_inflight(cache_key, inflight_future, resolved_file_id)
         if metrics and metrics.path:
             await cleanup_path(metrics.path)
         await delete_status_message()

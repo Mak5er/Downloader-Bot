@@ -160,6 +160,7 @@ class YouTubeMediaService:
         source: str,
         *,
         user_id: Optional[int] = None,
+        chat_id: Optional[int] = None,
         size_hint: Optional[int] = None,
         max_size_bytes: Optional[int] = None,
         on_queued=None,
@@ -176,6 +177,8 @@ class YouTubeMediaService:
             kwargs = {"headers": headers}
             if user_id is not None:
                 kwargs["user_id"] = user_id
+            if chat_id is not None:
+                kwargs["chat_id"] = chat_id
             if size_hint is not None:
                 kwargs["size_hint"] = size_hint
             if max_size_bytes is not None:

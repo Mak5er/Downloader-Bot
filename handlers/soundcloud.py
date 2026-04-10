@@ -159,6 +159,7 @@ async def process_soundcloud(message: types.Message, direct_url: Optional[str] =
             track.audio_url,
             audio_name,
             user_id=message.from_user.id,
+            chat_id=message.chat.id,
             request_id=request_id,
             on_progress=on_progress,
             on_retry=on_retry,

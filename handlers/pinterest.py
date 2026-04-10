@@ -184,6 +184,7 @@ async def process_pinterest_single_video(
             media.url,
             download_name,
             user_id=message.from_user.id,
+            chat_id=message.chat.id,
             on_progress=on_progress,
             on_retry=on_retry,
         )
@@ -281,6 +282,7 @@ async def process_pinterest_single_photo(
             media.url,
             filename,
             user_id=message.from_user.id,
+            chat_id=message.chat.id,
             request_id=f"pinterest_photo:{message.chat.id}:{message.message_id}:{post.id}",
         )
 
@@ -349,6 +351,7 @@ async def process_pinterest_media_group(
             item.url,
             filename,
             user_id=message.from_user.id,
+            chat_id=message.chat.id,
             request_id=request_id,
         )
 
