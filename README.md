@@ -6,7 +6,7 @@ This code is a Python Telegram Bot for downloading content from social media.
 
 ### Functionality
 
-- Downloading media from Tik-Tok, Twitter, YouTube and ~~Instagram~~(Currently not working well).
+- Downloading media from Tik-Tok, Twitter, YouTube, Pinterest, SoundCloud and Instagram.
 - Admin functionality for viewing user information and sending messages to all users.
 - Managing user bans and unbans.
 
