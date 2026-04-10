@@ -61,6 +61,36 @@ async def test_antiflood_expires_old_timestamps(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_antiflood_tracks_message_limits_per_user_and_chat(monkeypatch):
+    monkeypatch.setattr(antiflood.time, "monotonic", _monotonic_sequence(0.0, 0.2, 0.4, 0.4))
+
+    middleware = antiflood.AntifloodMiddleware(max_messages=1, message_window_seconds=1, cooldown_seconds=2)
+    handler = AsyncMock(return_value="handled")
+
+    first_chat_event = SimpleNamespace(
+        from_user=SimpleNamespace(id=21),
+        chat=SimpleNamespace(id=-1001, type=ChatType.SUPERGROUP),
+        answer=AsyncMock(),
+    )
+    second_chat_event = SimpleNamespace(
+        from_user=SimpleNamespace(id=21),
+        chat=SimpleNamespace(id=-1002, type=ChatType.SUPERGROUP),
+        answer=AsyncMock(),
+    )
+    same_first_chat_event = SimpleNamespace(
+        from_user=SimpleNamespace(id=21),
+        chat=SimpleNamespace(id=-1001, type=ChatType.SUPERGROUP),
+        answer=AsyncMock(),
+    )
+
+    assert await middleware(handler, first_chat_event, {}) == "handled"
+    assert await middleware(handler, second_chat_event, {}) == "handled"
+    assert await middleware(handler, same_first_chat_event, {}) is None
+    assert handler.await_count == 2
+    same_first_chat_event.answer.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_antiflood_blocks_callback_queries_over_limit(monkeypatch):
     monkeypatch.setattr(antiflood.time, "monotonic", _monotonic_sequence(0.0, 0.2, 0.4, 0.4, 0.4))
 
@@ -125,9 +155,11 @@ async def test_antiflood_prunes_stale_users(monkeypatch):
     await middleware(handler, second, {})
     await middleware(handler, third, {})
 
-    assert 1 not in middleware._users
-    assert 2 not in middleware._users
-    assert 3 in middleware._users
+    tracked_user_ids = {scope_key.user_id for scope_key in middleware._users}
+
+    assert 1 not in tracked_user_ids
+    assert 2 not in tracked_user_ids
+    assert 3 in tracked_user_ids
 
 
 def test_middleware_order_puts_antiflood_first():

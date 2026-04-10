@@ -43,6 +43,12 @@ class _UserFloodState:
     last_message_notice_at: float = -1.0
 
 
+@dataclass(frozen=True, slots=True)
+class _FloodScopeKey:
+    user_id: int
+    chat_id: Optional[int]
+
+
 class AntifloodMiddleware(BaseMiddleware):
     def __init__(
         self,
@@ -77,7 +83,7 @@ class AntifloodMiddleware(BaseMiddleware):
             self._global_rule.window_seconds,
             *(rule.window_seconds for rule in self._rules.values()),
         )
-        self._users: "OrderedDict[int, _UserFloodState]" = OrderedDict()
+        self._users: "OrderedDict[_FloodScopeKey, _UserFloodState]" = OrderedDict()
         self._events_since_cleanup = 0
 
     async def __call__(
@@ -87,12 +93,12 @@ class AntifloodMiddleware(BaseMiddleware):
         data: Dict[str, Any],
     ) -> Any:
         event_kind = self._resolve_event_kind(event)
-        user_id = self._resolve_user_id(event)
-        if event_kind is None or user_id is None:
+        scope_key = self._resolve_scope_key(event, event_kind)
+        if event_kind is None or scope_key is None:
             return await handler(event, data)
 
         now = time.monotonic()
-        state = self._get_or_create_state(user_id, now)
+        state = self._get_or_create_state(scope_key, now)
         self._prune_user_events(state, now)
 
         if state.blocked_until > now:
@@ -103,8 +109,9 @@ class AntifloodMiddleware(BaseMiddleware):
         if self._is_limited(state, event_kind, now):
             state.blocked_until = now + self._cooldown_seconds
             logging.warning(
-                "Flood limit triggered: user_id=%s kind=%s blocked_for=%.2fs tracked_events=%s",
-                user_id,
+                "Flood limit triggered: user_id=%s chat_id=%s kind=%s blocked_for=%.2fs tracked_events=%s",
+                scope_key.user_id,
+                scope_key.chat_id,
                 event_kind,
                 self._cooldown_seconds,
                 len(state.events),
@@ -118,14 +125,14 @@ class AntifloodMiddleware(BaseMiddleware):
         self._maybe_cleanup(now)
         return await handler(event, data)
 
-    def _get_or_create_state(self, user_id: int, now: float) -> _UserFloodState:
-        state = self._users.get(user_id)
+    def _get_or_create_state(self, scope_key: _FloodScopeKey, now: float) -> _UserFloodState:
+        state = self._users.get(scope_key)
         if state is None:
             state = _UserFloodState(last_seen=now)
-            self._users[user_id] = state
+            self._users[scope_key] = state
         else:
             state.last_seen = now
-            self._users.move_to_end(user_id)
+            self._users.move_to_end(scope_key)
 
         overflow = len(self._users) - self._max_tracked_users
         while overflow > 0:
@@ -170,13 +177,13 @@ class AntifloodMiddleware(BaseMiddleware):
 
         self._events_since_cleanup = 0
         stale_cutoff = now - self._user_ttl_seconds
-        stale_users = [
-            user_id
-            for user_id, state in self._users.items()
+        stale_scope_keys = [
+            scope_key
+            for scope_key, state in self._users.items()
             if state.last_seen <= stale_cutoff and state.blocked_until <= now
         ]
-        for user_id in stale_users:
-            self._users.pop(user_id, None)
+        for scope_key in stale_scope_keys:
+            self._users.pop(scope_key, None)
 
         overflow = len(self._users) - self._max_tracked_users
         while overflow > 0:
@@ -208,6 +215,30 @@ class AntifloodMiddleware(BaseMiddleware):
         if user_id is None:
             return None
         return int(user_id)
+
+    @classmethod
+    def _resolve_scope_key(cls, event: Any, event_kind: Optional[str]) -> Optional[_FloodScopeKey]:
+        if event_kind is None:
+            return None
+
+        user_id = cls._resolve_user_id(event)
+        if user_id is None:
+            return None
+
+        chat_id = cls._resolve_chat_id(event) if event_kind in {"message", "callback"} else None
+        return _FloodScopeKey(user_id=user_id, chat_id=chat_id)
+
+    @staticmethod
+    def _resolve_chat_id(event: Any) -> Optional[int]:
+        chat = getattr(event, "chat", None)
+        if chat is None:
+            message = getattr(event, "message", None)
+            chat = getattr(message, "chat", None)
+
+        chat_id = getattr(chat, "id", None)
+        if chat_id is None:
+            return None
+        return int(chat_id)
 
     @staticmethod
     def _resolve_event_kind(event: Any) -> Optional[str]:
