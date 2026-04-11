@@ -228,7 +228,7 @@ def return_video_info_keyboard(
             formatted_views = format_number(views)
             row1.append(
                 InlineKeyboardButton(
-                    text=f"Views {formatted_views}",
+                    text=f"👁 {formatted_views}",
                     callback_data=f"views_{formatted_views}",
                 )
             )
@@ -236,7 +236,7 @@ def return_video_info_keyboard(
             formatted_likes = format_number(likes)
             row1.append(
                 InlineKeyboardButton(
-                    text=f"Likes {formatted_likes}",
+                    text=f"❤️ {formatted_likes}",
                     callback_data=f"likes_{formatted_likes}",
                 )
             )
@@ -244,7 +244,7 @@ def return_video_info_keyboard(
             formatted_comments = format_number(comments)
             row1.append(
                 InlineKeyboardButton(
-                    text=f"Comments {formatted_comments}",
+                    text=f"💬 {formatted_comments}",
                     callback_data=f"comments_{formatted_comments}",
                 )
             )
@@ -252,7 +252,7 @@ def return_video_info_keyboard(
             formatted_shares = format_number(shares)
             row1.append(
                 InlineKeyboardButton(
-                    text=f"Shares {formatted_shares}",
+                    text=f"🔁 {formatted_shares}",
                     callback_data=f"shares_{formatted_shares}",
                 )
             )
