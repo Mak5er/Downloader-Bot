@@ -4,7 +4,7 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 def cancel_keyboard() -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
-    builder.button(text="Cancel", callback_data="cancel_action")
+    builder.button(text="❌ Cancel", callback_data="cancel_action")
     return builder.as_markup()
 
 
@@ -30,18 +30,18 @@ def return_field_keyboard(field: str, value: str | None):
     buttons = [
         [InlineKeyboardButton(text=status_text, callback_data="noop", style=status_style)],
         [InlineKeyboardButton(text=action_text, callback_data=f"setting:{field}:{next_value}")],
-        [InlineKeyboardButton(text="Back", callback_data="back_to_settings")],
+        [InlineKeyboardButton(text="⬅️ Back", callback_data="back_to_settings")],
     ]
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
 def return_settings_keyboard():
     settings_fields = [
-        ("Descriptions", "captions"),
-        ("Info Buttons", "info_buttons"),
-        ("MP3 Button", "audio_button"),
-        ("URL Button", "url_button"),
-        ("Delete Messages", "delete_message"),
+        ("📝 Descriptions", "captions"),
+        ("ℹ️ Info Buttons", "info_buttons"),
+        ("🎧 MP3 Button", "audio_button"),
+        ("🔗 URL Button", "url_button"),
+        ("🗑️ Delete Messages", "delete_message"),
     ]
 
     buttons = [
@@ -114,7 +114,7 @@ def return_search_keyboard():
             InlineKeyboardButton(text="ID", callback_data="search_id"),
             InlineKeyboardButton(text="Username", callback_data="search_username"),
         ],
-        [InlineKeyboardButton(text="Back", callback_data="back_to_admin")],
+        [InlineKeyboardButton(text="⬅️ Back", callback_data="back_to_admin")],
     ]
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
@@ -126,7 +126,7 @@ def return_control_user_keyboard(user_id, status):
     write_user = InlineKeyboardButton(text="Write as Bot", callback_data=f"write_{user_id}")
     ban_button = InlineKeyboardButton(text="Ban", callback_data=f"ban_{user_id}")
     unban_button = InlineKeyboardButton(text="Unban", callback_data=f"unban_{user_id}")
-    back_button = InlineKeyboardButton(text="Back", callback_data="back_to_admin")
+    back_button = InlineKeyboardButton(text="⬅️ Back", callback_data="back_to_admin")
 
     builder.row(go_to_chat, write_user)
 
@@ -149,13 +149,13 @@ def return_back_to_admin_keyboard():
 
 def start_private_chat_keyboard(bot_username: str):
     url = f"https://t.me/{bot_username}?start=from_group"
-    button = [[InlineKeyboardButton(text="Open bot chat", url=url)]]
+    button = [[InlineKeyboardButton(text="💬 Open bot chat", url=url)]]
     return InlineKeyboardMarkup(inline_keyboard=button)
 
 
 def return_audio_download_keyboard(platform, url):
     audio_button = [
-        [InlineKeyboardButton(text="Download MP3", callback_data=f"{platform}_audio_{url}")]
+        [InlineKeyboardButton(text="🎧 Download MP3", callback_data=f"{platform}_audio_{url}")]
     ]
     return InlineKeyboardMarkup(inline_keyboard=audio_button)
 
@@ -185,21 +185,21 @@ def return_user_info_keyboard(nickname, followers, videos, likes, url):
     if followers is not None:
         row1.append(
             InlineKeyboardButton(
-                text=f"Followers {format_number(followers)}",
+                text=f"👥 {format_number(followers)}",
                 callback_data=f"followers_{format_number(followers)}",
             )
         )
     if videos is not None:
         row1.append(
             InlineKeyboardButton(
-                text=f"Videos {format_number(videos)}",
+                text=f"🎬 {format_number(videos)}",
                 callback_data=f"videos_{format_number(videos)}",
             )
         )
     if likes is not None:
         row1.append(
             InlineKeyboardButton(
-                text=f"Likes {format_number(likes)}",
+                text=f"❤️ {format_number(likes)}",
                 callback_data=f"likes_{format_number(likes)}",
             )
         )
@@ -261,10 +261,10 @@ def return_video_info_keyboard(
             builder.row(*row1)
 
     if user_settings.get("audio_button") == "on" and audio_callback_data:
-        builder.row(InlineKeyboardButton(text="Download MP3", callback_data=audio_callback_data))
+        builder.row(InlineKeyboardButton(text="🎧 Download MP3", callback_data=audio_callback_data))
 
     if user_settings["url_button"] == "on" and video_url:
-        builder.row(InlineKeyboardButton(text="URL", url=video_url))
+        builder.row(InlineKeyboardButton(text="🔗 URL", url=video_url))
 
     return builder.as_markup()
 
