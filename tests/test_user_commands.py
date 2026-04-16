@@ -302,6 +302,26 @@ async def test_change_setting_ensures_entities_and_updates_keyboard(monkeypatch)
 
 
 @pytest.mark.asyncio
+async def test_change_setting_treats_message_not_modified_as_success(monkeypatch):
+    class FakeTelegramBadRequest(Exception):
+        pass
+
+    call = DummyCallback("setting:captions:on")
+    fake_db = SimpleNamespace(
+        upsert_chat=AsyncMock(),
+        set_user_setting=AsyncMock(),
+        get_user_setting=AsyncMock(return_value="on"),
+    )
+    monkeypatch.setattr(user, "db", fake_db)
+    monkeypatch.setattr(user, "TelegramBadRequest", FakeTelegramBadRequest)
+    call.message.edit_reply_markup.side_effect = FakeTelegramBadRequest("Bad Request: message is not modified")
+
+    await user.change_setting(call)
+
+    call.answer.assert_awaited_once_with()
+
+
+@pytest.mark.asyncio
 async def test_change_setting_handles_unexpected_db_error(monkeypatch):
     call = DummyCallback("setting:captions:on")
     fake_db = SimpleNamespace(

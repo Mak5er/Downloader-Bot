@@ -51,6 +51,7 @@ SERVICE_EMOJI = {
 }
 VALID_STATS_PERIODS = {"Week", "Month", "Year"}
 VALID_STATS_MODES = {"total", "split"}
+_MESSAGE_NOT_MODIFIED_MARKERS = ("message is not modified", "specified new message content and reply markup are exactly the same")
 
 
 def _admin_statuses() -> set[ChatMemberStatus]:
@@ -70,6 +71,10 @@ async def _is_group_admin(chat_id: int, user_id: int) -> bool:
     except Exception:
         return False
     return member.status in _admin_statuses()
+
+
+def _is_message_not_modified_error(exc: Exception) -> bool:
+    return any(marker in str(exc).lower() for marker in _MESSAGE_NOT_MODIFIED_MARKERS)
 
 
 def _settings_chat_name(chat: types.Chat) -> str:
@@ -415,6 +420,24 @@ async def change_setting(call: types.CallbackQuery):
 
         await call.message.edit_reply_markup(reply_markup=keyboard)
         await call.answer()
+    except TelegramBadRequest as exc:
+        if _is_message_not_modified_error(exc):
+            logging.info(
+                "Settings keyboard already up to date: field=%s user_id=%s chat_id=%s",
+                field,
+                getattr(call.from_user, "id", None),
+                getattr(getattr(call.message, "chat", None), "id", None),
+            )
+            await call.answer()
+            return
+        logging.exception(
+            "Failed to refresh settings keyboard: field=%s user_id=%s chat_id=%s error=%s",
+            field,
+            getattr(call.from_user, "id", None),
+            getattr(getattr(call.message, "chat", None), "id", None),
+            exc,
+        )
+        await call.answer("Couldn't update settings right now. Please try again later.", show_alert=True)
     except Exception as exc:
         logging.exception(
             "Failed to refresh settings keyboard: field=%s user_id=%s chat_id=%s error=%s",
@@ -423,7 +446,7 @@ async def change_setting(call: types.CallbackQuery):
             getattr(getattr(call.message, "chat", None), "id", None),
             exc,
         )
-        await call.answer(bm.something_went_wrong(), show_alert=True)
+        await call.answer("Couldn't update settings right now. Please try again later.", show_alert=True)
 
 
 @router.callback_query(F.data == "noop")

@@ -22,13 +22,12 @@ def format_number(value: int) -> str | None:
 
 def return_field_keyboard(field: str, value: str | None):
     is_enabled = value == "on"
-    status_text = "Enabled" if is_enabled else "Disabled"
-    status_style = "success" if is_enabled else "danger"
+    status_text = "🟢 Enabled" if is_enabled else "🔴 Disabled"
     next_value = "off" if is_enabled else "on"
     action_text = "Turn OFF" if is_enabled else "Turn ON"
 
     buttons = [
-        [InlineKeyboardButton(text=status_text, callback_data="noop", style=status_style)],
+        [InlineKeyboardButton(text=status_text, callback_data="noop")],
         [InlineKeyboardButton(text=action_text, callback_data=f"setting:{field}:{next_value}")],
         [InlineKeyboardButton(text="⬅️ Back", callback_data="back_to_settings")],
     ]
