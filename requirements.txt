@@ -1,6 +1,6 @@
 aiogram==3.26.0
 aiohttp==3.13.5
-SQLAlchemy==2.0.48
+SQLAlchemy==2.0.49
 alembic==1.18.4
 asyncpg==0.31.0
 aiocron==2.1
