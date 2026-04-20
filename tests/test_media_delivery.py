@@ -87,3 +87,49 @@ async def test_send_cached_media_entries_supports_url_based_photo_entries():
     assert message.answer_media_group.await_args.kwargs["reply_to_message_id"] == 11
     assert message.answer_photo.await_args.kwargs["photo"] == "https://cdn.example.com/2.jpg"
     db_service.add_file.assert_awaited_once_with("album#1", "last-photo-id", "photo")
+
+
+@pytest.mark.asyncio
+async def test_send_cached_media_entries_splits_large_albums_into_multiple_batches():
+    message = SimpleNamespace(
+        message_id=99,
+        answer_media_group=AsyncMock(
+            side_effect=[
+                [SimpleNamespace(photo=[SimpleNamespace(file_id=f"batch1-photo-{index}")]) for index in range(10)],
+                [SimpleNamespace(photo=[SimpleNamespace(file_id=f"batch2-photo-{index}")]) for index in range(2)],
+            ]
+        ),
+        answer_photo=AsyncMock(return_value=SimpleNamespace(photo=[SimpleNamespace(file_id="last-photo-id")])),
+        reply_photo=AsyncMock(),
+        answer_video=AsyncMock(),
+        reply_video=AsyncMock(),
+    )
+    db_service = SimpleNamespace(add_file=AsyncMock())
+    entries = [
+        {
+            "kind": "photo",
+            "cache_key": f"album#{index}",
+            "file_id": None,
+            "path": f"/tmp/{index}.jpg",
+            "cached": False,
+        }
+        for index in range(13)
+    ]
+
+    await send_cached_media_entries(
+        message,
+        entries,
+        db_service=db_service,
+        caption="caption",
+        reply_markup=None,
+    )
+
+    assert message.answer_media_group.await_count == 2
+    first_batch_kwargs = message.answer_media_group.await_args_list[0].kwargs
+    second_batch_kwargs = message.answer_media_group.await_args_list[1].kwargs
+    assert first_batch_kwargs["reply_to_message_id"] == 99
+    assert "reply_to_message_id" not in second_batch_kwargs
+    assert len(first_batch_kwargs["media"]) == 10
+    assert len(second_batch_kwargs["media"]) == 2
+    assert message.answer_photo.await_args.kwargs["photo"].path == "/tmp/12.jpg"
+    assert db_service.add_file.await_count == 13
