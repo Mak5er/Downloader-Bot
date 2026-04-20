@@ -10,5 +10,5 @@ httpx==0.28.1
 matplotlib==3.10.8
 psycopg2-binary==2.9.11
 python-dotenv==1.2.2
-requests==2.32.5
+requests==2.33.1
 yt-dlp==2026.3.17
