@@ -1,9 +1,8 @@
-import re
-
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from config import DATABASE_URL, DB_MAX_OVERFLOW, DB_POOL_SIZE, DB_POOL_TIMEOUT
 from services.storage.analytics_repository import AnalyticsRepositoryMixin
+from services.storage.database_url import to_async_database_url, to_sync_database_url
 from services.storage.file_cache_repository import FileCacheRepositoryMixin
 from services.storage.local_cache import LocalCacheMixin
 from services.storage.models import (
@@ -44,8 +43,8 @@ class DataBase(
         if not self.database_url:
             raise ValueError("DATABASE_URL is not set. Configure PostgreSQL connection string.")
 
-        self.sync_url = re.sub(r"^postgresql\+asyncpg:", "postgresql:", self.database_url)
-        self.async_url = re.sub(r"^postgresql:", "postgresql+asyncpg:", self.sync_url)
+        self.sync_url = to_sync_database_url(self.database_url)
+        self.async_url = to_async_database_url(self.database_url)
 
         self.engine = create_async_engine(
             self.async_url,

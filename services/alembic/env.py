@@ -3,16 +3,26 @@ import sys
 from logging.config import fileConfig
 
 from alembic import context
+from dotenv import load_dotenv
 from sqlalchemy import engine_from_config, pool
 
 BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 if BASE_DIR not in sys.path:
     sys.path.append(BASE_DIR)
 
+load_dotenv(os.path.join(BASE_DIR, ".env"))
+
 from services.storage.db import Base  # noqa: E402
+from services.storage.database_url import resolve_alembic_database_url  # noqa: E402
 
 
 config = context.config
+database_url = resolve_alembic_database_url(
+    config.get_main_option("sqlalchemy.url"),
+    os.getenv("DATABASE_URL"),
+)
+if database_url:
+    config.set_main_option("sqlalchemy.url", database_url)
 target_metadata = Base.metadata
 
 

@@ -9,6 +9,12 @@ from sqlalchemy import text
 from sqlalchemy.dialects import postgresql
 
 from services import db as db_module
+from services.storage.database_url import (
+    ALEMBIC_DATABASE_URL_PLACEHOLDER,
+    resolve_alembic_database_url,
+    to_async_database_url,
+    to_sync_database_url,
+)
 from services.storage import file_cache_repository, user_repository
 
 
@@ -59,6 +65,30 @@ def test_database_configures_engine_pool(monkeypatch):
     assert captured["kwargs"]["max_overflow"] == db_module.DB_MAX_OVERFLOW
     assert captured["kwargs"]["pool_timeout"] == db_module.DB_POOL_TIMEOUT
     assert captured["kwargs"]["pool_use_lifo"] is True
+
+
+def test_database_url_helpers_normalize_postgres_urls():
+    async_url = "postgresql+asyncpg://user:pass@localhost/testdb"
+    sync_url = "postgresql://user:pass@localhost/testdb"
+
+    assert to_sync_database_url(async_url) == sync_url
+    assert to_sync_database_url(sync_url) == sync_url
+    assert to_async_database_url(sync_url) == async_url
+    assert to_async_database_url(async_url) == async_url
+
+
+def test_resolve_alembic_database_url_prefers_explicit_config():
+    assert resolve_alembic_database_url(
+        "postgresql://configured/db",
+        "postgresql+asyncpg://env/db",
+    ) == "postgresql://configured/db"
+
+
+def test_resolve_alembic_database_url_uses_env_placeholder_fallback():
+    assert resolve_alembic_database_url(
+        ALEMBIC_DATABASE_URL_PLACEHOLDER,
+        "postgresql+asyncpg://env/db",
+    ) == "postgresql://env/db"
 
 
 @pytest.mark.asyncio
