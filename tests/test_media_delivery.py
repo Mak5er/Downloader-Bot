@@ -3,11 +3,17 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+from services.media import delivery
 from services.media.delivery import send_cached_media_entries
 
 
 @pytest.mark.asyncio
-async def test_send_cached_media_entries_replies_only_on_first_batch_and_caches_results():
+async def test_send_cached_media_entries_replies_only_on_first_batch_and_caches_results(monkeypatch):
+    monkeypatch.setattr(
+        delivery,
+        "build_video_send_kwargs",
+        AsyncMock(return_value={"width": 720, "height": 1280, "supports_streaming": True}),
+    )
     message = SimpleNamespace(
         message_id=7,
         answer_media_group=AsyncMock(return_value=[SimpleNamespace(photo=[SimpleNamespace(file_id="sent-photo-id")])]),
@@ -44,12 +50,20 @@ async def test_send_cached_media_entries_replies_only_on_first_batch_and_caches_
 
     assert message.answer_media_group.await_args.kwargs["reply_to_message_id"] == 7
     assert message.answer_video.await_args.kwargs["video"].path == "/tmp/2.mp4"
+    assert message.answer_video.await_args.kwargs["width"] == 720
+    assert message.answer_video.await_args.kwargs["height"] == 1280
+    assert message.answer_video.await_args.kwargs["supports_streaming"] is True
     assert message.reply_video.await_count == 0
     assert db_service.add_file.await_count == 2
 
 
 @pytest.mark.asyncio
-async def test_send_cached_media_entries_supports_url_based_photo_entries():
+async def test_send_cached_media_entries_supports_url_based_photo_entries(monkeypatch):
+    monkeypatch.setattr(
+        delivery,
+        "build_video_send_kwargs",
+        AsyncMock(return_value={"supports_streaming": True}),
+    )
     message = SimpleNamespace(
         message_id=11,
         answer_media_group=AsyncMock(return_value=[SimpleNamespace(photo=[SimpleNamespace(file_id="album-photo-id")])]),
@@ -90,7 +104,12 @@ async def test_send_cached_media_entries_supports_url_based_photo_entries():
 
 
 @pytest.mark.asyncio
-async def test_send_cached_media_entries_splits_large_albums_into_multiple_batches():
+async def test_send_cached_media_entries_splits_large_albums_into_multiple_batches(monkeypatch):
+    monkeypatch.setattr(
+        delivery,
+        "build_video_send_kwargs",
+        AsyncMock(return_value={"supports_streaming": True}),
+    )
     message = SimpleNamespace(
         message_id=99,
         answer_media_group=AsyncMock(

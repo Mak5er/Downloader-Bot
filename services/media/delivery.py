@@ -4,6 +4,8 @@ from aiogram import types
 from aiogram.types import FSInputFile
 from aiogram.utils.media_group import MediaGroupBuilder
 
+from services.media.video_metadata import build_video_send_kwargs
+
 
 def extract_sent_file_id(sent_message: types.Message, media_kind: str) -> str | None:
     if media_kind == "video" and sent_message.video:
@@ -86,7 +88,10 @@ async def send_cached_media_entries(
                     url_key=url_key,
                 )
                 if media_kind == "video":
-                    media_group.add_video(media=media_ref)
+                    media_group.add_video(
+                        media=media_ref,
+                        **(await build_video_send_kwargs(str(entry.get(path_key)) if entry.get(path_key) else None)),
+                    )
                 else:
                     media_group.add_photo(media=media_ref)
 
@@ -122,6 +127,7 @@ async def send_cached_media_entries(
         send_kwargs["parse_mode"] = parse_mode
 
     if media_kind == "video":
+        send_kwargs.update(await build_video_send_kwargs(str(last_entry.get(path_key)) if last_entry.get(path_key) else None))
         send_video = message.answer_video if has_sent_media else message.reply_video
         sent_message = await send_video(video=media_ref, **send_kwargs)
     else:

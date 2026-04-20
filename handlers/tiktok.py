@@ -17,6 +17,7 @@ from handlers.deps import build_handler_dependencies
 from handlers.request_dedupe import claim_message_request
 from handlers.tiktok_inline import handle_tiktok_inline_query, send_inline_tiktok_media
 from services.media.delivery import send_cached_media_entries
+from services.media.video_metadata import build_video_send_kwargs
 from services.media.orchestration import handle_download_backpressure, run_single_media_flow
 from handlers.user import update_info
 from handlers.utils import (
@@ -274,6 +275,7 @@ async def process_tiktok_video(message: types.Message, data: dict, bot_url: str,
             caption=bm.captions(user_settings["captions"], info.description, bot_url),
             reply_markup=_reply_markup(),
             parse_mode="HTML",
+            **(await build_video_send_kwargs(path)),
         )
 
     async def _after_send():

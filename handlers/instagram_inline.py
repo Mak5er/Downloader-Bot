@@ -30,6 +30,7 @@ from services.inline.video_requests import (
     create_inline_video_request,
     reset_inline_video_request,
 )
+from services.media.video_metadata import build_video_send_kwargs
 from services.platforms.instagram_media import (
     get_instagram_preview_url as _get_instagram_preview_url,
     strip_instagram_url,
@@ -332,6 +333,7 @@ async def send_inline_instagram_media(
                 chat_id=channel_id,
                 video=FSInputFile(download_path),
                 caption=f"Instagram Video from {actor_name}",
+                **(await build_video_send_kwargs(download_path)),
             )
             db_id = sent.video.file_id
             await deps.db.add_file(db_video_url, db_id, "video")

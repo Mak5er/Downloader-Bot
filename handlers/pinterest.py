@@ -12,6 +12,7 @@ from handlers.deps import build_handler_dependencies
 from handlers.pinterest_inline import handle_pinterest_inline_query, send_inline_pinterest_media
 from handlers.request_dedupe import claim_message_request
 from services.media.delivery import send_cached_media_entries
+from services.media.video_metadata import build_video_send_kwargs
 from services.media.orchestration import handle_download_backpressure, run_single_media_flow
 from services.media.resolver import resolve_cached_media_items
 from services.platforms.pinterest_media import (
@@ -203,6 +204,7 @@ async def process_pinterest_single_video(
             caption=bm.captions(user_settings["captions"], post.description, bot_url),
             reply_markup=_reply_markup(),
             parse_mode="HTML",
+            **(await build_video_send_kwargs(path)),
         )
 
     async def _after_send():

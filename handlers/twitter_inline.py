@@ -28,6 +28,7 @@ from services.inline.video_requests import (
     create_inline_video_request,
     reset_inline_video_request,
 )
+from services.media.video_metadata import build_video_send_kwargs
 from utils.download_manager import log_download_metrics
 
 logging = logging.bind(service="twitter_inline")
@@ -344,6 +345,7 @@ async def send_inline_twitter_media(
                 chat_id=channel_id,
                 video=FSInputFile(download_path),
                 caption=f"X / Twitter Video from {actor_name}",
+                **(await build_video_send_kwargs(download_path)),
             )
             db_file_id = sent.video.file_id
             await deps.db.add_file(cache_key, db_file_id, "video")

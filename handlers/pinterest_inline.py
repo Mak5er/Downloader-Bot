@@ -30,6 +30,7 @@ from services.inline.video_requests import (
     create_inline_video_request,
     reset_inline_video_request,
 )
+from services.media.video_metadata import build_video_send_kwargs
 from services.platforms.pinterest_media import get_pinterest_preview_url as _get_pinterest_preview_url
 from utils.download_manager import (
     DownloadQueueBusyError,
@@ -344,6 +345,7 @@ async def send_inline_pinterest_media(
                 chat_id=channel_id,
                 video=FSInputFile(download_path),
                 caption=f"Pinterest Video from {actor_name}",
+                **(await build_video_send_kwargs(download_path)),
             )
             db_id = sent.video.file_id
             await deps.db.add_file(request.source_url, db_id, "video")

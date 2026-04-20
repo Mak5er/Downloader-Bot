@@ -18,7 +18,13 @@ from utils.download_manager import (
 
 logging = logging.bind(service="youtube_media")
 
-YTDLP_FORMAT_720 = "bestvideo[height<=720][vcodec^=avc1]+bestaudio[ext=m4a]/best[height<=720][ext=mp4]/best"
+YTDLP_FORMAT_720 = (
+    "best[height<=720][ext=mp4][acodec!=none][vcodec!=none]/"
+    "best[height<=720][acodec!=none][vcodec!=none]/"
+    "bestvideo[height<=720][vcodec^=avc1]+bestaudio[ext=m4a]/"
+    "bestvideo[height<=720]+bestaudio/"
+    "best[height<=720]/best"
+)
 YTDLP_SPEED_OPTS: dict[str, Any] = {
     "quiet": True,
     "no_warnings": True,
@@ -65,19 +71,6 @@ def get_video_stream(yt: dict, max_height: int = 720) -> dict | None:
     progressive.sort(key=lambda item: int(item.get("height", 0)), reverse=True)
     if progressive:
         best = progressive[0]
-        best["webpage_url"] = yt["webpage_url"]
-        return best
-
-    video_only = [
-        item for item in formats
-        if item.get("vcodec") != "none"
-        and item.get("acodec") == "none"
-        and item.get("ext") in ("mp4", "webm")
-        and int(item.get("height") or 0) <= max_height
-    ]
-    video_only.sort(key=lambda item: int(item.get("height", 0)), reverse=True)
-    if video_only:
-        best = video_only[0]
         best["webpage_url"] = yt["webpage_url"]
         return best
 

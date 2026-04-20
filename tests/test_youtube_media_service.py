@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from services.platforms.youtube_media import YouTubeMediaService
+from services.platforms.youtube_media import YTDLP_FORMAT_720, YouTubeMediaService
 
 
 class _FakeYoutubeDL:
@@ -74,3 +74,9 @@ async def test_download_with_ytdlp_metrics_resolves_postprocessed_extension(tmp_
     assert metrics is not None
     assert metrics.path == str(tmp_path / "video.mkv")
     assert metrics.size == len(b"video-bytes")
+
+
+def test_ytdlp_format_720_prefers_progressive_and_falls_back_to_merge():
+    assert "acodec!=none" in YTDLP_FORMAT_720
+    assert "bestvideo[height<=720]" in YTDLP_FORMAT_720
+    assert "bestaudio" in YTDLP_FORMAT_720

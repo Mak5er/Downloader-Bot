@@ -24,6 +24,7 @@ from services.inline.video_requests import (
     create_inline_video_request,
     reset_inline_video_request,
 )
+from services.media.video_metadata import build_video_send_kwargs
 from utils.media_cache import build_media_cache_key
 
 logging = logging.bind(service="youtube_inline")
@@ -298,13 +299,9 @@ async def send_inline_youtube_video(
         db_file_id = await deps.db.get_file_id(request.source_url)
         if not db_file_id:
             video = await asyncio.to_thread(get_video_stream_fn, yt)
-            if not video:
-                reset_inline_video_request(token)
-                await _edit_inline_status(bm.something_went_wrong(), with_retry_button=True)
-                return
 
             name = f"{yt['id']}_youtube_inline.mp4"
-            inline_size_hint_raw = video.get("filesize") or video.get("filesize_approx")
+            inline_size_hint_raw = (video or {}).get("filesize") or (video or {}).get("filesize_approx")
             inline_size_hint = safe_int_fn(inline_size_hint_raw, 0) or None
             if inline_size_hint and inline_size_hint >= max_file_size:
                 complete_inline_video_request(token)
@@ -312,7 +309,15 @@ async def send_inline_youtube_video(
                 return
 
             await _edit_inline_status(bm.downloading_video_status())
-            if is_manifest_stream_fn(video):
+            if not video:
+                metrics = await download_with_ytdlp_metrics_fn(
+                    request.source_url,
+                    name,
+                    ytdlp_format_720,
+                    "youtube_inline_ytdlp_merged",
+                    max_filesize=max_file_size - 1,
+                )
+            elif is_manifest_stream_fn(video):
                 metrics = await download_with_ytdlp_metrics_fn(
                     request.source_url,
                     name,
@@ -336,7 +341,7 @@ async def send_inline_youtube_video(
                         request.source_url,
                         name,
                         ytdlp_format_720,
-                        "youtube_inline_ytdlp",
+                        "youtube_inline_ytdlp_merged",
                         max_filesize=max_file_size - 1,
                     )
             if not metrics:
@@ -349,6 +354,7 @@ async def send_inline_youtube_video(
                 chat_id=channel_id,
                 video=FSInputFile(metrics.path),
                 caption=f"YouTube Video from {actor_name}",
+                **(await build_video_send_kwargs(metrics.path)),
             )
             db_file_id = sent_message.video.file_id
             await deps.db.add_file(request.source_url, db_file_id, "video")

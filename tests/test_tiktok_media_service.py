@@ -259,6 +259,28 @@ def test_download_video_with_ytdlp_sync_writes_output(tmp_path):
     assert Path(metrics.path).read_bytes() == b"video-bytes"
 
 
+def test_download_video_with_ytdlp_sync_prefers_progressive_formats_with_audio(tmp_path):
+    captured = {}
+
+    def youtube_dl_factory(options):
+        captured["options"] = options
+        return _FakeYoutubeDL(options, ext="mp4", payload=b"video-bytes")
+
+    service = _make_service(tmp_path, youtube_dl_factory=youtube_dl_factory)
+
+    service._download_video_with_ytdlp_sync(
+        source_url="https://www.tiktok.com/@creator/video/123",
+        output_path=str(tmp_path / "video.mp4"),
+        progress_callback=None,
+    )
+
+    format_selector = captured["options"]["format"]
+    assert "acodec!=none" in format_selector
+    assert "vcodec!=none" in format_selector
+    assert "bestvideo+bestaudio" in format_selector
+    assert captured["options"]["merge_output_format"] == "mp4"
+
+
 def test_download_audio_with_ytdlp_sync_writes_mp3_output(tmp_path):
     service = _make_service(
         tmp_path,

@@ -18,6 +18,7 @@ from handlers.youtube_inline import (
     send_inline_youtube_video,
 )
 from services.media.orchestration import handle_download_backpressure, run_single_media_flow
+from services.media.video_metadata import build_video_send_kwargs
 from handlers.user import update_info
 from handlers.utils import (
     build_queue_busy_text,
@@ -218,11 +219,6 @@ async def download_video(message: types.Message, direct_url: Optional[str] = Non
             return
         video = await asyncio.to_thread(get_video_stream, yt)
 
-        if not video:
-            await safe_delete_message(status_message)
-            await message.reply(bm.nothing_found())
-            return
-
         audio_callback_data = f"audio:youtube:{yt['id']}" if yt and yt.get("id") else None
 
         views = safe_int(yt.get('view_count'), None)
@@ -230,7 +226,7 @@ async def download_video(message: types.Message, direct_url: Optional[str] = Non
 
         name = f"{yt['id']}_youtube_video.mp4"
         await safe_edit_text(status_message, bm.downloading_video_status())
-        size_hint_raw = video.get("filesize") or video.get("filesize_approx")
+        size_hint_raw = (video or {}).get("filesize") or (video or {}).get("filesize_approx")
         size_hint = safe_int(size_hint_raw, 0) or None
         if size_hint and size_hint >= MAX_FILE_SIZE:
             await handle_video_too_large(message, business_id=business_id)
@@ -255,6 +251,23 @@ async def download_video(message: types.Message, direct_url: Optional[str] = Non
             )
 
         async def _download_media():
+            if not video:
+                return await asyncio.wait_for(
+                    retry_async_operation(
+                        lambda: download_with_ytdlp_metrics(
+                            yt['webpage_url'],
+                            name,
+                            YTDLP_FORMAT_720,
+                            "youtube_video_ytdlp_merged",
+                            max_filesize=MAX_FILE_SIZE - 1,
+                        ),
+                        attempts=3,
+                        delay_seconds=2.0,
+                        should_retry_result=lambda result: result is None,
+                        on_retry=on_retry_download,
+                    ),
+                    timeout=900.0,
+                )
             if _is_manifest_stream(video):
                 return await asyncio.wait_for(
                     retry_async_operation(
@@ -292,13 +305,13 @@ async def download_video(message: types.Message, direct_url: Optional[str] = Non
             return await asyncio.wait_for(
                 retry_async_operation(
                     lambda: download_with_ytdlp_metrics(
-                        yt['webpage_url'],
-                        name,
-                        YTDLP_FORMAT_720,
-                        "youtube_video_ytdlp",
-                        max_filesize=MAX_FILE_SIZE - 1,
-                    ),
-                    attempts=3,
+                            yt['webpage_url'],
+                            name,
+                            YTDLP_FORMAT_720,
+                            "youtube_video_ytdlp_merged",
+                            max_filesize=MAX_FILE_SIZE - 1,
+                        ),
+                        attempts=3,
                     delay_seconds=2.0,
                     should_retry_result=lambda result: result is None,
                     on_retry=on_retry_download,
@@ -325,6 +338,7 @@ async def download_video(message: types.Message, direct_url: Optional[str] = Non
                 caption=bm.captions(user_captions, yt['title'], bot_url),
                 reply_markup=_reply_markup(),
                 parse_mode="HTML",
+                **(await build_video_send_kwargs(path)),
             )
 
         async def _after_send():

@@ -169,7 +169,14 @@ class TikTokDownloadMixin:
         started_at = self._monotonic()
         ydl_opts = {
             **self._build_ytdlp_download_options(),
-            "format": "best[ext=mp4]/best",
+            "format": (
+                "best[ext=mp4][acodec!=none][vcodec!=none]/"
+                "best[acodec!=none][vcodec!=none]/"
+                "best*[ext=mp4][acodec!=none][vcodec!=none]/"
+                "best*[acodec!=none][vcodec!=none]/"
+                "bestvideo[ext=mp4]+bestaudio[ext=m4a]/"
+                "bestvideo+bestaudio/best"
+            ),
             "outtmpl": output_path,
             "merge_output_format": "mp4",
             "progress_hooks": [self._build_progress_hook(progress_callback, started_at)],

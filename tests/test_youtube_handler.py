@@ -24,7 +24,7 @@ def test_get_video_stream_prefers_progressive():
     assert stream["webpage_url"] == yt["webpage_url"]
 
 
-def test_get_video_stream_video_only_respects_max_height():
+def test_get_video_stream_returns_none_for_video_only_formats():
     yt = {
         "webpage_url": "https://youtube.com/watch?v=xyz",
         "formats": [
@@ -33,9 +33,7 @@ def test_get_video_stream_video_only_respects_max_height():
         ],
     }
 
-    stream = youtube.get_video_stream(yt, max_height=1080)
-
-    assert stream["height"] == "1080"
+    assert youtube.get_video_stream(yt, max_height=1080) is None
 
 
 def test_get_video_stream_returns_none_when_missing():

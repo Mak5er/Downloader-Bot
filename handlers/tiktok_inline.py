@@ -32,6 +32,7 @@ from services.inline.video_requests import (
     create_inline_video_request,
     reset_inline_video_request,
 )
+from services.media.video_metadata import build_video_send_kwargs
 from utils.download_manager import DownloadQueueBusyError, DownloadRateLimitError, log_download_metrics
 from utils.media_cache import build_media_cache_key
 
@@ -346,6 +347,7 @@ async def send_inline_tiktok_media(
                 chat_id=channel_id,
                 video=FSInputFile(download_path),
                 caption=f"TikTok Video from {actor_name}",
+                **(await build_video_send_kwargs(download_path)),
             )
             db_id = sent.video.file_id
             await deps.db.add_file(db_video_url, db_id, "video")
