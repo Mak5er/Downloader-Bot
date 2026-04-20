@@ -18,7 +18,7 @@ async def resolve_cached_media_items(
     download_item: Callable[[int, T, str], Awaitable[Any | None]],
     metrics_label: str,
     error_label: str,
-    limit: int = 10,
+    limit: int | None = None,
 ) -> tuple[list[dict[str, Any]], list[str]]:
     media_items: list[dict[str, Any]] = []
     downloaded_paths: list[str] = []
@@ -51,9 +51,11 @@ async def resolve_cached_media_items(
             "cached": False,
         }
 
+    items_to_resolve = items if limit is None else items[:limit]
+
     tasks = [
         asyncio.create_task(_resolve_item(index, item))
-        for index, item in enumerate(items[:limit])
+        for index, item in enumerate(items_to_resolve)
     ]
     results = await asyncio.gather(*tasks, return_exceptions=True)
 

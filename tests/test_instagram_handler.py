@@ -262,6 +262,66 @@ async def test_instagram_media_group_replies_only_on_first_sent_message(monkeypa
 
 
 @pytest.mark.asyncio
+async def test_instagram_media_group_sends_all_items_when_carousel_exceeds_ten(monkeypatch):
+    status_message = SimpleNamespace(delete=AsyncMock())
+    message = SimpleNamespace(
+        from_user=SimpleNamespace(id=1),
+        chat=SimpleNamespace(id=10, type="private"),
+        message_id=20,
+        answer=AsyncMock(return_value=status_message),
+        answer_media_group=AsyncMock(
+            side_effect=[
+                [SimpleNamespace(photo=[SimpleNamespace(file_id=f"sent-photo-{index}")]) for index in range(10)],
+                [SimpleNamespace(photo=[SimpleNamespace(file_id=f"sent-photo-{10 + index}")]) for index in range(2)],
+            ]
+        ),
+        answer_photo=AsyncMock(return_value=SimpleNamespace(photo=[SimpleNamespace(file_id="sent-photo-12")])),
+        answer_video=AsyncMock(),
+        reply_video=AsyncMock(),
+        reply_photo=AsyncMock(),
+    )
+    data = instagram.InstagramVideo(
+        id="ig-13",
+        description="caption",
+        author="author",
+        media_list=[
+            instagram.InstagramMedia(url=f"https://cdn.example.com/{index}.jpg", type="photo")
+            for index in range(13)
+        ],
+    )
+
+    monkeypatch.setattr(instagram, "send_analytics", AsyncMock())
+    monkeypatch.setattr(instagram, "send_chat_action_if_needed", AsyncMock())
+    monkeypatch.setattr(instagram, "safe_edit_text", AsyncMock(return_value=True))
+    monkeypatch.setattr(instagram, "safe_delete_message", AsyncMock())
+    monkeypatch.setattr(instagram, "maybe_delete_user_message", AsyncMock())
+    monkeypatch.setattr(instagram.db, "get_file_id", AsyncMock(return_value=None))
+    monkeypatch.setattr(instagram.db, "add_file", AsyncMock())
+    monkeypatch.setattr(
+        instagram.inst_service,
+        "download_media",
+        AsyncMock(side_effect=[SimpleNamespace(path=f"/tmp/{index}.jpg") for index in range(13)]),
+    )
+
+    result = await instagram.process_instagram_media_group(
+        message,
+        data,
+        "https://instagram.com/p/abc/",
+        "https://t.me/maxloadbot",
+        {"captions": "on", "delete_message": "off", "info_buttons": "off", "url_button": "off", "audio_button": "off"},
+        None,
+    )
+
+    assert result is True
+    assert instagram.inst_service.download_media.await_count == 13
+    assert message.answer_media_group.await_count == 2
+    assert message.answer_media_group.await_args_list[0].kwargs["reply_to_message_id"] == 20
+    assert "reply_to_message_id" not in message.answer_media_group.await_args_list[1].kwargs
+    assert message.answer_photo.await_args.kwargs["photo"].path == "/tmp/12.jpg"
+    assert message.reply_photo.await_count == 0
+
+
+@pytest.mark.asyncio
 async def test_inline_instagram_query_returns_album_deeplink_for_multi_video_post(monkeypatch):
     settings = {
         "captions": "on",
