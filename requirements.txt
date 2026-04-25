@@ -7,7 +7,7 @@ aiocron==2.1
 colorlog==6.10.1
 fake-useragent==2.2.0
 httpx==0.28.1
-matplotlib==3.10.8
+matplotlib==3.10.9
 psycopg2-binary==2.9.11
 python-dotenv==1.2.2
 requests==2.33.1
