@@ -18,6 +18,7 @@ from handlers.youtube_inline import (
     send_inline_youtube_video,
 )
 from services.media.orchestration import handle_download_backpressure, run_single_media_flow
+from services.media.delivery import AUDIO_CACHE_VARIANT, send_audio_with_thumbnail
 from services.media.video_metadata import build_video_send_kwargs
 from handlers.user import update_info
 from handlers.utils import (
@@ -453,16 +454,20 @@ async def download_music(message: types.Message, direct_url: Optional[str] = Non
             return
         audio = await asyncio.to_thread(get_audio_stream, yt)
 
-        cache_key = build_media_cache_key(yt["webpage_url"], variant="audio")
+        audio_duration = yt.get("duration")
+        cache_key = build_media_cache_key(yt["webpage_url"], variant=AUDIO_CACHE_VARIANT)
         db_file_id = await db.get_file_id(cache_key)
         if db_file_id:
             await safe_edit_text(status_message, bm.uploading_status())
             await send_chat_action_if_needed(bot, message.chat.id, "upload_audio", business_id)
-            await message.reply_audio(
+            await send_audio_with_thumbnail(
+                message.reply_audio,
                 audio=db_file_id,
                 title=yt["title"],
                 caption=bm.captions(None, None, bot_url),
-                thumbnail=bot_avatar,
+                bot_avatar=bot_avatar,
+                bot_url=bot_url,
+                duration=audio_duration,
                 parse_mode="HTML",
             )
             await maybe_delete_user_message(message, user_settings.get("delete_message"))
@@ -515,11 +520,15 @@ async def download_music(message: types.Message, direct_url: Optional[str] = Non
         await safe_edit_text(status_message, bm.uploading_status())
         await send_chat_action_if_needed(bot, message.chat.id, "upload_voice", business_id)
 
-        sent_message = await message.reply_audio(
+        sent_message = await send_audio_with_thumbnail(
+            message.reply_audio,
             audio=FSInputFile(metrics.path),
             title=yt['title'],
             caption=bm.captions(None, None, bot_url),
-            thumbnail=bot_avatar,
+            audio_path=metrics.path,
+            bot_avatar=bot_avatar,
+            bot_url=bot_url,
+            duration=audio_duration,
             parse_mode="HTML"
         )
         await maybe_delete_user_message(message, user_settings.get("delete_message"))
@@ -584,16 +593,20 @@ async def download_youtube_mp3_callback(call: types.CallbackQuery):
             await handle_download_error(call.message, business_id=business_id)
             return
 
-        cache_key = build_media_cache_key(yt["webpage_url"], variant="audio")
+        audio_duration = yt.get("duration")
+        cache_key = build_media_cache_key(yt["webpage_url"], variant=AUDIO_CACHE_VARIANT)
         db_file_id = await db.get_file_id(cache_key)
         if db_file_id:
             await safe_edit_text(status_message, bm.uploading_status())
             await send_chat_action_if_needed(bot, call.message.chat.id, "upload_audio", business_id)
-            await call.message.reply_audio(
+            await send_audio_with_thumbnail(
+                call.message.reply_audio,
                 audio=db_file_id,
                 title=yt.get("title"),
                 caption=bm.captions(None, None, bot_url),
-                thumbnail=bot_avatar,
+                bot_avatar=bot_avatar,
+                bot_url=bot_url,
+                duration=audio_duration,
                 parse_mode="HTML",
             )
             return
@@ -629,11 +642,15 @@ async def download_youtube_mp3_callback(call: types.CallbackQuery):
 
         await send_chat_action_if_needed(bot, call.message.chat.id, "upload_audio", business_id)
         await safe_edit_text(status_message, bm.uploading_status())
-        sent_message = await call.message.reply_audio(
+        sent_message = await send_audio_with_thumbnail(
+            call.message.reply_audio,
             audio=FSInputFile(metrics.path),
             title=yt.get("title"),
             caption=bm.captions(None, None, bot_url),
-            thumbnail=bot_avatar,
+            audio_path=metrics.path,
+            bot_avatar=bot_avatar,
+            bot_url=bot_url,
+            duration=audio_duration,
             parse_mode="HTML",
         )
         await db.add_file(cache_key, sent_message.audio.file_id, "audio")

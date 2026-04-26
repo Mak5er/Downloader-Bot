@@ -1,10 +1,120 @@
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
+from aiogram.types import FSInputFile
 import pytest
 
 from services.media import delivery
-from services.media.delivery import send_cached_media_entries
+from services.media.delivery import (
+    AUDIO_CACHE_VARIANT,
+    build_audio_cache_key,
+    build_bot_audio_performer,
+    send_audio_with_thumbnail,
+    send_cached_media_entries,
+)
+
+
+def test_build_audio_cache_key_uses_metadata_version():
+    assert build_audio_cache_key("https://example.com/a") == f"https://example.com/a#{AUDIO_CACHE_VARIANT}"
+
+
+def test_build_bot_audio_performer_uses_bot_username_from_url():
+    assert build_bot_audio_performer("https://t.me/maxloadbot") == "@maxloadbot"
+    assert build_bot_audio_performer("t.me/maxloadbot") == "@maxloadbot"
+    assert build_bot_audio_performer("@maxloadbot") == "@maxloadbot"
+
+
+@pytest.mark.asyncio
+async def test_send_audio_with_thumbnail_adds_bot_avatar_and_performer():
+    send_audio = AsyncMock(return_value=SimpleNamespace(audio=SimpleNamespace(file_id="audio-id")))
+    bot_avatar = object()
+
+    sent = await send_audio_with_thumbnail(
+        send_audio,
+        audio="file-id",
+        title="Song",
+        bot_avatar=bot_avatar,
+        bot_url="https://t.me/maxloadbot",
+    )
+
+    assert sent.audio.file_id == "audio-id"
+    assert send_audio.await_args.kwargs["thumbnail"] is bot_avatar
+    assert send_audio.await_args.kwargs["performer"] == "@maxloadbot"
+
+
+@pytest.mark.asyncio
+async def test_send_audio_with_thumbnail_adds_duration_from_metadata():
+    send_audio = AsyncMock(return_value=SimpleNamespace(audio=SimpleNamespace(file_id="audio-id")))
+
+    await send_audio_with_thumbnail(
+        send_audio,
+        audio="file-id",
+        bot_url="https://t.me/maxloadbot",
+        duration="123.4",
+    )
+
+    assert send_audio.await_args.kwargs["duration"] == 123
+
+
+@pytest.mark.asyncio
+async def test_send_audio_with_thumbnail_probes_duration_from_path(monkeypatch):
+    send_audio = AsyncMock(return_value=SimpleNamespace(audio=SimpleNamespace(file_id="audio-id")))
+    monkeypatch.setattr(delivery, "probe_audio_duration_seconds", AsyncMock(return_value=57))
+
+    await send_audio_with_thumbnail(
+        send_audio,
+        audio="file-id",
+        audio_path="/tmp/audio.mp3",
+        bot_url="https://t.me/maxloadbot",
+    )
+
+    assert send_audio.await_args.kwargs["duration"] == 57
+
+
+@pytest.mark.asyncio
+async def test_send_audio_with_thumbnail_embeds_cover_for_local_audio(monkeypatch, tmp_path):
+    audio_path = tmp_path / "audio.mp3"
+    cover_path = tmp_path / "cover.jpg"
+    embedded_path = tmp_path / "embedded.mp3"
+    audio_path.write_bytes(b"audio")
+    cover_path.write_bytes(b"cover")
+    embedded_path.write_bytes(b"embedded")
+    send_audio = AsyncMock(return_value=SimpleNamespace(audio=SimpleNamespace(file_id="audio-id")))
+    monkeypatch.setattr(delivery, "embed_audio_cover", AsyncMock(return_value=str(embedded_path)))
+
+    await send_audio_with_thumbnail(
+        send_audio,
+        audio=FSInputFile(str(audio_path)),
+        audio_path=str(audio_path),
+        bot_avatar=FSInputFile(str(cover_path)),
+        bot_url="https://t.me/maxloadbot",
+    )
+
+    assert send_audio.await_args.kwargs["audio"].path == str(embedded_path)
+    assert not embedded_path.exists()
+
+
+@pytest.mark.asyncio
+async def test_send_audio_with_thumbnail_retries_without_thumbnail():
+    send_audio = AsyncMock(
+        side_effect=[
+            RuntimeError("bad thumbnail"),
+            SimpleNamespace(audio=SimpleNamespace(file_id="audio-id")),
+        ]
+    )
+    bot_avatar = object()
+
+    await send_audio_with_thumbnail(
+        send_audio,
+        audio="file-id",
+        bot_avatar=bot_avatar,
+        bot_url="https://t.me/maxloadbot",
+    )
+
+    assert send_audio.await_count == 2
+    assert send_audio.await_args_list[0].kwargs["thumbnail"] is bot_avatar
+    assert "thumbnail" not in send_audio.await_args_list[1].kwargs
+    assert send_audio.await_args_list[1].kwargs["performer"] == "@maxloadbot"
 
 
 @pytest.mark.asyncio

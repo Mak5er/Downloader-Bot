@@ -38,6 +38,7 @@ def test_parse_soundcloud_track_local_processing_with_cover():
             "metadata": {
                 "title": "Track Title",
                 "artist": "Artist Name",
+                "duration": "123.6",
             },
         },
         "audio": {"cover": True},
@@ -48,6 +49,7 @@ def test_parse_soundcloud_track_local_processing_with_cover():
     assert track.thumbnail_url == "https://cdn.example.com/cover.jpg"
     assert track.title == "Track Title"
     assert track.artist == "Artist Name"
+    assert track.duration_seconds == 124
 
 
 @pytest.mark.asyncio
@@ -159,6 +161,7 @@ async def test_inline_soundcloud_uses_bot_avatar_thumbnail(monkeypatch, tmp_path
                 title="Track Title",
                 artist="Artist Name",
                 thumbnail_url="https://cdn.example.com/cover.jpg",
+                duration_seconds=199,
             )
         ),
     )
@@ -184,6 +187,8 @@ async def test_inline_soundcloud_uses_bot_avatar_thumbnail(monkeypatch, tmp_path
 
     send_kwargs = soundcloud.bot.send_audio.await_args.kwargs
     assert send_kwargs["thumbnail"] is bot_avatar
+    assert send_kwargs["performer"] == "@maxloadbot"
+    assert send_kwargs["duration"] == 199
     assert soundcloud.soundcloud_service.download_media.await_count == 1
 
 

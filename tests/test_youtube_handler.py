@@ -196,6 +196,7 @@ async def test_download_music_uses_cached_audio_file_id(monkeypatch):
         "id": "abc123",
         "title": "Cached Audio",
         "webpage_url": "https://youtube.com/watch?v=abc123",
+        "duration": 181,
     }
 
     monkeypatch.setattr(youtube, "get_message_text", lambda _message: "https://music.youtube.com/watch?v=abc123")
@@ -216,6 +217,9 @@ async def test_download_music_uses_cached_audio_file_id(monkeypatch):
 
     assert youtube.download_stream.await_count == 0
     assert message.reply_audio.await_args.kwargs["audio"] == "cached-audio-id"
+    assert message.reply_audio.await_args.kwargs["thumbnail"] == "thumb-id"
+    assert message.reply_audio.await_args.kwargs["performer"] == "@maxloadbot"
+    assert message.reply_audio.await_args.kwargs["duration"] == 181
 
 
 @pytest.mark.asyncio
@@ -267,6 +271,7 @@ async def test_download_music_falls_back_to_ytdlp_without_direct_audio_stream(mo
         "id": "abc123",
         "title": "Fallback Audio",
         "webpage_url": "https://youtube.com/watch?v=abc123",
+        "duration": 204,
     }
 
     monkeypatch.setattr(youtube, "get_message_text", lambda _message: "https://music.youtube.com/watch?v=abc123")
@@ -292,4 +297,6 @@ async def test_download_music_falls_back_to_ytdlp_without_direct_audio_stream(mo
     youtube.download_stream.assert_not_awaited()
     message.reply_audio.assert_awaited_once()
     assert message.reply_audio.await_args.kwargs["title"] == "Fallback Audio"
+    assert message.reply_audio.await_args.kwargs["performer"] == "@maxloadbot"
+    assert message.reply_audio.await_args.kwargs["duration"] == 204
     youtube.db.add_file.assert_awaited_once()

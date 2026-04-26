@@ -1,4 +1,5 @@
 import itertools
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -75,6 +76,69 @@ async def test_get_bot_url_and_id_share_identity_fetch(monkeypatch):
     assert url == "t.me/downloader_bot"
     assert bot_id == 999
     bot.get_me.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_get_bot_avatar_thumbnail_uses_small_audio_compatible_photo(monkeypatch, tmp_path):
+    monkeypatch.setattr(bot_profile_cache, "_bot_username", None)
+    monkeypatch.setattr(bot_profile_cache, "_bot_id", None)
+    monkeypatch.setattr(bot_profile_cache, "_bot_avatar_path", None)
+    monkeypatch.setattr(bot_profile_cache, "_AUDIO_THUMB_PATH", tmp_path / "bot_audio_thumbnail.jpg")
+    photos = SimpleNamespace(
+        total_count=1,
+        photos=[[
+            SimpleNamespace(file_id="small", width=160, height=160, file_size=32_000),
+            SimpleNamespace(file_id="large", width=640, height=640, file_size=240_000),
+        ]],
+    )
+    async def fake_download(_file_id, destination):
+        destination.write(b"image-bytes")
+
+    def fake_normalize(source_path: Path, output_path: Path) -> bool:
+        output_path.write_bytes(source_path.read_bytes())
+        return True
+
+    bot = SimpleNamespace(
+        get_me=AsyncMock(return_value=SimpleNamespace(username="downloader_bot", id=777)),
+        get_user_profile_photos=AsyncMock(return_value=photos),
+        download=AsyncMock(side_effect=fake_download),
+    )
+    monkeypatch.setattr(bot_profile_cache, "_normalize_audio_thumbnail_file", fake_normalize)
+
+    thumbnail = await utils.get_bot_avatar_thumbnail(bot)
+
+    assert thumbnail.path == str(tmp_path / "bot_audio_thumbnail.jpg")
+    bot.download.assert_awaited_once()
+    assert bot.download.await_args.args[0] == "small"
+    assert (tmp_path / "bot_audio_thumbnail.jpg").read_bytes() == b"image-bytes"
+
+
+@pytest.mark.asyncio
+async def test_get_bot_avatar_thumbnail_rejects_empty_download(monkeypatch, tmp_path):
+    monkeypatch.setattr(bot_profile_cache, "_bot_username", None)
+    monkeypatch.setattr(bot_profile_cache, "_bot_id", None)
+    monkeypatch.setattr(bot_profile_cache, "_bot_avatar_path", None)
+    monkeypatch.setattr(bot_profile_cache, "_AUDIO_THUMB_PATH", tmp_path / "bot_audio_thumbnail.jpg")
+    photos = SimpleNamespace(
+        total_count=1,
+        photos=[[
+            SimpleNamespace(file_id="small", width=160, height=160, file_size=32_000),
+        ]],
+    )
+
+    async def fake_download(_file_id, _destination):
+        return None
+
+    bot = SimpleNamespace(
+        get_me=AsyncMock(return_value=SimpleNamespace(username="downloader_bot", id=777)),
+        get_user_profile_photos=AsyncMock(return_value=photos),
+        download=AsyncMock(side_effect=fake_download),
+    )
+
+    thumbnail = await utils.get_bot_avatar_thumbnail(bot)
+
+    assert thumbnail is None
+    assert not (tmp_path / "bot_audio_thumbnail.jpg").exists()
 
 
 @pytest.mark.asyncio

@@ -16,7 +16,7 @@ from config import OUTPUT_DIR, CHANNEL_ID
 from handlers.deps import build_handler_dependencies
 from handlers.request_dedupe import claim_message_request
 from handlers.tiktok_inline import handle_tiktok_inline_query, send_inline_tiktok_media
-from services.media.delivery import send_cached_media_entries
+from services.media.delivery import build_audio_cache_key, send_audio_with_thumbnail, send_cached_media_entries
 from services.media.video_metadata import build_video_send_kwargs
 from services.media.orchestration import handle_download_backpressure, run_single_media_flow
 from handlers.user import update_info
@@ -471,8 +471,9 @@ async def download_tiktok_mp3_callback(call: types.CallbackQuery):
     try:
         bot_url = await get_bot_url(bot)
         bot_avatar = await get_bot_avatar_thumbnail(bot)
-        cache_key = f"{video_url}#audio"
+        cache_key = build_audio_cache_key(video_url)
         request_id = f"tiktok_audio:{call.message.chat.id}:{call.message.message_id}:{video_id}"
+        audio_duration = None
         db_file_id = await db.get_file_id(cache_key)
         if db_file_id:
             await safe_edit_text(status_message, bm.uploading_status())
@@ -482,10 +483,13 @@ async def download_tiktok_mp3_callback(call: types.CallbackQuery):
                 "upload_audio",
                 business_id,
             )
-            await call.message.reply_audio(
+            await send_audio_with_thumbnail(
+                call.message.reply_audio,
                 audio=db_file_id,
                 caption=bm.captions(None, None, bot_url),
-                thumbnail=bot_avatar,
+                bot_avatar=bot_avatar,
+                bot_url=bot_url,
+                duration=audio_duration,
                 parse_mode="HTML",
             )
             return
@@ -502,6 +506,7 @@ async def download_tiktok_mp3_callback(call: types.CallbackQuery):
         if not info or not info.music_play_url:
             await handle_download_error(call.message)
             return
+        audio_duration = info.duration_seconds or None
 
         timestamp = datetime.datetime.now().strftime("%Y%m%d%H%M%S")
         download_name = f"{info.id}_{timestamp}_tiktok_audio.mp3"
@@ -541,11 +546,15 @@ async def download_tiktok_mp3_callback(call: types.CallbackQuery):
             business_id,
         )
         await safe_edit_text(status_message, bm.uploading_status())
-        sent_message = await call.message.reply_audio(
+        sent_message = await send_audio_with_thumbnail(
+            call.message.reply_audio,
             audio=FSInputFile(metrics.path),
             title=info.description or "TikTok audio",
             caption=bm.captions(None, None, bot_url),
-            thumbnail=bot_avatar,
+            audio_path=metrics.path,
+            bot_avatar=bot_avatar,
+            bot_url=bot_url,
+            duration=audio_duration,
             parse_mode="HTML",
         )
         await db.add_file(cache_key, sent_message.audio.file_id, "audio")
