@@ -25,9 +25,17 @@ from services.inline.video_requests import (
     reset_inline_video_request,
 )
 from services.media.video_metadata import build_video_send_kwargs
+from services.platforms.youtube_media import YOUTUBE_INFO_TIMEOUT_SECONDS
 from utils.media_cache import build_media_cache_key
 
 logging = logging.bind(service="youtube_inline")
+
+
+async def _get_youtube_video_with_timeout(get_youtube_video_fn, url: str):
+    return await asyncio.wait_for(
+        asyncio.to_thread(get_youtube_video_fn, url),
+        timeout=YOUTUBE_INFO_TIMEOUT_SECONDS,
+    )
 
 
 async def handle_youtube_music_inline_query(
@@ -58,7 +66,7 @@ async def handle_youtube_music_inline_query(
             await query.answer([], cache_time=1, is_personal=True)
             return
 
-        yt = await asyncio.to_thread(get_youtube_video_fn, url)
+        yt = await _get_youtube_video_with_timeout(get_youtube_video_fn, url)
         if not yt:
             await query.answer([], cache_time=1, is_personal=True)
             return
@@ -107,7 +115,7 @@ async def handle_youtube_video_inline_query(
         if not url:
             await query.answer([], cache_time=1, is_personal=True)
             return
-        yt = await asyncio.to_thread(get_youtube_video_fn, url)
+        yt = await _get_youtube_video_with_timeout(get_youtube_video_fn, url)
         if not yt:
             await query.answer([], cache_time=1, is_personal=True)
             return
@@ -179,7 +187,7 @@ async def send_inline_youtube_music(
     )
 
     try:
-        yt = await asyncio.to_thread(get_youtube_video_fn, request.source_url)
+        yt = await _get_youtube_video_with_timeout(get_youtube_video_fn, request.source_url)
         if not yt:
             reset_inline_video_request(token)
             await _edit_inline_status(bm.something_went_wrong(), with_retry_button=True)
@@ -242,6 +250,9 @@ async def send_inline_youtube_music(
 
         reset_inline_video_request(token)
         await _edit_inline_status(bm.something_went_wrong(), with_retry_button=True)
+    except asyncio.TimeoutError:
+        reset_inline_video_request(token)
+        await _edit_inline_status(bm.timeout_error(), with_retry_button=True)
     finally:
         if metrics and metrics.path:
             await remove_file(metrics.path)
@@ -288,7 +299,7 @@ async def send_inline_youtube_video(
     )
 
     try:
-        yt = await asyncio.to_thread(get_youtube_video_fn, request.source_url)
+        yt = await _get_youtube_video_with_timeout(get_youtube_video_fn, request.source_url)
         if not yt:
             reset_inline_video_request(token)
             await _edit_inline_status(bm.something_went_wrong(), with_retry_button=True)
@@ -386,6 +397,9 @@ async def send_inline_youtube_video(
 
         reset_inline_video_request(token)
         await _edit_inline_status(bm.something_went_wrong(), with_retry_button=True)
+    except asyncio.TimeoutError:
+        reset_inline_video_request(token)
+        await _edit_inline_status(bm.timeout_error(), with_retry_button=True)
     finally:
         if metrics and metrics.path:
             await remove_file(metrics.path)

@@ -241,3 +241,55 @@ async def test_download_music_handles_missing_youtube_metadata(monkeypatch):
     await youtube.download_music(message)
 
     message.reply.assert_awaited_once_with(youtube.bm.nothing_found())
+
+
+@pytest.mark.asyncio
+async def test_download_music_falls_back_to_ytdlp_without_direct_audio_stream(monkeypatch, tmp_path):
+    audio_path = tmp_path / "audio.m4a"
+    audio_path.write_bytes(b"audio")
+    metrics = DownloadMetrics(
+        url="https://youtube.com/watch?v=abc123",
+        path=str(audio_path),
+        size=audio_path.stat().st_size,
+        elapsed=0.1,
+        used_multipart=False,
+        resumed=False,
+    )
+    message = SimpleNamespace(
+        from_user=SimpleNamespace(id=7, username="tester", full_name="Tester"),
+        business_connection_id=None,
+        chat=SimpleNamespace(id=99, type="private"),
+        answer=AsyncMock(return_value=SimpleNamespace(delete=AsyncMock())),
+        reply_audio=AsyncMock(return_value=SimpleNamespace(audio=SimpleNamespace(file_id="telegram-audio-id"))),
+        reply=AsyncMock(),
+    )
+    yt = {
+        "id": "abc123",
+        "title": "Fallback Audio",
+        "webpage_url": "https://youtube.com/watch?v=abc123",
+    }
+
+    monkeypatch.setattr(youtube, "get_message_text", lambda _message: "https://music.youtube.com/watch?v=abc123")
+    monkeypatch.setattr(youtube, "react_to_message", AsyncMock())
+    monkeypatch.setattr(youtube.db, "user_settings", AsyncMock(return_value={"delete_message": "off"}))
+    monkeypatch.setattr(youtube.db, "get_file_id", AsyncMock(return_value=None))
+    monkeypatch.setattr(youtube.db, "add_file", AsyncMock())
+    monkeypatch.setattr(youtube, "get_bot_url", AsyncMock(return_value="https://t.me/maxloadbot"))
+    monkeypatch.setattr(youtube, "get_bot_avatar_thumbnail", AsyncMock(return_value=None))
+    monkeypatch.setattr(youtube, "get_youtube_video", lambda _url: yt)
+    monkeypatch.setattr(youtube, "get_audio_stream", lambda _yt: None)
+    monkeypatch.setattr(youtube, "download_with_ytdlp_metrics", AsyncMock(return_value=metrics))
+    monkeypatch.setattr(youtube, "download_stream", AsyncMock())
+    monkeypatch.setattr(youtube, "send_chat_action_if_needed", AsyncMock())
+    monkeypatch.setattr(youtube, "safe_edit_text", AsyncMock(return_value=True))
+    monkeypatch.setattr(youtube, "safe_delete_message", AsyncMock())
+    monkeypatch.setattr(youtube, "remove_file", AsyncMock())
+    monkeypatch.setattr(youtube, "update_info", AsyncMock())
+
+    await youtube.download_music(message)
+
+    youtube.download_with_ytdlp_metrics.assert_awaited_once()
+    youtube.download_stream.assert_not_awaited()
+    message.reply_audio.assert_awaited_once()
+    assert message.reply_audio.await_args.kwargs["title"] == "Fallback Audio"
+    youtube.db.add_file.assert_awaited_once()
