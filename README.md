@@ -171,6 +171,11 @@ Run tests with:
 pytest
 ```
 
+## Suggested Improvements
+
+- Add a small health/readiness endpoint or admin health command that checks PostgreSQL connectivity, Telegram Bot API reachability, queue depth, and downloader worker status.
+- Expand platform regression tests with saved extractor fixtures for TikTok, Instagram, YouTube, SoundCloud, Pinterest, and X/Twitter so platform-specific breakages are easier to catch before deployment.
+
 ## Contributing
 
 Issues and pull requests are welcome. If you change runtime behavior, settings, platform handling, or deployment flow, please update the README and related tests in the same change.
@@ -202,6 +207,17 @@ Issues and pull requests are welcome. If you change runtime behavior, settings, 
 ## Bot
 
 Public bot: [@MaxLoadBot](https://t.me/MaxLoadBot)
+
+## Support the Project
+
+If Downloader-Bot saves you time, you can support ongoing development and infrastructure costs:
+
+- PayPal: [Donate](https://www.paypal.com/donate/?hosted_button_id=98QRTC2HFRA4Y)
+- TRC20: `TS4Ktovpwz9n2Ws8q9YXC3npW8gXi4QyYi`
+- BEP20: `0xE8F613484f84F1B70A777325771d3A3Ca33979Ab`
+- Solana: `8pfgWjfvDUpmeszVXbRzbifFzUDzeNeGWuJf6HCcjAF7`
+- ERC20: `0x9b38804F07A4ca4381a6Ef7F0022a3F4caBc5b6F`
+- TON: `UQBm9KPhtMw-XVVjirUoa09wzrlyWsbeZhKfefl1Uw-qNZ-r`
 
 ## License
 
