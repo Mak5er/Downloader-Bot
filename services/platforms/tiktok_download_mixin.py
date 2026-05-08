@@ -5,7 +5,7 @@ from typing import Any, Callable, Optional
 
 from services.logger import logger as logging
 from services.download.queue import QueueBackpressureError, QueueRateLimitError, get_download_queue
-from services.platforms.tiktok_common import _safe_int
+from services.platforms.tiktok_common import _safe_int, get_video_id_from_url
 from utils.download_manager import (
     DownloadError,
     DownloadMetrics,
@@ -18,6 +18,10 @@ logging = logging.bind(service="tiktok_media")
 
 
 class TikTokDownloadMixin:
+    DOWNLOAD_URL_TEMPLATE = "https://tikwm.com/video/media/play/{video_id}.mp4"
+    DOWNLOAD_SERVICE_CYCLES = 3
+    DOWNLOAD_CYCLE_DELAY_SECONDS = 2.0
+
     def _build_ytdlp_download_options(self) -> dict[str, Any]:
         return {
             "quiet": True,
@@ -28,8 +32,8 @@ class TikTokDownloadMixin:
             "continuedl": True,
             "overwrites": True,
             "socket_timeout": 15,
-            "retries": 2,
-            "fragment_retries": 2,
+            "retries": 0,
+            "fragment_retries": 0,
             "concurrent_fragment_downloads": 4,
         }
 
@@ -253,6 +257,173 @@ class TikTokDownloadMixin:
             self._cleanup_paths(output_path, f"{base_path}.*")
             raise DownloadError(str(exc)) from exc
 
+    def _build_direct_download_headers(self, source_url: str, source_data: dict[str, Any], key: str) -> dict[str, str]:
+        headers = {
+            "User-Agent": self._get_user_agent(),
+            "Referer": source_data.get("webpage_url") or source_url or "https://www.tiktok.com/",
+        }
+        extra_headers = source_data.get(key)
+        if isinstance(extra_headers, dict):
+            for header_key, header_value in extra_headers.items():
+                if isinstance(header_key, str) and isinstance(header_value, str) and header_value:
+                    headers[header_key] = header_value
+        return headers
+
+    @staticmethod
+    def _append_unique_url(candidates: list[str], value: Any) -> None:
+        if isinstance(value, str):
+            url = value.strip()
+            if url and url not in candidates:
+                candidates.append(url)
+
+    def _direct_video_candidates(self, source_url: str, source_data: dict[str, Any]) -> list[str]:
+        candidates: list[str] = []
+        for key in ("hdplay", "play", "wmplay"):
+            self._append_unique_url(candidates, source_data.get(key))
+        video_id = source_data.get("id") or get_video_id_from_url(source_url)
+        if isinstance(video_id, str) and video_id.strip():
+            self._append_unique_url(candidates, self.DOWNLOAD_URL_TEMPLATE.format(video_id=video_id.strip()))
+        return candidates
+
+    def _direct_audio_candidates(self, source_data: dict[str, Any]) -> list[str]:
+        candidates: list[str] = []
+        self._append_unique_url(candidates, source_data.get("music"))
+        return candidates
+
+    async def _download_direct_candidate(
+        self,
+        *,
+        candidate_url: str,
+        filename: str,
+        headers: dict[str, str],
+        size_hint: Optional[int],
+        user_id: Optional[int],
+        chat_id: Optional[int],
+        request_id: Optional[str],
+        on_queued,
+        on_progress,
+        on_retry,
+    ) -> DownloadMetrics:
+        async def _download_once() -> DownloadMetrics:
+            return await self._downloader.download(
+                candidate_url,
+                filename,
+                headers=headers,
+                user_id=user_id,
+                chat_id=chat_id,
+                source="tiktok",
+                request_id=request_id,
+                size_hint=size_hint,
+                on_queued=on_queued,
+                on_progress=on_progress,
+            )
+
+        return await _download_once()
+
+    async def _download_direct(
+        self,
+        *,
+        candidates: list[str],
+        filename: str,
+        headers: dict[str, str],
+        size_hint: Optional[int],
+        user_id: Optional[int],
+        chat_id: Optional[int],
+        request_id: Optional[str],
+        on_queued,
+        on_progress,
+        on_retry,
+    ) -> Optional[DownloadMetrics]:
+        last_error: Optional[Exception] = None
+        for candidate_url in candidates:
+            try:
+                return await self._download_direct_candidate(
+                    candidate_url=candidate_url,
+                    filename=filename,
+                    headers=headers,
+                    size_hint=size_hint,
+                    user_id=user_id,
+                    chat_id=chat_id,
+                    request_id=request_id,
+                    on_queued=on_queued,
+                    on_progress=on_progress,
+                    on_retry=on_retry,
+                )
+            except (DownloadRateLimitError, DownloadQueueBusyError):
+                raise
+            except DownloadError as exc:
+                last_error = exc
+                logging.warning("TikTok direct candidate failed: url=%s error=%s", candidate_url, exc)
+        if last_error:
+            raise DownloadError(str(last_error)) from last_error
+        return None
+
+    async def _notify_download_cycle_retry(self, on_retry, failed_attempt: int, total_attempts: int, error) -> None:
+        if on_retry is None:
+            return
+        try:
+            maybe = on_retry(failed_attempt, total_attempts, error)
+            if asyncio.iscoroutine(maybe):
+                await maybe
+        except Exception as exc:
+            logging.debug("TikTok download retry callback failed: error=%s", exc)
+
+    async def _download_with_service_cycle(
+        self,
+        *,
+        direct_download: Callable[[], Any],
+        ytdlp_download: Callable[[], Any],
+        source_url: str,
+        media_kind: str,
+        on_retry,
+    ) -> Optional[DownloadMetrics]:
+        last_error: Optional[Exception] = None
+        for cycle in range(1, self.DOWNLOAD_SERVICE_CYCLES + 1):
+            try:
+                direct_metrics = await direct_download()
+                if direct_metrics:
+                    logging.info(
+                        "TikTok direct %s download succeeded: source_url=%s path=%s cycle=%s",
+                        media_kind,
+                        source_url,
+                        direct_metrics.path,
+                        cycle,
+                    )
+                    return direct_metrics
+            except (DownloadRateLimitError, DownloadQueueBusyError):
+                raise
+            except DownloadError as exc:
+                last_error = exc
+                logging.warning(
+                    "TikTok direct %s download failed, trying yt-dlp fallback: source_url=%s cycle=%s error=%s",
+                    media_kind,
+                    source_url,
+                    cycle,
+                    exc,
+                )
+
+            try:
+                return await ytdlp_download()
+            except (DownloadRateLimitError, DownloadQueueBusyError):
+                raise
+            except DownloadError as exc:
+                last_error = exc
+                if cycle >= self.DOWNLOAD_SERVICE_CYCLES:
+                    break
+                logging.warning(
+                    "TikTok yt-dlp %s fallback failed, retrying service cycle: source_url=%s cycle=%s error=%s",
+                    media_kind,
+                    source_url,
+                    cycle,
+                    exc,
+                )
+                await self._notify_download_cycle_retry(on_retry, cycle, self.DOWNLOAD_SERVICE_CYCLES, exc)
+                await asyncio.sleep(self.DOWNLOAD_CYCLE_DELAY_SECONDS)
+
+        if last_error:
+            raise DownloadError(str(last_error)) from last_error
+        return None
+
     async def _submit_queued_ytdlp_download(
         self,
         *,
@@ -273,10 +444,10 @@ class TikTokDownloadMixin:
         async def _runner() -> DownloadMetrics:
             return await self._retry_async_operation(
                 lambda: asyncio.to_thread(sync_download, progress_bridge),
-                attempts=3,
+                attempts=1,
                 delay_seconds=2.0,
                 retry_on_exception=lambda exc: not isinstance(exc, (DownloadRateLimitError, DownloadQueueBusyError)),
-                on_retry=on_retry,
+                on_retry=None,
             )
 
         try:
@@ -313,20 +484,37 @@ class TikTokDownloadMixin:
         output_path = os.path.join(self._output_dir, filename)
 
         try:
-            return await self._submit_queued_ytdlp_download(
-                source="tiktok",
-                size_hint=effective_size_hint,
-                user_id=user_id,
-                chat_id=chat_id,
-                request_id=request_id,
-                on_queued=on_queued,
-                on_progress=on_progress,
-                on_retry=on_retry,
-                sync_download=lambda progress_callback: self._download_video_with_ytdlp_sync(
-                    source_url=source_url,
-                    output_path=output_path,
-                    progress_callback=progress_callback,
+            return await self._download_with_service_cycle(
+                direct_download=lambda: self._download_direct(
+                    candidates=self._direct_video_candidates(source_url, source_data),
+                    filename=filename,
+                    headers=self._build_direct_download_headers(source_url, source_data, "download_headers"),
+                    size_hint=effective_size_hint,
+                    user_id=user_id,
+                    chat_id=chat_id,
+                    request_id=request_id,
+                    on_queued=on_queued,
+                    on_progress=on_progress,
+                    on_retry=on_retry,
                 ),
+                ytdlp_download=lambda: self._submit_queued_ytdlp_download(
+                    source="tiktok",
+                    size_hint=effective_size_hint,
+                    user_id=user_id,
+                    chat_id=chat_id,
+                    request_id=request_id,
+                    on_queued=on_queued,
+                    on_progress=on_progress,
+                    on_retry=on_retry,
+                    sync_download=lambda progress_callback: self._download_video_with_ytdlp_sync(
+                        source_url=source_url,
+                        output_path=output_path,
+                        progress_callback=progress_callback,
+                    ),
+                ),
+                source_url=source_url,
+                media_kind="video",
+                on_retry=on_retry,
             )
         except (DownloadRateLimitError, DownloadQueueBusyError):
             raise
@@ -353,20 +541,37 @@ class TikTokDownloadMixin:
         output_path = os.path.join(self._output_dir, filename)
 
         try:
-            return await self._submit_queued_ytdlp_download(
-                source="tiktok",
-                size_hint=effective_size_hint,
-                user_id=user_id,
-                chat_id=chat_id,
-                request_id=request_id,
-                on_queued=on_queued,
-                on_progress=on_progress,
-                on_retry=on_retry,
-                sync_download=lambda progress_callback: self._download_audio_with_ytdlp_sync(
-                    source_url=source_url,
-                    output_path=output_path,
-                    progress_callback=progress_callback,
+            return await self._download_with_service_cycle(
+                direct_download=lambda: self._download_direct(
+                    candidates=self._direct_audio_candidates(source_data),
+                    filename=filename,
+                    headers=self._build_direct_download_headers(source_url, source_data, "audio_headers"),
+                    size_hint=effective_size_hint,
+                    user_id=user_id,
+                    chat_id=chat_id,
+                    request_id=request_id,
+                    on_queued=on_queued,
+                    on_progress=on_progress,
+                    on_retry=on_retry,
                 ),
+                ytdlp_download=lambda: self._submit_queued_ytdlp_download(
+                    source="tiktok",
+                    size_hint=effective_size_hint,
+                    user_id=user_id,
+                    chat_id=chat_id,
+                    request_id=request_id,
+                    on_queued=on_queued,
+                    on_progress=on_progress,
+                    on_retry=on_retry,
+                    sync_download=lambda progress_callback: self._download_audio_with_ytdlp_sync(
+                        source_url=source_url,
+                        output_path=output_path,
+                        progress_callback=progress_callback,
+                    ),
+                ),
+                source_url=source_url,
+                media_kind="audio",
+                on_retry=on_retry,
             )
         except (DownloadRateLimitError, DownloadQueueBusyError):
             raise
