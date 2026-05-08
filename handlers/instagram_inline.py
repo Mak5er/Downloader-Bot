@@ -23,6 +23,7 @@ from handlers.utils import (
 )
 from services.logger import logger as logging, summarize_text_for_log, summarize_url_for_log
 from services.inline.album_links import create_inline_album_request
+from services.inline.audio_requests import create_audio_request
 from services.inline.service_icons import get_inline_service_icon
 from services.inline.video_requests import (
     claim_inline_video_request_for_send,
@@ -43,6 +44,8 @@ from utils.download_manager import (
 from utils.media_cache import build_media_cache_key
 
 logging = logging.bind(service="instagram_inline")
+
+_INSTAGRAM_AUDIO_CALLBACK_PREFIX = "audio:inst:"
 
 
 async def handle_instagram_inline_query(
@@ -294,7 +297,7 @@ async def send_inline_instagram_media(
             return
 
         db_video_url = request.source_url
-        audio_callback_data = f"audio:inst:{request.source_url}"
+        audio_callback_data = f"{_INSTAGRAM_AUDIO_CALLBACK_PREFIX}{create_audio_request('instagram', request.source_url)}"
         db_id = await deps.db.get_file_id(db_video_url)
         if not db_id:
             if not channel_id:

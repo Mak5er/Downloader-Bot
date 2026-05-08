@@ -1,3 +1,4 @@
+import asyncio
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 
@@ -57,3 +58,36 @@ async def test_resolve_cached_media_items_processes_all_items_by_default(monkeyp
     assert [item["cache_key"] for item in media_items] == [f"post#{index}:photo" for index in range(13)]
     assert downloaded_paths == [f"/tmp/item-{index}.jpg" for index in range(13)]
     assert log_metrics.call_count == 13
+
+
+@pytest.mark.asyncio
+async def test_resolve_cached_media_items_limits_parallel_downloads(monkeypatch):
+    items = [SimpleNamespace(type="photo") for _ in range(8)]
+    db_service = SimpleNamespace(get_file_id=AsyncMock(return_value=None))
+    log_metrics = Mock()
+    active = 0
+    max_active = 0
+    monkeypatch.setattr(media_resolver, "log_download_metrics", log_metrics)
+
+    async def download_item(index, _item, _kind):
+        nonlocal active, max_active
+        active += 1
+        max_active = max(max_active, active)
+        await asyncio.sleep(0.01)
+        active -= 1
+        return SimpleNamespace(path=f"/tmp/item-{index}.jpg")
+
+    media_items, downloaded_paths = await media_resolver.resolve_cached_media_items(
+        items,
+        db_service=db_service,
+        kind_getter=lambda item: item.type,
+        build_cache_key=lambda index, _item, kind: f"post#{index}:{kind}",
+        download_item=download_item,
+        metrics_label="test_media",
+        error_label="Resolver",
+        concurrency=3,
+    )
+
+    assert max_active <= 3
+    assert [item["cache_key"] for item in media_items] == [f"post#{index}:photo" for index in range(8)]
+    assert downloaded_paths == [f"/tmp/item-{index}.jpg" for index in range(8)]

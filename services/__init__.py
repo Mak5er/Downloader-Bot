@@ -1,6 +1,7 @@
 from services.download import queue as download_queue
 from services.download import worker_cli as download_worker_cli
 from services.inline import album_links as inline_album_links
+from services.inline import audio_requests as inline_audio_requests
 from services.inline import service_icons as inline_service_icons
 from services.inline import video_requests as inline_video_requests
 from services.links import detection as link_detection
@@ -14,6 +15,7 @@ __all__ = [
     "download_queue",
     "download_worker_cli",
     "inline_album_links",
+    "inline_audio_requests",
     "inline_service_icons",
     "inline_video_requests",
     "link_detection",

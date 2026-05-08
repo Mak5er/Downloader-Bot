@@ -113,7 +113,7 @@ async def test_flush_analytics_batch_uses_bounded_concurrency(monkeypatch):
     max_active = 0
     persisted = AsyncMock()
 
-    async def fake_send(payload):
+    async def fake_send(payloads):
         nonlocal active, max_active
         active += 1
         max_active = max(max_active, active)
@@ -121,7 +121,7 @@ async def test_flush_analytics_batch_uses_bounded_concurrency(monkeypatch):
         active -= 1
 
     monkeypatch.setattr(main, "_ANALYTICS_SEND_CONCURRENCY", 2)
-    monkeypatch.setattr(main, "_send_to_google_analytics", fake_send)
+    monkeypatch.setattr(main, "_send_to_google_analytics_batch", fake_send)
     monkeypatch.setattr(main, "_persist_analytics_batch", persisted)
 
     batch = [
@@ -135,6 +135,33 @@ async def test_flush_analytics_batch_uses_bounded_concurrency(monkeypatch):
 
     assert max_active <= 2
     persisted.assert_awaited_once_with(batch)
+
+
+@pytest.mark.asyncio
+async def test_flush_analytics_batch_groups_events_by_identity(monkeypatch):
+    dummy_client = DummyAnalyticsClient()
+
+    monkeypatch.setattr(main, "BOT_TOKEN", "test-bot-token")
+    monkeypatch.setattr(main, "MEASUREMENT_ID", "G-TEST")
+    monkeypatch.setattr(main, "API_SECRET", "secret")
+    monkeypatch.setattr(main, "_analytics_http_client", None)
+    monkeypatch.setattr(main.httpx, "AsyncClient", lambda *args, **kwargs: dummy_client)
+    monkeypatch.setattr(main, "_persist_analytics_batch", AsyncMock())
+
+    batch = [
+        main._AnalyticsPayload(user_id=123, chat_type="private", action_name="start"),
+        main._AnalyticsPayload(user_id=123, chat_type="private", action_name="youtube_video"),
+        main._AnalyticsPayload(user_id=456, chat_type="group", action_name="tiktok_video"),
+    ]
+
+    await main._flush_analytics_batch(batch)
+
+    assert len(dummy_client.calls) == 2
+    event_names = sorted(
+        [event["name"] for event in call["json"]["events"]]
+        for call in dummy_client.calls
+    )
+    assert event_names == [["start", "youtube_video"], ["tiktok_video"]]
 
 
 @pytest.mark.asyncio

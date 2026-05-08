@@ -49,6 +49,7 @@ from services.media.delivery import build_audio_cache_key, send_audio_with_thumb
 from services.media.video_metadata import build_video_send_kwargs
 from services.media.orchestration import handle_download_backpressure, run_single_media_flow
 from services.media.resolver import resolve_cached_media_items
+from services.inline.audio_requests import create_audio_request, get_audio_request
 from services.platforms.instagram_media import (
     InstagramMedia,
     InstagramMediaService,
@@ -67,6 +68,24 @@ from utils.download_manager import (
 from utils.media_cache import build_media_cache_key
 
 logging = logging.bind(service="instagram")
+
+_INSTAGRAM_AUDIO_CALLBACK_PREFIX = "audio:inst:"
+
+
+def _build_instagram_audio_callback_data(url: str) -> str:
+    return f"{_INSTAGRAM_AUDIO_CALLBACK_PREFIX}{create_audio_request('instagram', url)}"
+
+
+def _resolve_instagram_audio_callback_url(callback_data: str | None) -> Optional[str]:
+    if not callback_data or not callback_data.startswith(_INSTAGRAM_AUDIO_CALLBACK_PREFIX):
+        return None
+    payload = callback_data[len(_INSTAGRAM_AUDIO_CALLBACK_PREFIX):]
+    request = get_audio_request(payload)
+    if request is not None and request.service == "instagram":
+        return request.url
+    if payload.startswith(("http://", "https://")):
+        return strip_instagram_url(payload)
+    return None
 
 router = Router()
 
@@ -167,7 +186,7 @@ async def process_instagram_video(message: types.Message, data: InstagramVideo, 
         await handle_download_error(message, business_id=business_id)
         return False
 
-    audio_callback_data = f"audio:inst:{original_url}"
+    audio_callback_data = _build_instagram_audio_callback_data(original_url)
     media = data.media_list[0]
 
     timestamp = datetime.datetime.now().strftime("%Y%m%d%H%M%S")
@@ -369,7 +388,10 @@ async def download_instagram_audio_callback(call: types.CallbackQuery):
         return
 
     await call.answer()
-    original_url = call.data.replace("audio:inst:", "")
+    original_url = _resolve_instagram_audio_callback_url(call.data)
+    if not original_url:
+        await call.message.reply(bm.something_went_wrong())
+        return
     business_id = call.message.business_connection_id
     show_service_status = business_id is None
     status_message: Optional[types.Message] = None

@@ -7,6 +7,7 @@ from utils.download_manager import log_download_metrics
 logging = logging.bind(service="media_resolver")
 
 T = TypeVar("T")
+DEFAULT_MEDIA_RESOLVE_CONCURRENCY = 4
 
 
 async def resolve_cached_media_items(
@@ -19,9 +20,11 @@ async def resolve_cached_media_items(
     metrics_label: str,
     error_label: str,
     limit: int | None = None,
+    concurrency: int = DEFAULT_MEDIA_RESOLVE_CONCURRENCY,
 ) -> tuple[list[dict[str, Any]], list[str]]:
     media_items: list[dict[str, Any]] = []
     downloaded_paths: list[str] = []
+    semaphore = asyncio.Semaphore(max(1, int(concurrency)))
 
     async def _resolve_item(index: int, item: T) -> dict[str, Any] | None:
         media_kind = str(kind_getter(item))
@@ -53,8 +56,12 @@ async def resolve_cached_media_items(
 
     items_to_resolve = items if limit is None else items[:limit]
 
+    async def _resolve_item_bounded(index: int, item: T) -> dict[str, Any] | None:
+        async with semaphore:
+            return await _resolve_item(index, item)
+
     tasks = [
-        asyncio.create_task(_resolve_item(index, item))
+        asyncio.create_task(_resolve_item_bounded(index, item))
         for index, item in enumerate(items_to_resolve)
     ]
     results = await asyncio.gather(*tasks, return_exceptions=True)

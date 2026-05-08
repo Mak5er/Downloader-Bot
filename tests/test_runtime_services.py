@@ -3,6 +3,7 @@ from types import SimpleNamespace
 import pytest
 
 from services import inline_service_icons
+from services import inline_audio_requests
 from services import inline_video_requests
 from services import pending_requests
 from services.runtime import request_dedupe
@@ -169,6 +170,23 @@ def test_inline_video_requests_lifecycle(monkeypatch):
         )
         is None
     )
+
+
+def test_audio_requests_are_tokenized_and_reused(monkeypatch):
+    monkeypatch.setattr(inline_audio_requests, "_requests", {})
+    monkeypatch.setattr(inline_audio_requests, "_tokens_by_key", {})
+    monkeypatch.setattr(inline_audio_requests, "_loaded", True)
+    monkeypatch.setattr(inline_audio_requests.secrets, "token_urlsafe", lambda _: "audio-token")
+
+    token = inline_audio_requests.create_audio_request("instagram", "https://instagram.com/reel/abc/")
+    same_token = inline_audio_requests.create_audio_request("instagram", "https://instagram.com/reel/abc/")
+
+    assert token == "audio-token"
+    assert same_token == token
+    request = inline_audio_requests.get_audio_request(token)
+    assert request is not None
+    assert request.service == "instagram"
+    assert request.url == "https://instagram.com/reel/abc/"
 
 
 def test_inline_video_request_expires_after_completion(monkeypatch):

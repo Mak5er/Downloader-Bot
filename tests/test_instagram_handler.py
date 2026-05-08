@@ -13,6 +13,36 @@ def test_strip_instagram_url_strips_tracking():
     assert instagram.strip_instagram_url(url) == "https://www.instagram.com/reel/ABC123/"
 
 
+def test_instagram_audio_callback_uses_short_token(monkeypatch):
+    monkeypatch.setattr(instagram, "create_audio_request", lambda service, url: "audio-token")
+
+    callback_data = instagram._build_instagram_audio_callback_data("https://www.instagram.com/reel/ABC123/")
+
+    assert callback_data == "audio:inst:audio-token"
+    assert len(callback_data.encode("utf-8")) <= 64
+
+
+def test_instagram_audio_callback_resolves_token(monkeypatch):
+    request = SimpleNamespace(service="instagram", url="https://www.instagram.com/reel/ABC123/")
+    monkeypatch.setattr(instagram, "get_audio_request", lambda token: request if token == "audio-token" else None)
+
+    assert (
+        instagram._resolve_instagram_audio_callback_url("audio:inst:audio-token")
+        == "https://www.instagram.com/reel/ABC123/"
+    )
+
+
+def test_instagram_audio_callback_keeps_legacy_url_compatibility(monkeypatch):
+    monkeypatch.setattr(instagram, "get_audio_request", lambda _token: None)
+
+    assert (
+        instagram._resolve_instagram_audio_callback_url(
+            "audio:inst:https://www.instagram.com/reel/ABC123/?utm_source=share"
+        )
+        == "https://www.instagram.com/reel/ABC123/"
+    )
+
+
 @pytest.mark.asyncio
 async def test_instagram_service_download_media_success(monkeypatch, tmp_path):
     service = instagram.InstagramService(output_dir=str(tmp_path))
