@@ -3,7 +3,7 @@ from dataclasses import dataclass
 from typing import Awaitable, Callable, Optional
 from urllib.parse import urlparse, urlunparse
 
-from services.logger import logger as logging
+from services.logger import logger as logging, summarize_url_for_log
 from utils.cobalt_media import classify_cobalt_media_type
 from utils.download_manager import (
     DownloadConfig,
@@ -232,5 +232,5 @@ class InstagramMediaService:
         except (DownloadRateLimitError, DownloadQueueBusyError):
             raise
         except DownloadError as exc:
-            logging.error("Error downloading Instagram media: url=%s error=%s", url, exc)
+            logging.error("Error downloading Instagram media: url=%s error=%s", summarize_url_for_log(url), exc)
             return None

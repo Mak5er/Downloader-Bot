@@ -1,17 +1,20 @@
 import asyncio
+import ipaddress
 import json
 import math
 import os
+import socket
 import threading
 import time
 import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Awaitable, Callable, Mapping, MutableMapping, Optional
+from urllib.parse import urljoin, urlsplit
 
 import requests
 
-from services.logger import logger as logging
+from services.logger import logger as logging, summarize_url_for_log
 from services.download.queue import (
     QueueBackpressureError,
     QueueRateLimitError,
@@ -56,6 +59,10 @@ class _ResumeNotSupportedError(Exception):
     """Raised when a server ignores a Range request during resume."""
 
 
+class UnsafeDownloadUrlError(DownloadError):
+    """Raised when a download URL or redirect targets a blocked network location."""
+
+
 @dataclass(slots=True)
 class DownloadMetrics:
     """Return information about a completed download."""
@@ -97,6 +104,7 @@ class DownloadConfig:
     retry_backoff: float = 0.75
     allow_resume: bool = True
     temp_suffix: str = ".part"
+    max_redirects: int = 5
 
 
 @dataclass(slots=True)
@@ -166,7 +174,8 @@ class ResilientDownloader:
         progress_bridge = self._build_progress_bridge(loop, on_progress)
         headers_map = headers or {}
         target_path = self._resolve_target_path(filename)
-        inflight_key = f"{target_path}::{url}"
+        url_log = summarize_url_for_log(url)
+        inflight_key = f"{target_path}::{url_log}"
         use_subprocess = (
             self._subprocess_threshold_bytes > 0
             and (size_hint or 0) >= self._subprocess_threshold_bytes
@@ -190,7 +199,7 @@ class ResilientDownloader:
         if not should_run:
             logging.debug(
                 "Joining in-flight download: url=%s path=%s request_id=%s",
-                url,
+                url_log,
                 inflight_key,
                 request_id,
             )
@@ -209,7 +218,7 @@ class ResilientDownloader:
                 except Exception as exc:
                     logging.warning(
                         "Subprocess download failed, falling back to thread mode: url=%s file=%s error=%s",
-                        url,
+                        url_log,
                         filename,
                         exc,
                     )
@@ -232,7 +241,7 @@ class ResilientDownloader:
             request_id=request_id,
             user_id=user_id,
             chat_id=chat_id,
-            url=url,
+            url=url_log,
             filename=filename,
             queue_priority=queue_priority,
             size_hint=size_hint,
@@ -254,7 +263,7 @@ class ResilientDownloader:
                 request_id=request_id,
                 user_id=user_id,
                 chat_id=chat_id,
-                url=url,
+                url=summarize_url_for_log(metrics.url),
                 size=metrics.size,
             )
             if not shared_future.done():
@@ -346,6 +355,7 @@ class ResilientDownloader:
                 "retry_backoff": self.config.retry_backoff,
                 "allow_resume": self.config.allow_resume,
                 "temp_suffix": self.config.temp_suffix,
+                "max_redirects": self.config.max_redirects,
             },
         }
 
@@ -398,7 +408,7 @@ class ResilientDownloader:
             size = os.path.getsize(target_path)
             logging.debug(
                 "Download skipped because file already exists: url=%s path=%s size=%s",
-                url,
+                summarize_url_for_log(url),
                 target_path,
                 size,
             )
@@ -426,7 +436,7 @@ class ResilientDownloader:
                 "download_probe",
                 duration_ms=(time.perf_counter() - probe_started_at) * 1000.0,
                 source=self.source,
-                url=url,
+                url=summarize_url_for_log(url),
                 total_size=total_size,
                 supports_range=supports_range,
             )
@@ -441,7 +451,7 @@ class ResilientDownloader:
                     resumed = True
                     logging.debug(
                         "Resuming partial download: url=%s path=%s resume_from=%s total=%s",
-                        url,
+                        summarize_url_for_log(url),
                         temp_path,
                         existing_size,
                         total_size,
@@ -479,7 +489,7 @@ class ResilientDownloader:
                 except _ResumeNotSupportedError:
                     logging.warning(
                         "Resume not supported by origin, restarting download from scratch: url=%s path=%s",
-                        url,
+                        summarize_url_for_log(url),
                         target_path,
                     )
                     headers.pop("Range", None)
@@ -505,7 +515,7 @@ class ResilientDownloader:
 
             logging.info(
                 "Download finished: url=%s path=%s size=%s elapsed=%.2fs multipart=%s resumed=%s",
-                url,
+                summarize_url_for_log(url),
                 target_path,
                 size,
                 elapsed,
@@ -520,7 +530,7 @@ class ResilientDownloader:
                 "download_sync",
                 duration_ms=(time.perf_counter() - sync_started_at) * 1000.0,
                 source=self.source,
-                url=url,
+                url=summarize_url_for_log(url),
                 path=target_path,
                 size=size,
                 multipart=use_multipart,
@@ -538,7 +548,7 @@ class ResilientDownloader:
             self._cleanup_partial(temp_path, target_path, remove_target=not had_existing_target)
             raise
         except Exception as exc:
-            logging.error("Download failed: url=%s path=%s error=%s", url, target_path, exc)
+            logging.error("Download failed: url=%s path=%s error=%s", summarize_url_for_log(url), target_path, exc)
             self._cleanup_partial(temp_path, target_path, remove_target=not had_existing_target)
             raise DownloadError(str(exc)) from exc
 
@@ -558,6 +568,62 @@ class ResilientDownloader:
             raise DownloadError(f"Download path escapes output directory: {filename}") from exc
         return str(target_path)
 
+    def _validate_download_url(self, url: str) -> str:
+        parsed = urlsplit(str(url or "").strip())
+        if parsed.scheme.lower() not in {"http", "https"}:
+            raise UnsafeDownloadUrlError("download URL must use http or https")
+        if not parsed.hostname:
+            raise UnsafeDownloadUrlError("download URL is missing a host")
+
+        try:
+            addr_infos = socket.getaddrinfo(parsed.hostname, parsed.port, type=socket.SOCK_STREAM)
+        except OSError as exc:
+            raise UnsafeDownloadUrlError(f"download host could not be resolved: {parsed.hostname}") from exc
+
+        for family, _type, _proto, _canonname, sockaddr in addr_infos:
+            raw_ip = sockaddr[0]
+            try:
+                ip = ipaddress.ip_address(raw_ip)
+            except ValueError as exc:
+                raise UnsafeDownloadUrlError(f"download host resolved to invalid address: {raw_ip}") from exc
+            if (
+                ip.is_private
+                or ip.is_loopback
+                or ip.is_link_local
+                or ip.is_multicast
+                or ip.is_reserved
+                or ip.is_unspecified
+            ):
+                raise UnsafeDownloadUrlError(f"download host resolved to blocked address: {raw_ip}")
+        return url
+
+    def _request_with_safe_redirects(
+        self,
+        session: requests.Session,
+        method: str,
+        url: str,
+        **kwargs,
+    ) -> requests.Response:
+        current_url = self._validate_download_url(url)
+        headers = kwargs.pop("headers", None)
+        for redirect_count in range(max(0, int(self.config.max_redirects)) + 1):
+            request_kwargs = {**kwargs, "headers": headers, "allow_redirects": False}
+            response = session.request(method, current_url, **request_kwargs)
+            if getattr(response, "is_redirect", False):
+                location = response.headers.get("Location")
+                response.close()
+                if not location:
+                    raise UnsafeDownloadUrlError("redirect response is missing Location header")
+                if redirect_count >= self.config.max_redirects:
+                    raise UnsafeDownloadUrlError("download redirect limit exceeded")
+                current_url = self._validate_download_url(urljoin(current_url, location))
+                continue
+            final_url = getattr(response, "url", None)
+            if final_url:
+                self._validate_download_url(final_url)
+            return response
+        raise UnsafeDownloadUrlError("download redirect limit exceeded")
+
     def _probe(self, url: str, headers: Mapping[str, str]) -> tuple[int, bool]:
         """Issue a HEAD request to discover content length and Range support."""
         attempt = 0
@@ -565,21 +631,25 @@ class ResilientDownloader:
         while True:
             session = self._get_session()
             try:
-                response = session.head(
+                response = self._request_with_safe_redirects(
+                    session,
+                    "HEAD",
                     url,
                     headers=headers,
-                    allow_redirects=True,
                     timeout=self.config.head_timeout,
                 )
-                response.raise_for_status()
+                try:
+                    response.raise_for_status()
 
-                raw_size = response.headers.get("Content-Length") or "0"
-                total_size = int(raw_size) if raw_size.isdigit() else 0
-                supports_range = "bytes" in (response.headers.get("Accept-Ranges") or "").lower()
+                    raw_size = response.headers.get("Content-Length") or "0"
+                    total_size = int(raw_size) if raw_size.isdigit() else 0
+                    supports_range = "bytes" in (response.headers.get("Accept-Ranges") or "").lower()
+                finally:
+                    response.close()
 
                 logging.debug(
                     "Probe successful: url=%s size=%s supports_range=%s",
-                    url,
+                    summarize_url_for_log(url),
                     total_size,
                     supports_range,
                 )
@@ -589,14 +659,14 @@ class ResilientDownloader:
                 if attempt > max_probe_retries:
                     logging.warning(
                         "Probe failed, falling back to conservative download: url=%s error=%s",
-                        url,
+                        summarize_url_for_log(url),
                         exc,
                     )
                     return 0, False
                 sleep_for = self.config.retry_backoff * attempt
                 logging.debug(
                     "HEAD probe retry: url=%s attempt=%s sleep=%.2fs error=%s",
-                    url,
+                    summarize_url_for_log(url),
                     attempt,
                     sleep_for,
                     exc,
@@ -617,11 +687,12 @@ class ResilientDownloader:
         for attempt in range(1, self.config.max_retries + 2):
             session = self._get_session()
             try:
-                with session.get(
+                with self._request_with_safe_redirects(
+                    session,
+                    "GET",
                     url,
                     headers=headers,
                     stream=True,
-                    allow_redirects=True,
                     timeout=self.config.stream_timeout,
                 ) as response:
                     response.raise_for_status()
@@ -655,7 +726,7 @@ class ResilientDownloader:
                 sleep_for = backoff * attempt
                 logging.warning(
                     "Sequential download retry: url=%s attempt=%s sleep=%.2fs error=%s",
-                    url,
+                    summarize_url_for_log(url),
                     attempt,
                     sleep_for,
                     exc,
@@ -688,11 +759,12 @@ class ResilientDownloader:
             for attempt in range(1, self.config.max_retries + 2):
                 session = self._get_session()
                 try:
-                    with session.get(
+                    with self._request_with_safe_redirects(
+                        session,
+                        "GET",
                         url,
                         headers=range_headers,
                         stream=True,
-                        allow_redirects=True,
                         timeout=self.config.stream_timeout,
                     ) as response:
                         response.raise_for_status()
@@ -712,7 +784,7 @@ class ResilientDownloader:
                     sleep_for = backoff * attempt
                     logging.debug(
                         "Range fetch retry: url=%s range=%s-%s attempt=%s sleep=%.2fs error=%s",
-                        url,
+                        summarize_url_for_log(url),
                         start,
                         end,
                         attempt,
@@ -818,7 +890,7 @@ def log_download_metrics(source: str, metrics: DownloadMetrics) -> None:
             )
             % (
                 source,
-                metrics.url,
+                summarize_url_for_log(metrics.url),
                 metrics.path,
                 size_mb,
                 metrics.elapsed,
@@ -826,7 +898,7 @@ def log_download_metrics(source: str, metrics: DownloadMetrics) -> None:
                 metrics.resumed,
             ),
             source=source,
-            url=metrics.url,
+            url=summarize_url_for_log(metrics.url),
             path=metrics.path,
             size_mb=round(size_mb, 2),
             multipart=metrics.used_multipart,

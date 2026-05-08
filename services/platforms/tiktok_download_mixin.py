@@ -3,7 +3,7 @@ import glob
 import os
 from typing import Any, Callable, Optional
 
-from services.logger import logger as logging
+from services.logger import logger as logging, summarize_url_for_log
 from services.download.queue import QueueBackpressureError, QueueRateLimitError, get_download_queue
 from services.platforms.tiktok_common import _safe_int, get_video_id_from_url
 from utils.download_manager import (
@@ -353,7 +353,7 @@ class TikTokDownloadMixin:
                 raise
             except DownloadError as exc:
                 last_error = exc
-                logging.warning("TikTok direct candidate failed: url=%s error=%s", candidate_url, exc)
+                logging.warning("TikTok direct candidate failed: url=%s error=%s", summarize_url_for_log(candidate_url), exc)
         if last_error:
             raise DownloadError(str(last_error)) from last_error
         return None
@@ -385,7 +385,7 @@ class TikTokDownloadMixin:
                     logging.info(
                         "TikTok direct %s download succeeded: source_url=%s path=%s cycle=%s",
                         media_kind,
-                        source_url,
+                        summarize_url_for_log(source_url),
                         direct_metrics.path,
                         cycle,
                     )
@@ -397,7 +397,7 @@ class TikTokDownloadMixin:
                 logging.warning(
                     "TikTok direct %s download failed, trying yt-dlp fallback: source_url=%s cycle=%s error=%s",
                     media_kind,
-                    source_url,
+                    summarize_url_for_log(source_url),
                     cycle,
                     exc,
                 )
@@ -413,7 +413,7 @@ class TikTokDownloadMixin:
                 logging.warning(
                     "TikTok yt-dlp %s fallback failed, retrying service cycle: source_url=%s cycle=%s error=%s",
                     media_kind,
-                    source_url,
+                    summarize_url_for_log(source_url),
                     cycle,
                     exc,
                 )
@@ -519,7 +519,7 @@ class TikTokDownloadMixin:
         except (DownloadRateLimitError, DownloadQueueBusyError):
             raise
         except DownloadError as exc:
-            logging.error("Error downloading TikTok video: source_url=%s error=%s", source_url, exc)
+            logging.error("Error downloading TikTok video: source_url=%s error=%s", summarize_url_for_log(source_url), exc)
             return None
 
     async def download_audio(
@@ -576,5 +576,5 @@ class TikTokDownloadMixin:
         except (DownloadRateLimitError, DownloadQueueBusyError):
             raise
         except DownloadError as exc:
-            logging.error("Error downloading TikTok audio: source_url=%s error=%s", source_url, exc)
+            logging.error("Error downloading TikTok audio: source_url=%s error=%s", summarize_url_for_log(source_url), exc)
             return None

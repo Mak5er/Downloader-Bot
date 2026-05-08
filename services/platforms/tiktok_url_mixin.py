@@ -3,7 +3,7 @@ import re
 
 import aiohttp
 
-from services.logger import logger as logging
+from services.logger import logger as logging, summarize_text_for_log, summarize_url_for_log
 from services.platforms.tiktok_common import (
     SHORT_HOSTS,
     URL_EXPAND_CACHE_MAXSIZE,
@@ -49,16 +49,24 @@ class TikTokUrlResolverMixin:
             return match.group(0) if match else input_text
 
         url = strip_tiktok_tracking(extract_tiktok_url(text))
-        logging.debug("TikTok URL extracted: raw=%s extracted=%s", text, url)
+        logging.debug(
+            "TikTok URL extracted: raw=%s extracted=%s",
+            summarize_text_for_log(text),
+            summarize_url_for_log(url),
+        )
 
         try:
             parsed = aiohttp.helpers.URL(url)
             host = parsed.host or ""
             if host.lower() in SHORT_HOSTS:
                 expanded = await self._expand_tiktok_url_cached_async(url)
-                logging.debug("TikTok short URL expanded: raw=%s expanded=%s", url, expanded)
+                logging.debug(
+                    "TikTok short URL expanded: raw=%s expanded=%s",
+                    summarize_url_for_log(url),
+                    summarize_url_for_log(expanded),
+                )
                 return strip_tiktok_tracking(expanded)
             return strip_tiktok_tracking(url)
         except (aiohttp.ClientError, asyncio.TimeoutError) as exc:
-            logging.error("Error expanding TikTok URL: url=%s error=%s", url, exc)
+            logging.error("Error expanding TikTok URL: url=%s error=%s", summarize_url_for_log(url), exc)
             return strip_tiktok_tracking(url)

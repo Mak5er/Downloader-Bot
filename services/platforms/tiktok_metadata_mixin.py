@@ -5,7 +5,7 @@ from urllib.parse import urlparse
 import aiohttp
 from yt_dlp.extractor.tiktok import TikTokIE
 
-from services.logger import logger as logging
+from services.logger import logger as logging, summarize_url_for_log
 from services.platforms.tiktok_common import (
     SHORT_HOSTS,
     _first_non_empty_str,
@@ -281,7 +281,7 @@ class TikTokMetadataMixin:
     async def _fetch_tikwm_data(self, video_url: str) -> dict[str, Any]:
         params = {"url": video_url, "count": 12, "cursor": 0, "web": 1, "hd": 1}
         session = await self._get_http_session()
-        logging.debug("Fetching TikTok data via TikWM: url=%s params=%s", video_url, params)
+        logging.debug("Fetching TikTok data via TikWM: url=%s params=%s", summarize_url_for_log(video_url), params)
         try:
             async with session.get(
                 TIKWM_API_URL,
@@ -292,13 +292,13 @@ class TikTokMetadataMixin:
                 response.raise_for_status()
                 payload = await response.json(content_type=None)
         except (aiohttp.ClientError, aiohttp.ContentTypeError, asyncio.TimeoutError) as exc:
-            logging.error("TikWM request failed: url=%s error=%s", video_url, exc)
+            logging.error("TikWM request failed: url=%s error=%s", summarize_url_for_log(video_url), exc)
             raise
 
         data = self._normalize_tikwm_payload(payload)
         logging.debug(
             "Fetched TikTok data via TikWM: url=%s code=%s keys=%s",
-            video_url,
+            summarize_url_for_log(video_url),
             data.get("code"),
             list(data.get("data", {}).keys()) if isinstance(data.get("data"), dict) else None,
         )
@@ -316,24 +316,24 @@ class TikTokMetadataMixin:
         try:
             data = await self._fetch_tikwm_data(video_url)
         except Exception as exc:
-            logging.warning("TikWM metadata failed, trying yt-dlp fallback: url=%s error=%s", video_url, exc)
+            logging.warning("TikWM metadata failed, trying yt-dlp fallback: url=%s error=%s", summarize_url_for_log(video_url), exc)
         else:
             if not is_invalid_tiktok_payload(data):
                 return data
             logging.warning(
                 "TikWM metadata invalid, trying yt-dlp fallback: url=%s code=%s error=%s",
-                video_url,
+                summarize_url_for_log(video_url),
                 data.get("code"),
                 data.get("error"),
             )
 
-        logging.debug("Fetching TikTok data via yt-dlp fallback: url=%s", video_url)
+        logging.debug("Fetching TikTok data via yt-dlp fallback: url=%s", summarize_url_for_log(video_url))
         detail, status = await self._extract_tiktok_detail(video_url)
 
         if status not in (0, None) or not detail:
             logging.warning(
                 "TikTok yt-dlp fallback metadata unavailable: url=%s status=%s detail_keys=%s",
-                video_url,
+                summarize_url_for_log(video_url),
                 status,
                 list(detail.keys()) if isinstance(detail, dict) else None,
             )
@@ -347,7 +347,7 @@ class TikTokMetadataMixin:
         data = self._build_legacy_payload(video_url, detail)
         logging.debug(
             "Fetched TikTok data via yt-dlp fallback: url=%s has_images=%s keys=%s",
-            video_url,
+            summarize_url_for_log(video_url),
             bool(data.get("data", {}).get("images")),
             list(data.get("data", {}).keys()),
         )
@@ -369,7 +369,7 @@ class TikTokMetadataMixin:
             try:
                 resolved_url = await asyncio.wait_for(self.process_tiktok_url_async(base_url), timeout=6.0)
             except Exception as exc:
-                logging.warning("TikTok short URL expansion failed before fetch: url=%s error=%s", base_url, exc)
+                logging.warning("TikTok short URL expansion failed before fetch: url=%s error=%s", summarize_url_for_log(base_url), exc)
             else:
                 if resolved_url:
                     target_url = resolved_url

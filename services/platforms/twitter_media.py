@@ -3,7 +3,7 @@ import os
 from typing import Any, Optional
 from urllib.parse import urlsplit
 
-from services.logger import logger as logging
+from services.logger import logger as logging, summarize_url_for_log
 from utils.download_manager import (
     DownloadMetrics,
     DownloadQueueBusyError,
@@ -203,7 +203,7 @@ async def collect_media_entries(
             "Queueing tweet media download: tweet_id=%s type=%s url=%s",
             tweet_id,
             media_kind,
-            media_url,
+            summarize_url_for_log(media_url),
         )
         download_tasks.append(
             downloader.download(

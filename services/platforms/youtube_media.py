@@ -5,7 +5,7 @@ import re
 import time
 from typing import Any, Awaitable, Callable, Optional
 
-from services.logger import logger as logging
+from services.logger import logger as logging, summarize_url_for_log
 from utils.download_manager import (
     DownloadError,
     DownloadConfig,
@@ -268,7 +268,7 @@ class YouTubeMediaService:
         except (DownloadRateLimitError, DownloadQueueBusyError, DownloadTooLargeError):
             raise
         except Exception as exc:
-            logging.error("Failed to download stream: source=%s url=%s error=%s", source, url, exc)
+            logging.error("Failed to download stream: source=%s url=%s error=%s", source, summarize_url_for_log(url), exc)
             return None
 
     async def download_with_ytdlp(self, url: str, filename: str) -> Optional[str]:
@@ -282,10 +282,10 @@ class YouTubeMediaService:
         try:
             await asyncio.to_thread(self._run_ytdlp_download, url, ydl_opts)
             resolved_path = self._resolve_downloaded_path(out_path)
-            logging.info("yt-dlp fallback succeeded: url=%s path=%s", url, resolved_path)
+            logging.info("yt-dlp fallback succeeded: url=%s path=%s", summarize_url_for_log(url), resolved_path)
             return resolved_path
         except Exception as exc:
-            logging.error("yt-dlp fallback failed: url=%s error=%s", url, exc)
+            logging.error("yt-dlp fallback failed: url=%s error=%s", summarize_url_for_log(url), exc)
             return None
 
     async def download_with_ytdlp_metrics(
@@ -322,7 +322,7 @@ class YouTubeMediaService:
             log_download_metrics(source, metrics)
             return metrics
         except Exception as exc:
-            logging.error("yt-dlp download failed: source=%s url=%s error=%s", source, url, exc)
+            logging.error("yt-dlp download failed: source=%s url=%s error=%s", source, summarize_url_for_log(url), exc)
             return None
 
     async def download_mp3_with_ytdlp_metrics(
@@ -357,7 +357,7 @@ class YouTubeMediaService:
                 matches = glob.glob(f"{base_path}.*")
                 resolved_path = matches[0] if matches else None
             if not resolved_path or not os.path.exists(resolved_path):
-                logging.error("yt-dlp mp3 output missing: url=%s base=%s", url, base_path)
+                logging.error("yt-dlp mp3 output missing: url=%s base=%s", summarize_url_for_log(url), base_path)
                 return None
             metrics = DownloadMetrics(
                 url=url,
@@ -370,7 +370,7 @@ class YouTubeMediaService:
             log_download_metrics(source, metrics)
             return metrics
         except Exception as exc:
-            logging.error("yt-dlp mp3 download failed: source=%s url=%s error=%s", source, url, exc)
+            logging.error("yt-dlp mp3 download failed: source=%s url=%s error=%s", source, summarize_url_for_log(url), exc)
             return None
 
     async def download_media(self, url: str, filename: str, format_candidates: list[str]) -> bool:

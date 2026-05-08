@@ -88,11 +88,12 @@ def test_probe_uses_probe_retry_limit(monkeypatch, tmp_path):
     attempts = {"count": 0}
 
     class FailingSession:
-        def head(self, *args, **kwargs):
+        def request(self, *args, **kwargs):
             attempts["count"] += 1
             raise RuntimeError("boom")
 
     monkeypatch.setattr(downloader, "_get_session", lambda: FailingSession())
+    monkeypatch.setattr(downloader, "_validate_download_url", lambda url: url)
 
     total_size, supports_range = downloader._probe("https://cdn.example.com/video.mp4", {})
 
@@ -120,10 +121,11 @@ def test_download_single_rejects_resume_when_origin_ignores_range(monkeypatch, t
             yield b"fresh"
 
     class DummySession:
-        def get(self, *args, **kwargs):
+        def request(self, *args, **kwargs):
             return DummyResponse()
 
     monkeypatch.setattr(downloader, "_get_session", lambda: DummySession())
+    monkeypatch.setattr(downloader, "_validate_download_url", lambda url: url)
 
     with pytest.raises(download_manager._ResumeNotSupportedError):
         downloader._download_single(
@@ -192,3 +194,44 @@ def test_download_sync_allows_nested_relative_paths(monkeypatch, tmp_path):
 
     assert target.exists()
     assert metrics.path == str(target)
+
+
+def test_download_rejects_private_network_hosts(monkeypatch, tmp_path):
+    downloader = ResilientDownloader(str(tmp_path))
+
+    def fake_getaddrinfo(*_args, **_kwargs):
+        return [(download_manager.socket.AF_INET, None, None, None, ("127.0.0.1", 443))]
+
+    monkeypatch.setattr(download_manager.socket, "getaddrinfo", fake_getaddrinfo)
+
+    with pytest.raises(download_manager.UnsafeDownloadUrlError):
+        downloader._validate_download_url("https://cdn.example.com/video.mp4")
+
+
+def test_download_rejects_redirect_to_private_network(monkeypatch, tmp_path):
+    downloader = ResilientDownloader(str(tmp_path))
+
+    def fake_getaddrinfo(host, *_args, **_kwargs):
+        ip = "8.8.8.8" if host == "cdn.example.com" else "127.0.0.1"
+        return [(download_manager.socket.AF_INET, None, None, None, (ip, 443))]
+
+    class RedirectResponse:
+        is_redirect = True
+        headers = {"Location": "http://127.0.0.1/metadata"}
+        url = "https://cdn.example.com/video.mp4"
+
+        def close(self):
+            return None
+
+    class DummySession:
+        def request(self, *args, **kwargs):
+            return RedirectResponse()
+
+    monkeypatch.setattr(download_manager.socket, "getaddrinfo", fake_getaddrinfo)
+
+    with pytest.raises(download_manager.UnsafeDownloadUrlError):
+        downloader._request_with_safe_redirects(
+            DummySession(),
+            "GET",
+            "https://cdn.example.com/video.mp4",
+        )

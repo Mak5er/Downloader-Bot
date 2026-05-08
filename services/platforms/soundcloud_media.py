@@ -3,7 +3,7 @@ from dataclasses import dataclass
 from typing import Awaitable, Callable, Optional
 from urllib.parse import urlparse, urlunparse
 
-from services.logger import logger as logging
+from services.logger import logger as logging, summarize_url_for_log
 from utils.download_manager import (
     DownloadConfig,
     DownloadError,
@@ -228,5 +228,5 @@ class SoundCloudMediaService:
         except (DownloadRateLimitError, DownloadQueueBusyError):
             raise
         except DownloadError as exc:
-            logging.error("Error downloading SoundCloud media: url=%s error=%s", url, exc)
+            logging.error("Error downloading SoundCloud media: url=%s error=%s", summarize_url_for_log(url), exc)
             return None
