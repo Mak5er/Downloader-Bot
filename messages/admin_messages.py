@@ -1,3 +1,6 @@
+import html
+
+
 def admin_panel(total_count, private_count, group_count, active_user_count, inactive_user_count):
     return ("""<b>Hello, this is the admin panel.</b>
 
@@ -68,10 +71,10 @@ def return_user_info(user_name, user_id, user_username, status):
 <b>ID</b>: {user_id}
 <b>Username</b>: {user_username}
 <b>Status</b>: {status}""").format(
-        user_name=user_name,
+        user_name=html.escape(str(user_name)),
         user_id=user_id,
-        user_username=user_username,
-        status=status,
+        user_username=html.escape(str(user_username)),
+        status=html.escape(str(status)),
     )
 
 
@@ -100,7 +103,9 @@ def successful_unban(unbanned_user_id):
 
 
 def ban_message(reason):
-    return f"You have been banned, contact @mak5er for more information!\nReason: {reason}"
+    return "You have been banned, contact @mak5er for more information!\nReason: {reason}".format(
+        reason=html.escape(str(reason))
+    )
 
 
 def unban_message():
@@ -153,9 +158,9 @@ Name: <b>{chat_name}</b>
 Username: <b>{chat_username}</b>
 Status: <b>{status}</b>""").format(
         chat_id=chat_id,
-        chat_name=chat_name,
-        chat_username=chat_username or "—",
-        status=status or "unknown",
+        chat_name=html.escape(str(chat_name)),
+        chat_username=html.escape(str(chat_username or "unknown")),
+        status=html.escape(str(status or "unknown")),
     )
 
 

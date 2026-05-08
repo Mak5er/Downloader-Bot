@@ -3,6 +3,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
+from aiogram.types import FSInputFile
 
 from handlers import admin
 
@@ -145,6 +146,37 @@ async def test_delete_log_truncates_log_files(monkeypatch, tmp_path):
     for name in ("bot_log.log", "error_log.log", "events_log.jsonl", "perf_log.jsonl"):
         assert (log_dir / name).read_text(encoding="utf-8") == ""
     call.message.reply.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_download_log_handler_streams_log_files(monkeypatch, tmp_path):
+    info_log = tmp_path / "bot_log.log"
+    error_log = tmp_path / "error_log.log"
+    info_log.write_text("info", encoding="utf-8")
+    error_log.write_text("error", encoding="utf-8")
+    sent_documents = []
+
+    async def fake_answer_document(document):
+        sent_documents.append(document)
+
+    call = SimpleNamespace(
+        from_user=SimpleNamespace(id=1),
+        answer=AsyncMock(),
+        message=SimpleNamespace(
+            chat=SimpleNamespace(id=1),
+            answer_document=fake_answer_document,
+        ),
+    )
+    fake_bot = SimpleNamespace(send_chat_action=AsyncMock())
+
+    monkeypatch.setattr(admin, "ADMINS_UID", [1])
+    monkeypatch.setattr(admin, "bot", fake_bot)
+    monkeypatch.setattr(admin, "_DOWNLOADABLE_LOG_FILES", (str(info_log), str(error_log)))
+
+    await admin.download_log_handler(call)
+
+    assert all(isinstance(document, FSInputFile) for document in sent_documents)
+    assert [document.filename for document in sent_documents] == ["bot_log.log", "error_log.log"]
 
 
 @pytest.mark.asyncio

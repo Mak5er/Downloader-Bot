@@ -42,6 +42,18 @@ def test_pending_requests_store_get_and_pop(monkeypatch):
     assert pending_requests.get_pending(42) is None
 
 
+def test_runtime_state_store_backs_up_corrupted_json(tmp_path, monkeypatch):
+    state_file = tmp_path / "runtime_state.json"
+    state_file.write_text("{not-json", encoding="utf-8")
+    monkeypatch.setattr(runtime_state_store, "_STATE_FILE", state_file)
+
+    value = runtime_state_store.load_bucket("pending_requests", dict)
+
+    assert value == {}
+    assert not state_file.exists()
+    assert state_file.with_suffix(".json.bad").read_text(encoding="utf-8") == "{not-json"
+
+
 def test_pending_requests_expire_after_ttl(monkeypatch):
     monkeypatch.setattr(pending_requests, "_pending", {})
     monkeypatch.setattr(pending_requests, "_loaded", True)

@@ -91,7 +91,7 @@ class AdaptiveDownloadQueue:
         per_user_rate_limit: int = 5,
         per_user_window_seconds: float = 10.0,
         per_user_max_pending: int = 4,
-        per_user_pending_timeout_seconds: float = 0.0,
+        per_user_pending_timeout_seconds: float = 15.0,
         metric_window: int = 300,
     ) -> None:
         if min_workers < 1:

@@ -150,3 +150,24 @@ async def test_send_analytics_records_queue_drops(monkeypatch):
     snapshot = analytics_status.get_snapshot()
     assert snapshot.dropped_events == 1
     assert snapshot.last_drop_monotonic is not None
+
+
+@pytest.mark.asyncio
+async def test_stop_analytics_workers_times_out_and_cancels_stuck_workers(monkeypatch):
+    queue = asyncio.Queue()
+    await queue.put(main._AnalyticsPayload(user_id=1, chat_type="private", action_name="stuck"))
+
+    async def stuck_worker():
+        await asyncio.sleep(3600)
+
+    task = asyncio.create_task(stuck_worker())
+    monkeypatch.setattr(main, "_analytics_queue", queue)
+    monkeypatch.setattr(main, "_analytics_worker_tasks", [task])
+    monkeypatch.setattr(main, "_ANALYTICS_SHUTDOWN_TIMEOUT", 0.01)
+    monkeypatch.setattr(main, "_close_analytics_http_client", AsyncMock())
+
+    await main.stop_analytics_workers()
+
+    assert task.cancelled()
+    assert main._analytics_queue is None
+    assert main._analytics_worker_tasks == []

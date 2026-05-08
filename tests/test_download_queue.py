@@ -5,6 +5,12 @@ import pytest
 from services.download.queue import AdaptiveDownloadQueue, QueueBackpressureError, QueueRateLimitError
 
 
+def test_queue_default_pending_timeout_is_finite():
+    queue = AdaptiveDownloadQueue()
+
+    assert queue.per_user_pending_timeout_seconds > 0
+
+
 @pytest.mark.asyncio
 async def test_queue_respects_priority_for_waiting_jobs():
     queue = AdaptiveDownloadQueue(min_workers=1, max_workers=1, per_user_rate_limit=20, max_queue_size=50)

@@ -17,7 +17,7 @@ from aiogram.exceptions import (
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import StatesGroup, State
-from aiogram.types import BufferedInputFile
+from aiogram.types import FSInputFile
 
 import keyboards as kb
 import messages as bm
@@ -159,6 +159,14 @@ def _build_log_size_lines() -> list[str]:
         size = path.stat().st_size if path.exists() else 0
         lines.append(f"{path.name}: {_format_bytes(size)}")
     return lines
+
+
+def _flush_runtime_log_handlers() -> None:
+    for handler in py_logging.getLogger("maxload").handlers:
+        try:
+            handler.flush()
+        except Exception:
+            continue
 
 
 async def _get_admin_counts() -> dict[str, int]:
@@ -618,7 +626,7 @@ async def del_log(call: types.CallbackQuery):
         return
 
     await bot.send_chat_action(call.message.chat.id, "typing")
-    py_logging.shutdown()
+    _flush_runtime_log_handlers()
     for log_path in _RUNTIME_LOG_FILES:
         path = Path(log_path)
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -642,8 +650,7 @@ async def download_log_handler(call: types.CallbackQuery):
         path = Path(file_path)
         path.parent.mkdir(parents=True, exist_ok=True)
         path.touch(exist_ok=True)
-        with path.open('rb') as file:
-            await call.message.answer_document(BufferedInputFile(file.read(), filename=path.name))
+        await call.message.answer_document(FSInputFile(path, filename=path.name))
 
     logging.info("User action: Downloaded logs (User ID: %s)", user_id)
 

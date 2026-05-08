@@ -6,6 +6,8 @@ from pathlib import Path
 from threading import RLock
 from typing import Any, Callable
 
+from services.logger import logger as logging
+
 
 _STATE_FILE = Path(__file__).resolve().parents[2] / ".runtime_state.json"
 _STATE_LOCK = RLock()
@@ -17,7 +19,24 @@ def _load_state_unlocked() -> dict[str, Any]:
 
     try:
         return json.loads(_STATE_FILE.read_text(encoding="utf-8"))
-    except Exception:
+    except Exception as exc:
+        backup_path = _STATE_FILE.with_suffix(f"{_STATE_FILE.suffix}.bad")
+        try:
+            _STATE_FILE.replace(backup_path)
+        except OSError as backup_exc:
+            logging.warning(
+                "Runtime state is corrupted and could not be backed up: path=%s error=%s backup_error=%s",
+                _STATE_FILE,
+                exc,
+                backup_exc,
+            )
+        else:
+            logging.warning(
+                "Runtime state is corrupted; moved it aside: path=%s backup_path=%s error=%s",
+                _STATE_FILE,
+                backup_path,
+                exc,
+            )
         return {}
 
 

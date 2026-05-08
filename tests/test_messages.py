@@ -88,6 +88,13 @@ def test_user_message_formatters_include_dynamic_values():
     assert "SoundCloud audio" in bm.inline_send_audio_prompt("SoundCloud")
 
 
+def test_user_message_formatters_escape_html_dynamic_values():
+    out = bm.join_group("<script>Ops & Co</script>")
+
+    assert "&lt;script&gt;Ops &amp; Co&lt;/script&gt;" in out
+    assert "<script>" not in out
+
+
 @pytest.mark.parametrize(
     ("factory", "expected"),
     [
@@ -145,4 +152,17 @@ def test_admin_message_formatters_include_dynamic_values():
     known = admin_bm.known_chat_target(88, "Ops Chat", "@ops", "active")
     assert "Ops Chat" in known
     assert "@ops" in known
+
+
+def test_admin_message_formatters_escape_html_dynamic_values():
+    info = admin_bm.return_user_info("<b>Alice</b>", 42, "@a&b", "active <ok>")
+    known = admin_bm.known_chat_target(88, "<Ops>", "@ops&team", "active <yes>")
+    ban = admin_bm.ban_message("<bad & worse>")
+
+    assert "&lt;b&gt;Alice&lt;/b&gt;" in info
+    assert "@a&amp;b" in info
+    assert "active &lt;ok&gt;" in info
+    assert "&lt;Ops&gt;" in known
+    assert "@ops&amp;team" in known
+    assert "&lt;bad &amp; worse&gt;" in ban
 

@@ -85,6 +85,7 @@ _ANALYTICS_WORKERS = 2
 _ANALYTICS_BATCH_SIZE = 25
 _ANALYTICS_BATCH_TIMEOUT = 0.5
 _ANALYTICS_SEND_CONCURRENCY = 8
+_ANALYTICS_SHUTDOWN_TIMEOUT = 5.0
 
 _analytics_queue: Optional[asyncio.Queue[Optional[_AnalyticsPayload]]] = None
 _analytics_worker_tasks: list[asyncio.Task] = []
@@ -253,12 +254,28 @@ async def start_analytics_workers() -> None:
 async def stop_analytics_workers() -> None:
     global _analytics_queue, _analytics_worker_tasks
     queue = _analytics_queue
+    worker_tasks = list(_analytics_worker_tasks)
     if queue is not None:
-        await queue.join()
-        for _ in _analytics_worker_tasks:
-            queue.put_nowait(None)
-        if _analytics_worker_tasks:
-            await asyncio.gather(*_analytics_worker_tasks, return_exceptions=True)
+        try:
+            await asyncio.wait_for(queue.join(), timeout=_ANALYTICS_SHUTDOWN_TIMEOUT)
+        except asyncio.TimeoutError:
+            logging.warning(
+                "Timed out waiting for analytics queue to drain; stopping workers: queued=%s timeout=%.1fs",
+                queue.qsize(),
+                _ANALYTICS_SHUTDOWN_TIMEOUT,
+            )
+
+        for _ in worker_tasks:
+            with suppress(asyncio.QueueFull):
+                queue.put_nowait(None)
+        if worker_tasks:
+            done, pending = await asyncio.wait(worker_tasks, timeout=_ANALYTICS_SHUTDOWN_TIMEOUT)
+            for task in pending:
+                task.cancel()
+            if pending:
+                await asyncio.gather(*pending, return_exceptions=True)
+            if done:
+                await asyncio.gather(*done, return_exceptions=True)
 
     _analytics_worker_tasks = []
     _analytics_queue = None

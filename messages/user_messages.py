@@ -1,3 +1,6 @@
+import html
+
+
 def cancel():
     return "✖️ Cancel"
 
@@ -58,8 +61,6 @@ def get_field_text(field: str):
 
 
 def captions(user_captions, post_caption, bot_url, *, limit: int = 1024):
-    import html
-
     def _truncate_escaped(value: str, max_len: int) -> str:
         if max_len <= 0:
             return ""
@@ -136,14 +137,14 @@ def join_group(chat_title: str) -> str:
     return (
         "Thanks for adding me to <b>{chat_title}</b> <tg-emoji emoji-id='5280764381804650651'>🌸</tg-emoji>\n"
         "Please grant me <b>admin rights</b> to unlock full functionality 🔓"
-    ).format(chat_title=chat_title)
+    ).format(chat_title=html.escape(str(chat_title)))
 
 
 def admin_rights_granted(chat_title: str) -> str:
     return (
         "Thanks for granting admin rights in <b>{chat_title}</b> <tg-emoji emoji-id='5280764381804650651'>🌸</tg-emoji>\n"
         "💻 I'll keep downloads running smoothly."
-    ).format(chat_title=chat_title)
+    ).format(chat_title=html.escape(str(chat_title)))
 
 
 def something_went_wrong():
