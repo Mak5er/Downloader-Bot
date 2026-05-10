@@ -24,6 +24,7 @@ class SoundCloudTrack:
     title: str
     artist: str
     thumbnail_url: Optional[str] = None
+    duration_seconds: int = 0
 
 
 def strip_soundcloud_url(url: str) -> str:
@@ -52,6 +53,22 @@ def _derive_title(filename: Optional[str]) -> str:
     return stem or "SoundCloud Audio"
 
 
+def _coerce_duration_seconds(value) -> int:
+    try:
+        duration = round(float(value))
+    except (TypeError, ValueError, OverflowError):
+        return 0
+    return duration if duration > 0 else 0
+
+
+def _coerce_duration_milliseconds(value) -> int:
+    try:
+        duration = round(float(value) / 1000)
+    except (TypeError, ValueError, OverflowError):
+        return 0
+    return duration if duration > 0 else 0
+
+
 def parse_soundcloud_track(data: dict, source_url: str) -> Optional[SoundCloudTrack]:
     if not isinstance(data, dict):
         return None
@@ -70,6 +87,7 @@ def parse_soundcloud_track(data: dict, source_url: str) -> Optional[SoundCloudTr
     thumb_url: Optional[str] = None
     title = _derive_title(data.get("filename"))
     artist = ""
+    duration_seconds = 0
 
     if status in {"tunnel", "redirect"}:
         maybe_url = data.get("url")
@@ -91,6 +109,12 @@ def parse_soundcloud_track(data: dict, source_url: str) -> Optional[SoundCloudTr
         if isinstance(metadata, dict):
             title = metadata.get("title") or title
             artist = metadata.get("artist") or ""
+            duration_seconds = (
+                _coerce_duration_seconds(metadata.get("duration"))
+                or _coerce_duration_seconds(metadata.get("length"))
+                or _coerce_duration_milliseconds(metadata.get("duration_ms"))
+                or _coerce_duration_milliseconds(metadata.get("durationMs"))
+            )
 
         for tunnel_url in data.get("tunnel") or []:
             if not isinstance(tunnel_url, str) or not tunnel_url:
@@ -119,6 +143,7 @@ def parse_soundcloud_track(data: dict, source_url: str) -> Optional[SoundCloudTr
         title=title,
         artist=artist,
         thumbnail_url=thumb_url,
+        duration_seconds=duration_seconds,
     )
 
 

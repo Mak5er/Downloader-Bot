@@ -1,10 +1,238 @@
-from typing import Any
+import asyncio
+import json
+import uuid
+from pathlib import Path
+from typing import Any, Optional
 
 from aiogram import types
 from aiogram.types import FSInputFile
 from aiogram.utils.media_group import MediaGroupBuilder
 
+from services.logger import logger as logging
 from services.media.video_metadata import build_video_send_kwargs
+
+logging = logging.bind(service="media_delivery")
+
+AUDIO_CACHE_VARIANT = "audio_bot_meta_v2"
+
+
+def build_audio_cache_key(source_url: str) -> str:
+    return f"{source_url}#{AUDIO_CACHE_VARIANT}"
+
+
+def coerce_audio_duration_seconds(value: object) -> Optional[int]:
+    try:
+        duration = round(float(value))
+    except (TypeError, ValueError, OverflowError):
+        return None
+    return duration if duration > 0 else None
+
+
+async def probe_audio_duration_seconds(path: str | None) -> Optional[int]:
+    if not path:
+        return None
+    if not Path(path).exists():
+        return None
+
+    try:
+        process = await asyncio.create_subprocess_exec(
+            "ffprobe",
+            "-v",
+            "error",
+            "-show_entries",
+            "format=duration",
+            "-of",
+            "json",
+            path,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+    except FileNotFoundError:
+        logging.debug("ffprobe is not available; skipping audio duration probe")
+        return None
+    except Exception as exc:
+        logging.debug("Failed to start ffprobe for audio %s: %s", path, exc)
+        return None
+
+    stdout, stderr = await process.communicate()
+    if process.returncode != 0:
+        logging.debug(
+            "ffprobe returned non-zero exit code for audio %s: %s",
+            path,
+            stderr.decode("utf-8", errors="ignore").strip(),
+        )
+        return None
+
+    try:
+        payload = json.loads(stdout.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        logging.debug("Failed to parse ffprobe audio payload for %s: %s", path, exc)
+        return None
+
+    return coerce_audio_duration_seconds((payload.get("format") or {}).get("duration"))
+
+
+def _input_file_path(value: Any) -> str | None:
+    path = getattr(value, "path", None)
+    if path:
+        return str(path)
+    return None
+
+
+def _cover_output_path(audio_path: str) -> str:
+    source = Path(audio_path)
+    suffix = source.suffix.lower()
+    if suffix not in {".mp3", ".m4a", ".mp4", ".aac"}:
+        suffix = ".mp3"
+    return str(source.with_name(f"{source.stem}.cover-{uuid.uuid4().hex}{suffix}"))
+
+
+async def embed_audio_cover(audio_path: str | None, cover_path: str | None) -> str | None:
+    if not audio_path or not cover_path:
+        return None
+    if not Path(audio_path).exists() or not Path(cover_path).exists():
+        return None
+
+    output_path = _cover_output_path(audio_path)
+    source_ext = Path(audio_path).suffix.lower()
+    command = [
+        "ffmpeg",
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-y",
+        "-i",
+        audio_path,
+        "-i",
+        cover_path,
+        "-map",
+        "0:a:0",
+        "-map",
+        "1:v:0",
+    ]
+    if source_ext == ".mp3":
+        command.extend([
+            "-c:a",
+            "copy",
+            "-c:v",
+            "mjpeg",
+            "-id3v2_version",
+            "3",
+            "-metadata:s:v",
+            "title=Album cover",
+            "-metadata:s:v",
+            "comment=Cover (front)",
+        ])
+    elif source_ext in {".m4a", ".mp4", ".aac"}:
+        command.extend([
+            "-c:a",
+            "copy",
+            "-c:v",
+            "mjpeg",
+            "-disposition:v:0",
+            "attached_pic",
+        ])
+    else:
+        command.extend([
+            "-c:a",
+            "libmp3lame",
+            "-b:a",
+            "192k",
+            "-c:v",
+            "mjpeg",
+            "-id3v2_version",
+            "3",
+            "-metadata:s:v",
+            "title=Album cover",
+            "-metadata:s:v",
+            "comment=Cover (front)",
+        ])
+    command.append(output_path)
+
+    try:
+        process = await asyncio.create_subprocess_exec(
+            *command,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+    except FileNotFoundError:
+        logging.debug("ffmpeg is not available; skipping embedded audio cover")
+        return None
+    except Exception as exc:
+        logging.debug("Failed to start ffmpeg audio cover embed: path=%s error=%s", audio_path, exc)
+        return None
+
+    _stdout, stderr = await process.communicate()
+    if process.returncode != 0:
+        logging.debug(
+            "ffmpeg failed to embed audio cover: path=%s error=%s",
+            audio_path,
+            stderr.decode("utf-8", errors="ignore").strip(),
+        )
+        Path(output_path).unlink(missing_ok=True)
+        return None
+
+    return output_path if Path(output_path).exists() else None
+
+
+def build_bot_audio_performer(bot_url: str | None) -> str | None:
+    if not bot_url:
+        return None
+
+    value = bot_url.strip()
+    for prefix in ("https://", "http://"):
+        if value.startswith(prefix):
+            value = value.removeprefix(prefix)
+            break
+    if value.startswith("t.me/"):
+        value = value.removeprefix("t.me/")
+    value = value.split("/", 1)[0].split("?", 1)[0].strip()
+    if not value:
+        return None
+    return value if value.startswith("@") else f"@{value}"
+
+
+async def send_audio_with_thumbnail(
+    send_audio,
+    *,
+    audio_path: str | None = None,
+    bot_avatar: Any = None,
+    bot_url: str | None = None,
+    duration: object = None,
+    performer: str | None = None,
+    **kwargs: Any,
+) -> types.Message:
+    send_kwargs = dict(kwargs)
+    embedded_audio_path = None
+    audio_performer = performer or build_bot_audio_performer(bot_url)
+    if audio_performer:
+        send_kwargs["performer"] = audio_performer
+    if "duration" not in send_kwargs:
+        audio_duration = coerce_audio_duration_seconds(duration)
+        if audio_duration is None:
+            audio_duration = await probe_audio_duration_seconds(audio_path)
+        if audio_duration is not None:
+            send_kwargs["duration"] = audio_duration
+    if bot_avatar:
+        send_kwargs["thumbnail"] = bot_avatar
+
+    cover_path = _input_file_path(bot_avatar)
+    if audio_path and cover_path:
+        embedded_audio_path = await embed_audio_cover(audio_path, cover_path)
+        if embedded_audio_path:
+            send_kwargs["audio"] = FSInputFile(embedded_audio_path)
+
+    try:
+        return await send_audio(**send_kwargs)
+    except Exception as exc:
+        if not bot_avatar:
+            raise
+        logging.warning("Audio thumbnail upload failed, retrying without thumbnail: error=%s", exc)
+        send_kwargs.pop("thumbnail", None)
+        return await send_audio(**send_kwargs)
+    finally:
+        if embedded_audio_path:
+            Path(embedded_audio_path).unlink(missing_ok=True)
 
 
 def extract_sent_file_id(sent_message: types.Message, media_kind: str) -> str | None:

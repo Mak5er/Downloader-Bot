@@ -2,6 +2,7 @@ import asyncio
 from typing import Any, Mapping, Optional
 from urllib.parse import urlparse
 
+import aiohttp
 from yt_dlp.extractor.tiktok import TikTokIE
 
 from services.logger import logger as logging
@@ -15,6 +16,10 @@ from services.platforms.tiktok_common import (
 )
 
 logging = logging.bind(service="tiktok_media")
+
+TIKWM_API_URL = "https://tikwm.com/api/"
+TIKWM_BASE_URL = "https://tikwm.com"
+TIKWM_API_TIMEOUT = aiohttp.ClientTimeout(total=10)
 
 
 class TikTokMetadataMixin:
@@ -210,6 +215,95 @@ class TikTokMetadataMixin:
             },
         }
 
+    @staticmethod
+    def _normalize_tikwm_media_url(value: Any) -> str:
+        if not isinstance(value, str):
+            return ""
+        url = value.strip()
+        if not url:
+            return ""
+        if url.startswith("//"):
+            return f"https:{url}"
+        if url.startswith("/"):
+            return f"{TIKWM_BASE_URL}{url}"
+        return url
+
+    def _normalize_tikwm_payload(self, payload: dict[str, Any]) -> dict[str, Any]:
+        if not isinstance(payload, dict):
+            return {
+                "error": "invalid TikWM response",
+                "code": 1,
+                "message": "TikWM returned invalid response",
+                "data": {},
+            }
+
+        normalized = dict(payload)
+        code = normalized.get("code")
+        message = _first_non_empty_str(normalized.get("message"), normalized.get("msg"))
+        normalized["message"] = message
+        normalized["error"] = None if code == 0 else (message or f"code:{code}")
+
+        data = normalized.get("data")
+        if not isinstance(data, dict):
+            normalized["data"] = {}
+            return normalized
+
+        source = dict(data)
+        for key in ("cover", "play", "wmplay", "hdplay", "music"):
+            if key in source:
+                source[key] = self._normalize_tikwm_media_url(source.get(key))
+
+        music_info = source.get("music_info")
+        if isinstance(music_info, dict):
+            normalized_music = dict(music_info)
+            if "play" in normalized_music:
+                normalized_music["play"] = self._normalize_tikwm_media_url(normalized_music.get("play"))
+            source["music_info"] = normalized_music
+
+        author = source.get("author")
+        if isinstance(author, dict):
+            normalized_author = dict(author)
+            if "avatar" in normalized_author:
+                normalized_author["avatar"] = self._normalize_tikwm_media_url(normalized_author.get("avatar"))
+            source["author"] = normalized_author
+
+        images = source.get("images")
+        if isinstance(images, list):
+            source["images"] = [
+                normalized_url
+                for normalized_url in (self._normalize_tikwm_media_url(item) for item in images)
+                if normalized_url
+            ]
+
+        normalized["data"] = source
+        return normalized
+
+    async def _fetch_tikwm_data(self, video_url: str) -> dict[str, Any]:
+        params = {"url": video_url, "count": 12, "cursor": 0, "web": 1, "hd": 1}
+        session = await self._get_http_session()
+        logging.debug("Fetching TikTok data via TikWM: url=%s params=%s", video_url, params)
+        try:
+            async with session.get(
+                TIKWM_API_URL,
+                params=params,
+                timeout=TIKWM_API_TIMEOUT,
+                headers={"User-Agent": self._get_user_agent()},
+            ) as response:
+                response.raise_for_status()
+                payload = await response.json(content_type=None)
+        except (aiohttp.ClientError, aiohttp.ContentTypeError, asyncio.TimeoutError) as exc:
+            logging.error("TikWM request failed: url=%s error=%s", video_url, exc)
+            raise
+
+        data = self._normalize_tikwm_payload(payload)
+        logging.debug(
+            "Fetched TikTok data via TikWM: url=%s code=%s keys=%s",
+            video_url,
+            data.get("code"),
+            list(data.get("data", {}).keys()) if isinstance(data.get("data"), dict) else None,
+        )
+        return data
+
     async def fetch_tiktok_data(self, video_url: str) -> dict:
         async with self._request_lock:
             now = self._monotonic()
@@ -219,12 +313,26 @@ class TikTokMetadataMixin:
         if wait_for:
             await asyncio.sleep(wait_for)
 
-        logging.debug("Fetching TikTok data via yt-dlp: url=%s", video_url)
+        try:
+            data = await self._fetch_tikwm_data(video_url)
+        except Exception as exc:
+            logging.warning("TikWM metadata failed, trying yt-dlp fallback: url=%s error=%s", video_url, exc)
+        else:
+            if not is_invalid_tiktok_payload(data):
+                return data
+            logging.warning(
+                "TikWM metadata invalid, trying yt-dlp fallback: url=%s code=%s error=%s",
+                video_url,
+                data.get("code"),
+                data.get("error"),
+            )
+
+        logging.debug("Fetching TikTok data via yt-dlp fallback: url=%s", video_url)
         detail, status = await self._extract_tiktok_detail(video_url)
 
         if status not in (0, None) or not detail:
             logging.warning(
-                "TikTok yt-dlp returned invalid status: url=%s status=%s detail_keys=%s",
+                "TikTok yt-dlp fallback metadata unavailable: url=%s status=%s detail_keys=%s",
                 video_url,
                 status,
                 list(detail.keys()) if isinstance(detail, dict) else None,
@@ -238,7 +346,7 @@ class TikTokMetadataMixin:
 
         data = self._build_legacy_payload(video_url, detail)
         logging.debug(
-            "Fetched TikTok data via yt-dlp: url=%s has_images=%s keys=%s",
+            "Fetched TikTok data via yt-dlp fallback: url=%s has_images=%s keys=%s",
             video_url,
             bool(data.get("data", {}).get("images")),
             list(data.get("data", {}).keys()),

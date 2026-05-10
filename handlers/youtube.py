@@ -18,6 +18,7 @@ from handlers.youtube_inline import (
     send_inline_youtube_video,
 )
 from services.media.orchestration import handle_download_backpressure, run_single_media_flow
+from services.media.delivery import AUDIO_CACHE_VARIANT, send_audio_with_thumbnail
 from services.media.video_metadata import build_video_send_kwargs
 from handlers.user import update_info
 from handlers.utils import (
@@ -63,6 +64,7 @@ logging = logging.bind(service="youtube")
 MAX_FILE_SIZE = int(1.5 * 1024 * 1024 * 1024)  # 1.5 GB Telegram-safe limit
 YOUTUBE_VIDEO_URL_REGEX = r"(https?://(www\.)?(youtube|youtu|youtube-nocookie)\.(com|be)/(?!@)\S+)"
 YOUTUBE_MUSIC_URL_REGEX = r"(https?://)?music\.(youtube|youtu|youtube-nocookie)\.(com|be)/\S+"
+YOUTUBE_INFO_TIMEOUT_SECONDS = youtube_platform.YOUTUBE_INFO_TIMEOUT_SECONDS
 
 router = Router()
 
@@ -176,6 +178,13 @@ def get_youtube_video(url):
     return youtube_media_service.get_youtube_video(url)
 
 
+async def _get_youtube_video_with_timeout(url: str):
+    return await asyncio.wait_for(
+        asyncio.to_thread(get_youtube_video, url),
+        timeout=YOUTUBE_INFO_TIMEOUT_SECONDS,
+    )
+
+
 @router.message(
     F.text.regexp(YOUTUBE_VIDEO_URL_REGEX, mode="search")
     | F.caption.regexp(YOUTUBE_VIDEO_URL_REGEX, mode="search")
@@ -212,7 +221,7 @@ async def download_video(message: types.Message, direct_url: Optional[str] = Non
         user_captions = user_settings["captions"]
         bot_url = await get_bot_url(bot)
 
-        yt = await asyncio.wait_for(asyncio.to_thread(get_youtube_video, url), timeout=45.0)
+        yt = await _get_youtube_video_with_timeout(url)
         if not yt:
             await safe_delete_message(status_message)
             await message.reply(bm.nothing_found())
@@ -439,35 +448,35 @@ async def download_music(message: types.Message, direct_url: Optional[str] = Non
             status_message = await message.answer(bm.downloading_audio_status())
 
         # Get YouTube audio object - run in thread pool
-        yt = await asyncio.to_thread(get_youtube_video, url)
+        yt = await _get_youtube_video_with_timeout(url)
         if not yt:
             await message.reply(bm.nothing_found())
             return
         audio = await asyncio.to_thread(get_audio_stream, yt)
 
-        if not audio:
-            await message.reply(bm.nothing_found())
-            return
-
-        cache_key = build_media_cache_key(yt["webpage_url"], variant="audio")
+        audio_duration = yt.get("duration")
+        cache_key = build_media_cache_key(yt["webpage_url"], variant=AUDIO_CACHE_VARIANT)
         db_file_id = await db.get_file_id(cache_key)
         if db_file_id:
             await safe_edit_text(status_message, bm.uploading_status())
             await send_chat_action_if_needed(bot, message.chat.id, "upload_audio", business_id)
-            await message.reply_audio(
+            await send_audio_with_thumbnail(
+                message.reply_audio,
                 audio=db_file_id,
                 title=yt["title"],
                 caption=bm.captions(None, None, bot_url),
-                thumbnail=bot_avatar,
+                bot_avatar=bot_avatar,
+                bot_url=bot_url,
+                duration=audio_duration,
                 parse_mode="HTML",
             )
             await maybe_delete_user_message(message, user_settings.get("delete_message"))
             request_lease.mark_success()
             return
 
-        audio_ext = audio.get("ext") or "m4a"
+        audio_ext = (audio or {}).get("ext") or "m4a"
         name = f"{yt['id']}_youtube_audio.{audio_ext}"
-        size_hint_raw = audio.get("filesize") or audio.get("filesize_approx")
+        size_hint_raw = (audio or {}).get("filesize") or (audio or {}).get("filesize_approx")
         size_hint = safe_int(size_hint_raw, 0) or None
         if size_hint and size_hint >= MAX_FILE_SIZE:
             await message.reply(bm.audio_too_large())
@@ -493,7 +502,7 @@ async def download_music(message: types.Message, direct_url: Optional[str] = Non
             should_retry_result=lambda result: result is None,
             on_retry=on_retry_download,
         )
-        if not metrics:
+        if not metrics and audio:
             metrics = await download_stream(
                 audio,
                 name,
@@ -511,11 +520,15 @@ async def download_music(message: types.Message, direct_url: Optional[str] = Non
         await safe_edit_text(status_message, bm.uploading_status())
         await send_chat_action_if_needed(bot, message.chat.id, "upload_voice", business_id)
 
-        sent_message = await message.reply_audio(
+        sent_message = await send_audio_with_thumbnail(
+            message.reply_audio,
             audio=FSInputFile(metrics.path),
             title=yt['title'],
             caption=bm.captions(None, None, bot_url),
-            thumbnail=bot_avatar,
+            audio_path=metrics.path,
+            bot_avatar=bot_avatar,
+            bot_url=bot_url,
+            duration=audio_duration,
             parse_mode="HTML"
         )
         await maybe_delete_user_message(message, user_settings.get("delete_message"))
@@ -535,6 +548,12 @@ async def download_music(message: types.Message, direct_url: Optional[str] = Non
             await handle_download_error(message, business_id=business_id)
     except DownloadTooLargeError:
         await message.reply(bm.audio_too_large())
+    except asyncio.TimeoutError:
+        if show_service_status:
+            await safe_edit_text(status_message, bm.timeout_error())
+            await handle_download_error(message, business_id=business_id, text=bm.timeout_error())
+        else:
+            await handle_download_error(message, business_id=business_id)
     except Exception as e:
         logging.error("Audio download error: %s", e)
         await handle_download_error(message, business_id=business_id)
@@ -569,21 +588,25 @@ async def download_youtube_mp3_callback(call: types.CallbackQuery):
         bot_url = await get_bot_url(bot)
         bot_avatar = await get_bot_avatar_thumbnail(bot)
 
-        yt = await asyncio.to_thread(get_youtube_video, url)
+        yt = await _get_youtube_video_with_timeout(url)
         if not yt:
             await handle_download_error(call.message, business_id=business_id)
             return
 
-        cache_key = build_media_cache_key(yt["webpage_url"], variant="audio")
+        audio_duration = yt.get("duration")
+        cache_key = build_media_cache_key(yt["webpage_url"], variant=AUDIO_CACHE_VARIANT)
         db_file_id = await db.get_file_id(cache_key)
         if db_file_id:
             await safe_edit_text(status_message, bm.uploading_status())
             await send_chat_action_if_needed(bot, call.message.chat.id, "upload_audio", business_id)
-            await call.message.reply_audio(
+            await send_audio_with_thumbnail(
+                call.message.reply_audio,
                 audio=db_file_id,
                 title=yt.get("title"),
                 caption=bm.captions(None, None, bot_url),
-                thumbnail=bot_avatar,
+                bot_avatar=bot_avatar,
+                bot_url=bot_url,
+                duration=audio_duration,
                 parse_mode="HTML",
             )
             return
@@ -619,16 +642,24 @@ async def download_youtube_mp3_callback(call: types.CallbackQuery):
 
         await send_chat_action_if_needed(bot, call.message.chat.id, "upload_audio", business_id)
         await safe_edit_text(status_message, bm.uploading_status())
-        sent_message = await call.message.reply_audio(
+        sent_message = await send_audio_with_thumbnail(
+            call.message.reply_audio,
             audio=FSInputFile(metrics.path),
             title=yt.get("title"),
             caption=bm.captions(None, None, bot_url),
-            thumbnail=bot_avatar,
+            audio_path=metrics.path,
+            bot_avatar=bot_avatar,
+            bot_url=bot_url,
+            duration=audio_duration,
             parse_mode="HTML",
         )
         await db.add_file(cache_key, sent_message.audio.file_id, "audio")
 
         await remove_file(metrics.path)
+    except asyncio.TimeoutError:
+        if show_service_status:
+            await safe_edit_text(status_message, bm.timeout_error())
+        await handle_download_error(call.message, business_id=business_id, text=bm.timeout_error())
     finally:
         await safe_delete_message(status_message)
 

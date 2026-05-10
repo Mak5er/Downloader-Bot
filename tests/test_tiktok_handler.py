@@ -92,12 +92,14 @@ async def test_video_info_returns_dataclass():
             "share_count": 10,
             "music_info": {"play": "https://example.com/music.mp3"},
             "author": {"unique_id": "creator"},
+            "duration": 37,
         },
     }
     info = await tiktok.video_info(data)
     assert info is not None
     assert info.id == "123"
     assert info.author == "creator"
+    assert info.duration_seconds == 37
 
 
 @pytest.mark.asyncio

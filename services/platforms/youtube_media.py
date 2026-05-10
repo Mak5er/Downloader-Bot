@@ -1,6 +1,7 @@
 import asyncio
 import glob
 import os
+import re
 import time
 from typing import Any, Awaitable, Callable, Optional
 
@@ -38,6 +39,74 @@ YTDLP_SPEED_OPTS: dict[str, Any] = {
     "fragment_retries": 2,
     "concurrent_fragment_downloads": 4,
 }
+
+
+def _read_float_env(name: str) -> Optional[float]:
+    value = os.getenv(name)
+    if value is None or not value.strip():
+        return None
+    try:
+        return float(value)
+    except ValueError:
+        logging.warning("Ignoring invalid float env var: %s=%s", name, value)
+        return None
+
+
+YOUTUBE_INFO_TIMEOUT_SECONDS = _read_float_env("YTDLP_YOUTUBE_INFO_TIMEOUT_SECONDS") or 45.0
+
+
+def _split_env_list(value: str) -> list[str]:
+    return [item.strip() for item in re.split(r"[,;]", value) if item.strip()]
+
+
+def _parse_cookies_from_browser(value: str) -> tuple[str, Optional[str], Optional[str], Optional[str]]:
+    match = re.fullmatch(
+        r"(?x)(?P<name>[^+:]+)(?:\s*\+\s*(?P<keyring>[^:]+))?"
+        r"(?:\s*:\s*(?!:)(?P<profile>.+?))?(?:\s*::\s*(?P<container>.+))?",
+        value.strip(),
+    )
+    if not match:
+        raise ValueError(f"invalid cookies-from-browser value: {value}")
+    browser_name, keyring, profile, container = match.group("name", "keyring", "profile", "container")
+    return browser_name.lower(), profile, keyring.upper() if keyring else None, container
+
+
+def build_ytdlp_youtube_options(**overrides: Any) -> dict[str, Any]:
+    options = {**YTDLP_SPEED_OPTS}
+
+    sleep_requests = _read_float_env("YTDLP_YOUTUBE_SLEEP_REQUESTS_SECONDS")
+    if sleep_requests is not None:
+        options["sleep_interval_requests"] = sleep_requests
+    sleep_interval = _read_float_env("YTDLP_YOUTUBE_SLEEP_INTERVAL_SECONDS")
+    if sleep_interval is not None:
+        options["sleep_interval"] = sleep_interval
+    max_sleep_interval = _read_float_env("YTDLP_YOUTUBE_MAX_SLEEP_INTERVAL_SECONDS")
+    if max_sleep_interval is not None:
+        options["max_sleep_interval"] = max_sleep_interval
+
+    cookies_file = os.getenv("YTDLP_YOUTUBE_COOKIES_FILE")
+    if cookies_file and cookies_file.strip():
+        options["cookiefile"] = cookies_file.strip()
+
+    cookies_from_browser = os.getenv("YTDLP_YOUTUBE_COOKIES_FROM_BROWSER")
+    if cookies_from_browser and cookies_from_browser.strip():
+        try:
+            options["cookiesfrombrowser"] = _parse_cookies_from_browser(cookies_from_browser)
+        except ValueError as exc:
+            logging.warning("Ignoring %s", exc)
+
+    extractor_args: dict[str, dict[str, list[str]]] = {}
+    player_client = os.getenv("YTDLP_YOUTUBE_PLAYER_CLIENT")
+    if player_client and player_client.strip():
+        extractor_args.setdefault("youtube", {})["player_client"] = _split_env_list(player_client)
+    po_token = os.getenv("YTDLP_YOUTUBE_PO_TOKEN")
+    if po_token and po_token.strip():
+        extractor_args.setdefault("youtube", {})["po_token"] = _split_env_list(po_token)
+    if extractor_args:
+        options["extractor_args"] = extractor_args
+
+    options.update({key: value for key, value in overrides.items() if value is not None})
+    return options
 
 
 def get_youtube_thumbnail_url(yt: Optional[dict[str, Any]]) -> Optional[str]:
@@ -135,11 +204,10 @@ class YouTubeMediaService:
 
     def get_youtube_video(self, url: str) -> Optional[dict[str, Any]]:
         try:
-            ydl_opts = {
-                "quiet": True,
-                "no_warnings": True,
-                "skip_download": True,
-            }
+            ydl_opts = build_ytdlp_youtube_options(
+                skip_download=True,
+                ignore_no_formats_error=True,
+            )
             with self._youtube_dl_factory(ydl_opts) as ydl:
                 return ydl.extract_info(url, download=False)
         except Exception as exc:
@@ -206,12 +274,11 @@ class YouTubeMediaService:
     async def download_with_ytdlp(self, url: str, filename: str) -> Optional[str]:
         out_path = self._downloader._resolve_target_path(filename)
         os.makedirs(os.path.dirname(out_path) or self._output_dir, exist_ok=True)
-        ydl_opts = {
-            **YTDLP_SPEED_OPTS,
-            "format": YTDLP_FORMAT_720,
-            "outtmpl": out_path,
-            "merge_output_format": "mp4",
-        }
+        ydl_opts = build_ytdlp_youtube_options(
+            format=YTDLP_FORMAT_720,
+            outtmpl=out_path,
+            merge_output_format="mp4",
+        )
         try:
             await asyncio.to_thread(self._run_ytdlp_download, url, ydl_opts)
             resolved_path = self._resolve_downloaded_path(out_path)
@@ -232,12 +299,11 @@ class YouTubeMediaService:
     ) -> Optional[DownloadMetrics]:
         out_path = self._downloader._resolve_target_path(filename)
         os.makedirs(os.path.dirname(out_path) or self._output_dir, exist_ok=True)
-        ydl_opts = {
-            **YTDLP_SPEED_OPTS,
-            "format": format_selector,
-            "outtmpl": out_path,
-            "merge_output_format": "mp4",
-        }
+        ydl_opts = build_ytdlp_youtube_options(
+            format=format_selector,
+            outtmpl=out_path,
+            merge_output_format="mp4",
+        )
         if max_filesize is not None:
             ydl_opts["max_filesize"] = int(max_filesize)
         start = time.monotonic()
@@ -270,17 +336,16 @@ class YouTubeMediaService:
         base_path = os.path.join(self._output_dir, base_name)
         out_template = f"{base_path}.%(ext)s"
         final_path = f"{base_path}.mp3"
-        ydl_opts = {
-            **YTDLP_SPEED_OPTS,
-            "format": "bestaudio/best",
-            "outtmpl": out_template,
-            "postprocessors": [{
+        ydl_opts = build_ytdlp_youtube_options(
+            format="bestaudio/best",
+            outtmpl=out_template,
+            postprocessors=[{
                 "key": "FFmpegExtractAudio",
                 "preferredcodec": "mp3",
                 "preferredquality": "192",
             }],
-            "merge_output_format": "mp3",
-        }
+            merge_output_format="mp3",
+        )
         if max_filesize is not None:
             ydl_opts["max_filesize"] = int(max_filesize)
         start = time.monotonic()

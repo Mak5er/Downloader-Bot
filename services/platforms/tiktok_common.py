@@ -56,6 +56,7 @@ class TikTokVideo:
     shares: int
     music_play_url: str
     author: str
+    duration_seconds: int = 0
 
 
 @dataclass
@@ -92,6 +93,7 @@ async def video_info(data: dict) -> Optional[TikTokVideo]:
         shares=info.get("share_count", 0),
         music_play_url=info.get("music_info", {}).get("play", ""),
         author=info.get("author", {}).get("unique_id", ""),
+        duration_seconds=_safe_int(info.get("duration") or info.get("duration_seconds")),
     )
 
 

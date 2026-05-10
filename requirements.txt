@@ -1,4 +1,4 @@
-aiogram==3.27.0
+aiogram==3.28.0
 aiohttp==3.13.5
 SQLAlchemy==2.0.49
 alembic==1.18.4
@@ -8,7 +8,7 @@ colorlog==6.10.1
 fake-useragent==2.2.0
 httpx==0.28.1
 matplotlib==3.10.9
-psycopg2-binary==2.9.11
+psycopg2-binary==2.9.12
 python-dotenv==1.2.2
 requests==2.33.1
 yt-dlp==2026.3.17

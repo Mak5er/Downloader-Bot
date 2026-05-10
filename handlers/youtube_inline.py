@@ -24,10 +24,24 @@ from services.inline.video_requests import (
     create_inline_video_request,
     reset_inline_video_request,
 )
+from services.media.delivery import (
+    AUDIO_CACHE_VARIANT,
+    build_bot_audio_performer,
+    coerce_audio_duration_seconds,
+    send_audio_with_thumbnail,
+)
 from services.media.video_metadata import build_video_send_kwargs
+from services.platforms.youtube_media import YOUTUBE_INFO_TIMEOUT_SECONDS
 from utils.media_cache import build_media_cache_key
 
 logging = logging.bind(service="youtube_inline")
+
+
+async def _get_youtube_video_with_timeout(get_youtube_video_fn, url: str):
+    return await asyncio.wait_for(
+        asyncio.to_thread(get_youtube_video_fn, url),
+        timeout=YOUTUBE_INFO_TIMEOUT_SECONDS,
+    )
 
 
 async def handle_youtube_music_inline_query(
@@ -58,7 +72,7 @@ async def handle_youtube_music_inline_query(
             await query.answer([], cache_time=1, is_personal=True)
             return
 
-        yt = await asyncio.to_thread(get_youtube_video_fn, url)
+        yt = await _get_youtube_video_with_timeout(get_youtube_video_fn, url)
         if not yt:
             await query.answer([], cache_time=1, is_personal=True)
             return
@@ -107,7 +121,7 @@ async def handle_youtube_video_inline_query(
         if not url:
             await query.answer([], cache_time=1, is_personal=True)
             return
-        yt = await asyncio.to_thread(get_youtube_video_fn, url)
+        yt = await _get_youtube_video_with_timeout(get_youtube_video_fn, url)
         if not yt:
             await query.answer([], cache_time=1, is_personal=True)
             return
@@ -179,14 +193,16 @@ async def send_inline_youtube_music(
     )
 
     try:
-        yt = await asyncio.to_thread(get_youtube_video_fn, request.source_url)
+        yt = await _get_youtube_video_with_timeout(get_youtube_video_fn, request.source_url)
         if not yt:
             reset_inline_video_request(token)
             await _edit_inline_status(bm.something_went_wrong(), with_retry_button=True)
             return
 
-        cache_key = build_media_cache_key(request.source_url, variant="audio")
+        audio_duration = coerce_audio_duration_seconds(yt.get("duration"))
+        cache_key = build_media_cache_key(request.source_url, variant=AUDIO_CACHE_VARIANT)
         db_file_id = await deps.db.get_file_id(cache_key)
+        bot_url = await get_bot_url_fn(deps.bot)
         if not db_file_id:
             base_name = f"{yt.get('id', 'youtube_music')}_youtube_music_inline"
             await _edit_inline_status(bm.downloading_audio_status())
@@ -211,28 +227,31 @@ async def send_inline_youtube_music(
                 return
 
             await _edit_inline_status(bm.uploading_status())
-            send_kwargs = {
-                "chat_id": channel_id,
-                "audio": FSInputFile(metrics.path),
-                "title": yt.get("title"),
-                "caption": f"YouTube Music from {actor_name}",
-            }
             bot_avatar = await get_bot_avatar_thumbnail_fn(deps.bot)
-            if bot_avatar:
-                send_kwargs["thumbnail"] = bot_avatar
-            sent = await deps.bot.send_audio(**send_kwargs)
+            sent = await send_audio_with_thumbnail(
+                deps.bot.send_audio,
+                chat_id=channel_id,
+                audio=FSInputFile(metrics.path),
+                title=yt.get("title"),
+                caption=f"YouTube Music from {actor_name}",
+                audio_path=metrics.path,
+                bot_avatar=bot_avatar,
+                bot_url=bot_url,
+                duration=audio_duration,
+            )
             db_file_id = sent.audio.file_id
             await deps.db.add_file(cache_key, db_file_id, "audio")
         else:
             await _edit_inline_status(bm.uploading_status())
 
-        bot_url = await get_bot_url_fn(deps.bot)
         edited = await safe_edit_inline_media_fn(
             deps.bot,
             inline_message_id,
             types.InputMediaAudio(
                 media=db_file_id,
                 caption=bm.captions(request.user_settings["captions"], None, bot_url),
+                performer=build_bot_audio_performer(bot_url),
+                duration=audio_duration,
                 parse_mode="HTML",
             ),
         )
@@ -242,6 +261,9 @@ async def send_inline_youtube_music(
 
         reset_inline_video_request(token)
         await _edit_inline_status(bm.something_went_wrong(), with_retry_button=True)
+    except asyncio.TimeoutError:
+        reset_inline_video_request(token)
+        await _edit_inline_status(bm.timeout_error(), with_retry_button=True)
     finally:
         if metrics and metrics.path:
             await remove_file(metrics.path)
@@ -288,7 +310,7 @@ async def send_inline_youtube_video(
     )
 
     try:
-        yt = await asyncio.to_thread(get_youtube_video_fn, request.source_url)
+        yt = await _get_youtube_video_with_timeout(get_youtube_video_fn, request.source_url)
         if not yt:
             reset_inline_video_request(token)
             await _edit_inline_status(bm.something_went_wrong(), with_retry_button=True)
@@ -386,6 +408,9 @@ async def send_inline_youtube_video(
 
         reset_inline_video_request(token)
         await _edit_inline_status(bm.something_went_wrong(), with_retry_button=True)
+    except asyncio.TimeoutError:
+        reset_inline_video_request(token)
+        await _edit_inline_status(bm.timeout_error(), with_retry_button=True)
     finally:
         if metrics and metrics.path:
             await remove_file(metrics.path)

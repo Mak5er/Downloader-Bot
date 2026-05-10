@@ -51,6 +51,12 @@ from services.inline.video_requests import (
     create_inline_video_request,
     reset_inline_video_request,
 )
+from services.media.delivery import (
+    build_audio_cache_key,
+    build_bot_audio_performer,
+    coerce_audio_duration_seconds,
+    send_audio_with_thumbnail,
+)
 from services.platforms import soundcloud_media as soundcloud_platform
 
 logging = logging.bind(service="soundcloud")
@@ -118,20 +124,19 @@ async def process_soundcloud(message: types.Message, direct_url: Optional[str] =
         if show_service_status:
             status_message = await message.answer(bm.downloading_audio_status())
 
-        cache_key = f"{source_url}#audio"
+        cache_key = build_audio_cache_key(source_url)
         db_file_id = await db.get_file_id(cache_key)
+        track = None
         if db_file_id:
             await safe_edit_text(status_message, bm.uploading_status())
             await send_chat_action_if_needed(bot, message.chat.id, "upload_audio", business_id)
-            send_kwargs = {
-                "audio": db_file_id,
-                "caption": bm.captions(user_settings["captions"], None, bot_url),
-                "parse_mode": "HTML",
-            }
-            if bot_avatar:
-                send_kwargs["thumbnail"] = bot_avatar
-            await message.reply_audio(
-                **send_kwargs,
+            await send_audio_with_thumbnail(
+                message.reply_audio,
+                audio=db_file_id,
+                caption=bm.captions(user_settings["captions"], None, bot_url),
+                bot_avatar=bot_avatar,
+                bot_url=bot_url,
+                parse_mode="HTML",
             )
             await maybe_delete_user_message(message, user_settings["delete_message"])
             request_lease.mark_success()
@@ -177,25 +182,17 @@ async def process_soundcloud(message: types.Message, direct_url: Optional[str] =
         await safe_edit_text(status_message, bm.uploading_status())
         await send_chat_action_if_needed(bot, message.chat.id, "upload_audio", business_id)
 
-        send_kwargs = {
-            "audio": FSInputFile(audio_path),
-            "title": track.title,
-            "performer": track.artist or None,
-            "caption": bm.captions(user_settings["captions"], None, bot_url),
-            "parse_mode": "HTML",
-        }
-        if bot_avatar:
-            send_kwargs["thumbnail"] = bot_avatar
-
-        try:
-            sent = await message.reply_audio(**send_kwargs)
-        except Exception as exc:
-            if bot_avatar:
-                logging.warning("SoundCloud bot avatar upload failed, retrying without thumbnail: error=%s", exc)
-                send_kwargs.pop("thumbnail", None)
-                sent = await message.reply_audio(**send_kwargs)
-            else:
-                raise
+        sent = await send_audio_with_thumbnail(
+            message.reply_audio,
+            audio=FSInputFile(audio_path),
+            title=track.title,
+            caption=bm.captions(user_settings["captions"], None, bot_url),
+            audio_path=audio_path,
+            bot_avatar=bot_avatar,
+            bot_url=bot_url,
+            duration=track.duration_seconds,
+            parse_mode="HTML",
+        )
 
         await maybe_delete_user_message(message, user_settings["delete_message"])
         request_lease.mark_success()
@@ -317,9 +314,10 @@ async def _send_inline_soundcloud_audio(
 
     try:
         source_url = request.source_url
-        cache_key = f"{source_url}#audio"
+        cache_key = build_audio_cache_key(source_url)
         track = await soundcloud_service.fetch_track(source_url)
         bot_avatar = await get_bot_avatar_thumbnail(bot)
+        bot_url = await get_bot_url(bot)
         if not track:
             reset_inline_video_request(token)
             await _edit_inline_status(bm.something_went_wrong(), with_retry_button=True)
@@ -354,33 +352,30 @@ async def _send_inline_soundcloud_audio(
                 return
 
             await _edit_inline_status(bm.uploading_status())
-            send_kwargs = {
-                "chat_id": CHANNEL_ID,
-                "audio": FSInputFile(audio_path),
-                "title": track.title,
-                "performer": track.artist or None,
-            }
-            if bot_avatar:
-                send_kwargs["thumbnail"] = bot_avatar
-
-            try:
-                sent = await bot.send_audio(**send_kwargs)
-            except Exception:
-                send_kwargs.pop("thumbnail", None)
-                sent = await bot.send_audio(**send_kwargs)
+            sent = await send_audio_with_thumbnail(
+                bot.send_audio,
+                chat_id=CHANNEL_ID,
+                audio=FSInputFile(audio_path),
+                title=track.title,
+                audio_path=audio_path,
+                bot_avatar=bot_avatar,
+                bot_url=bot_url,
+                duration=track.duration_seconds,
+            )
 
             db_file_id = sent.audio.file_id
             await db.add_file(cache_key, db_file_id, "audio")
         else:
             await _edit_inline_status(bm.uploading_status())
 
-        bot_url = await get_bot_url(bot)
         edited = await safe_edit_inline_media(
             bot,
             inline_message_id,
             types.InputMediaAudio(
                 media=db_file_id,
                 caption=bm.captions(request.user_settings["captions"], None, bot_url),
+                performer=build_bot_audio_performer(bot_url),
+                duration=coerce_audio_duration_seconds(track.duration_seconds),
                 parse_mode="HTML",
             ),
         )

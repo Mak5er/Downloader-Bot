@@ -20,6 +20,7 @@ from handlers.user import update_info
 from handlers.utils import (
     build_queue_busy_text,
     build_rate_limit_text,
+    get_bot_avatar_thumbnail,
     get_bot_url,
     get_message_text,
     handle_download_error,
@@ -44,7 +45,7 @@ from handlers.utils import (
 )
 from services.logger import logger as logging, summarize_text_for_log, summarize_url_for_log
 from app_context import bot, db, send_analytics
-from services.media.delivery import send_cached_media_entries
+from services.media.delivery import build_audio_cache_key, send_audio_with_thumbnail, send_cached_media_entries
 from services.media.video_metadata import build_video_send_kwargs
 from services.media.orchestration import handle_download_backpressure, run_single_media_flow
 from services.media.resolver import resolve_cached_media_items
@@ -377,7 +378,8 @@ async def download_instagram_audio_callback(call: types.CallbackQuery):
 
     try:
         bot_url = await get_bot_url(bot)
-        cache_key = f"{original_url}#audio"
+        bot_avatar = await get_bot_avatar_thumbnail(bot)
+        cache_key = build_audio_cache_key(original_url)
 
         db_file_id = await db.get_file_id(cache_key)
         if db_file_id:
@@ -393,9 +395,12 @@ async def download_instagram_audio_callback(call: types.CallbackQuery):
                 "upload_audio",
                 business_id,
             )
-            await call.message.reply_audio(
+            await send_audio_with_thumbnail(
+                call.message.reply_audio,
                 audio=db_file_id,
                 caption=bm.captions(None, "", bot_url),
+                bot_avatar=bot_avatar,
+                bot_url=bot_url,
                 parse_mode="HTML",
             )
             return
@@ -452,10 +457,14 @@ async def download_instagram_audio_callback(call: types.CallbackQuery):
             business_id,
         )
         await safe_edit_text(status_message, bm.uploading_status())
-        sent_message = await call.message.reply_audio(
+        sent_message = await send_audio_with_thumbnail(
+            call.message.reply_audio,
             audio=FSInputFile(metrics.path),
             title="Instagram Audio",
             caption=bm.captions(None, "", bot_url),
+            audio_path=metrics.path,
+            bot_avatar=bot_avatar,
+            bot_url=bot_url,
             parse_mode="HTML",
         )
 

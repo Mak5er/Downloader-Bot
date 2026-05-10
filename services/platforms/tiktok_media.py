@@ -21,6 +21,7 @@ from services.platforms.tiktok_download_mixin import TikTokDownloadMixin
 from services.platforms.tiktok_metadata_mixin import TikTokMetadataMixin
 from services.platforms.tiktok_profile_mixin import TikTokProfileMixin
 from services.platforms.tiktok_url_mixin import TikTokUrlResolverMixin
+from utils.download_manager import DownloadConfig, ResilientDownloader
 
 logging = logging.bind(service="tiktok_media")
 
@@ -55,7 +56,16 @@ class TikTokMediaService(
         user_agent_factory: Callable[[], object],
         youtube_dl_factory: Callable[[dict[str, Any]], Any],
     ) -> None:
+        config = DownloadConfig(
+            chunk_size=1024 * 1024,
+            multipart_threshold=16 * 1024 * 1024,
+            max_workers=8,
+            probe_max_retries=0,
+            max_retries=0,
+            retry_backoff=0.8,
+        )
         self._output_dir = output_dir
+        self._downloader = ResilientDownloader(output_dir, config=config, source="tiktok")
         self._get_http_session = get_http_session_func
         self._retry_async_operation = retry_async_operation_func
         self._user_agent_factory = user_agent_factory
