@@ -13,6 +13,8 @@ from utils.download_manager import (
     DownloadQueueBusyError,
     DownloadRateLimitError,
 )
+from utils import cobalt_client
+from config import COBALT_API_URL, COBALT_API_KEY
 
 logging = logging.bind(service="tiktok_media")
 
@@ -278,7 +280,7 @@ class TikTokDownloadMixin:
 
     def _direct_video_candidates(self, source_url: str, source_data: dict[str, Any]) -> list[str]:
         candidates: list[str] = []
-        for key in ("hdplay", "play", "wmplay"):
+        for key in ("play", "wmplay", "hdplay"):
             self._append_unique_url(candidates, source_data.get(key))
         video_id = source_data.get("id") or get_video_id_from_url(source_url)
         if isinstance(video_id, str) and video_id.strip():
@@ -367,6 +369,65 @@ class TikTokDownloadMixin:
                 await maybe
         except Exception as exc:
             logging.debug("TikTok download retry callback failed: error=%s", exc)
+
+    async def _download_via_cobalt(
+        self,
+        *,
+        source_url: str,
+        filename: str,
+        size_hint: Optional[int],
+        user_id: Optional[int],
+        chat_id: Optional[int],
+        request_id: Optional[str],
+        on_queued,
+        on_progress,
+    ) -> Optional[DownloadMetrics]:
+        if not COBALT_API_URL or not COBALT_API_KEY:
+            return None
+
+        data = await cobalt_client.fetch_cobalt_data(
+            COBALT_API_URL,
+            COBALT_API_KEY,
+            {"url": source_url, "videoQuality": "1080", "filenameStyle": "basic"},
+            source="tiktok",
+            attempts=2,
+            retry_delay=1.0,
+        )
+        if not data:
+            return None
+
+        status = data.get("status")
+        video_url: Optional[str] = None
+
+        if status in ("tunnel", "redirect"):
+            video_url = data.get("url")
+        elif status == "stream":
+            video_url = data.get("url")
+
+        if not video_url:
+            logging.debug("Cobalt returned no usable URL for TikTok: status=%s", status)
+            return None
+
+        logging.info("Cobalt resolved TikTok URL: source=%s cobalt_url=%s", source_url, video_url)
+
+        try:
+            return await self._downloader.download(
+                video_url,
+                filename,
+                headers={"User-Agent": self._get_user_agent()},
+                user_id=user_id,
+                chat_id=chat_id,
+                source="tiktok_cobalt",
+                request_id=request_id,
+                size_hint=size_hint,
+                on_queued=on_queued,
+                on_progress=on_progress,
+            )
+        except (DownloadRateLimitError, DownloadQueueBusyError):
+            raise
+        except DownloadError as exc:
+            logging.warning("Cobalt TikTok download failed: source=%s error=%s", source_url, exc)
+            return None
 
     async def _download_with_service_cycle(
         self,
@@ -484,6 +545,20 @@ class TikTokDownloadMixin:
         output_path = os.path.join(self._output_dir, filename)
 
         try:
+            cobalt_result = await self._download_via_cobalt(
+                source_url=source_url,
+                filename=filename,
+                size_hint=effective_size_hint,
+                user_id=user_id,
+                chat_id=chat_id,
+                request_id=request_id,
+                on_queued=on_queued,
+                on_progress=on_progress,
+            )
+            if cobalt_result:
+                logging.info("TikTok video downloaded via Cobalt: source_url=%s", source_url)
+                return cobalt_result
+
             return await self._download_with_service_cycle(
                 direct_download=lambda: self._download_direct(
                     candidates=self._direct_video_candidates(source_url, source_data),

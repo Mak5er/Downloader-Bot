@@ -323,7 +323,7 @@ async def test_download_video_submits_ytdlp_job(tmp_path, monkeypatch):
 async def test_download_video_uses_direct_before_ytdlp(tmp_path, monkeypatch):
     service = _make_service(tmp_path)
     expected_metrics = DownloadMetrics(
-        url="https://tikwm.com/video/media/hdplay/123.mp4",
+        url="https://tikwm.com/video/media/play/123.mp4",
         path=str(tmp_path / "video.mp4"),
         size=2048,
         elapsed=1.5,
@@ -332,6 +332,8 @@ async def test_download_video_uses_direct_before_ytdlp(tmp_path, monkeypatch):
     )
     direct_download = AsyncMock(return_value=expected_metrics)
     ytdlp_submit = AsyncMock(side_effect=AssertionError("yt-dlp should not run when direct download succeeds"))
+    cobalt_mock = AsyncMock(return_value=None)
+    monkeypatch.setattr(service, "_download_via_cobalt", cobalt_mock)
     monkeypatch.setattr(service._downloader, "download", direct_download)
     monkeypatch.setattr(service, "_submit_queued_ytdlp_download", ytdlp_submit)
 
@@ -356,9 +358,10 @@ async def test_download_video_uses_direct_before_ytdlp(tmp_path, monkeypatch):
     )
 
     assert metrics == expected_metrics
+    assert cobalt_mock.await_count == 1
     assert direct_download.await_count == 1
     assert ytdlp_submit.await_count == 0
-    assert direct_download.await_args.args[:2] == ("https://tikwm.com/video/media/hdplay/123.mp4", "video.mp4")
+    assert direct_download.await_args.args[:2] == ("https://tikwm.com/video/media/play/123.mp4", "video.mp4")
     assert direct_download.await_args.kwargs["user_id"] == 77
     assert direct_download.await_args.kwargs["chat_id"] == 88
     assert direct_download.await_args.kwargs["request_id"] == "req-1"
