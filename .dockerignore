@@ -18,3 +18,7 @@ logs
 tests
 README.md
 LICENCE
+
+# Keep exported browser/session cookies out of built images.
+cookies/*
+!cookies/.gitkeep

@@ -8,6 +8,7 @@ services:
     volumes:
       - downloader_downloads:/app/downloads
       - downloader_log:/app/logs
+      - ./cookies:/app/cookies:ro
     env_file: .env
     container_name: downloader-bot
     restart: always

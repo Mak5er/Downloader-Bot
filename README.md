@@ -92,6 +92,14 @@ CHANNEL_ID=
 COBALT_API_URL=
 COBALT_API_KEY=
 
+# Optional YouTube access helpers for yt-dlp
+YTDLP_YOUTUBE_COOKIES_FILE=cookies/youtube.txt
+# Alternative to a cookie file, useful only when running on the same machine as the browser:
+# YTDLP_YOUTUBE_COOKIES_FROM_BROWSER=firefox:Profile 1
+# YTDLP_YOUTUBE_REMOTE_COMPONENTS=ejs:github
+# YTDLP_YOUTUBE_PLAYER_CLIENT=web,android
+# YTDLP_YOUTUBE_PO_TOKEN=web.gvs+your_token
+
 # Performance tuning
 BOT_POLLING_TASKS_CONCURRENCY_LIMIT=256
 BOT_SESSION_CONNECTION_LIMIT=400
@@ -123,6 +131,24 @@ python main.py
 ```
 
 On startup the bot initializes the database schema via Alembic migrations automatically.
+
+## YouTube Cookies
+
+Some YouTube videos need an authenticated browser session for `yt-dlp` to work correctly. The bot automatically uses `cookies/youtube.txt` when that file exists. You can also override the path with `YTDLP_YOUTUBE_COOKIES_FILE`.
+
+Recommended setup:
+
+1. Install a browser extension that exports cookies in Netscape format, for example "Get cookies.txt LOCALLY".
+2. Open `youtube.com` in the browser profile that has a normal signed-in YouTube session.
+3. Export only YouTube cookies for `.youtube.com` / `youtube.com` in Netscape `cookies.txt` format.
+4. Put the exported file at `cookies/youtube.txt`.
+5. Keep `YTDLP_YOUTUBE_COOKIES_FILE=cookies/youtube.txt` in `.env`, or omit it and let the default path be used.
+6. If `yt-dlp` logs `n challenge solving failed` or only shows storyboard/image formats, set `YTDLP_YOUTUBE_REMOTE_COMPONENTS=ejs:github`.
+7. Restart the bot after replacing cookies or changing YouTube `yt-dlp` options.
+
+The `cookies` directory is kept in git with `cookies/.gitkeep`, but real cookie files are ignored by git and Docker builds. Treat `cookies/youtube.txt` like a password: do not commit it, paste it in chats, or bake it into images.
+
+For Docker Compose, the repository mounts `./cookies` into the container as `/app/cookies:ro`, so the same `cookies/youtube.txt` path works inside the container.
 
 ## Docker
 

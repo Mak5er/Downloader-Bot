@@ -53,6 +53,11 @@ class DownloadedFile(Base):
 
 class User(Base):
     __tablename__ = "users"
+    __table_args__ = (
+        Index("ix_users_user_username", "user_username"),
+        Index("ix_users_chat_type", "chat_type"),
+        Index("ix_users_status", "status"),
+    )
 
     user_id = Column(BigInteger, primary_key=True, autoincrement=True)
     user_name = Column(Text, nullable=True)
@@ -69,6 +74,8 @@ class AnalyticsEvent(Base):
     __table_args__ = (
         Index("ix_analytics_events_created_at", "created_at"),
         Index("ix_analytics_events_action_name_created_at", "action_name", "created_at"),
+        Index("ix_analytics_events_action_name", "action_name"),
+        Index("ix_analytics_events_created_action", "created_at", "action_name"),
     )
 
     id = Column(BigInteger, primary_key=True, autoincrement=True)
@@ -80,7 +87,10 @@ class AnalyticsEvent(Base):
 
 class Settings(Base):
     __tablename__ = "settings"
-    __table_args__ = (UniqueConstraint("user_id", name="uq_settings_user_id"),)
+    __table_args__ = (
+        UniqueConstraint("user_id", name="uq_settings_user_id"),
+        Index("ix_settings_user_id", "user_id"),
+    )
 
     id = Column(BigInteger, primary_key=True, autoincrement=True)
     user_id = Column(BigInteger, ForeignKey("users.user_id", ondelete="CASCADE"))

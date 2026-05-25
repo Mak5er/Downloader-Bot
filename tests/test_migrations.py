@@ -4,15 +4,9 @@ from types import SimpleNamespace
 from unittest.mock import Mock
 
 
-def _load_migration_module():
-    migration_path = (
-        Path(__file__).resolve().parents[1]
-        / "services"
-        / "alembic"
-        / "versions"
-        / "20260408_000003_analytics_event_indexes.py"
-    )
-    spec = spec_from_file_location("migration_20260408_000003", migration_path)
+def _load_migration_module(filename="20260408_000003_analytics_event_indexes.py"):
+    migration_path = Path(__file__).resolve().parents[1] / "services" / "alembic" / "versions" / filename
+    spec = spec_from_file_location(f"migration_{filename.removesuffix('.py')}", migration_path)
     module = module_from_spec(spec)
     assert spec is not None and spec.loader is not None
     spec.loader.exec_module(module)
@@ -63,3 +57,43 @@ def test_analytics_index_migration_creates_only_missing_indexes(monkeypatch):
         ["action_name", "created_at"],
         unique=False,
     )
+
+
+def test_repository_query_index_migration_skips_existing_indexes(monkeypatch):
+    module = _load_migration_module("20260525_000004_repository_query_indexes.py")
+    create_index = Mock()
+    monkeypatch.setattr(module.op, "create_index", create_index)
+    monkeypatch.setattr(module.op, "get_bind", lambda: object())
+    monkeypatch.setattr(
+        module.sa,
+        "inspect",
+        lambda _bind: SimpleNamespace(
+            get_indexes=lambda _table: [{"name": index_name} for index_name, _table, _columns in module.INDEXES]
+        ),
+    )
+
+    module.upgrade()
+
+    create_index.assert_not_called()
+
+
+def test_repository_query_index_migration_creates_only_missing_indexes(monkeypatch):
+    module = _load_migration_module("20260525_000004_repository_query_indexes.py")
+    create_index = Mock()
+    monkeypatch.setattr(module.op, "create_index", create_index)
+    monkeypatch.setattr(module.op, "get_bind", lambda: object())
+    monkeypatch.setattr(
+        module.sa,
+        "inspect",
+        lambda _bind: SimpleNamespace(
+            get_indexes=lambda table: [
+                {"name": index_name}
+                for index_name, table_name, _columns in module.INDEXES
+                if table_name == table and index_name != "ix_users_status"
+            ]
+        ),
+    )
+
+    module.upgrade()
+
+    create_index.assert_called_once_with("ix_users_status", "users", ["status"], unique=False)

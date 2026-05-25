@@ -39,6 +39,7 @@ YTDLP_SPEED_OPTS: dict[str, Any] = {
     "fragment_retries": 2,
     "concurrent_fragment_downloads": 4,
 }
+DEFAULT_YOUTUBE_COOKIES_FILE = os.path.join("cookies", "youtube.txt")
 
 
 def _read_float_env(name: str) -> Optional[float]:
@@ -87,6 +88,8 @@ def build_ytdlp_youtube_options(**overrides: Any) -> dict[str, Any]:
     cookies_file = os.getenv("YTDLP_YOUTUBE_COOKIES_FILE")
     if cookies_file and cookies_file.strip():
         options["cookiefile"] = cookies_file.strip()
+    elif os.path.isfile(DEFAULT_YOUTUBE_COOKIES_FILE):
+        options["cookiefile"] = DEFAULT_YOUTUBE_COOKIES_FILE
 
     cookies_from_browser = os.getenv("YTDLP_YOUTUBE_COOKIES_FROM_BROWSER")
     if cookies_from_browser and cookies_from_browser.strip():
@@ -104,6 +107,10 @@ def build_ytdlp_youtube_options(**overrides: Any) -> dict[str, Any]:
         extractor_args.setdefault("youtube", {})["po_token"] = _split_env_list(po_token)
     if extractor_args:
         options["extractor_args"] = extractor_args
+
+    remote_components = os.getenv("YTDLP_YOUTUBE_REMOTE_COMPONENTS")
+    if remote_components and remote_components.strip():
+        options["remote_components"] = set(_split_env_list(remote_components))
 
     options.update({key: value for key, value in overrides.items() if value is not None})
     return options
