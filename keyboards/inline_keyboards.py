@@ -2,6 +2,27 @@ from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 
+def start_keyboard(bot_username: str | None = None) -> InlineKeyboardMarkup:
+    share_url = "https://t.me/share/url?url=https://t.me/MaxLoadBot"
+    add_to_group_url = "https://t.me/MaxLoadBot?startgroup=true"
+    if bot_username:
+        share_url = f"https://t.me/share/url?url=https://t.me/{bot_username}"
+        add_to_group_url = f"https://t.me/{bot_username}?startgroup=true"
+
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(text="⚡ Try inline", switch_inline_query_current_chat=""),
+                InlineKeyboardButton(text="⚙️ Settings", callback_data="back_to_settings"),
+            ],
+            [
+                InlineKeyboardButton(text="🚀 Share bot", url=share_url),
+                InlineKeyboardButton(text="➕ Add to group", url=add_to_group_url),
+            ],
+        ]
+    )
+
+
 def cancel_keyboard() -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     builder.button(text="❌ Cancel", callback_data="cancel_action")

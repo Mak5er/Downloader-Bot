@@ -18,6 +18,8 @@ class DummyMessage:
         self.chat = SimpleNamespace(id=100, type=chat_type)
         self.text = "payload"
         self.caption = None
+        self.message_id = 10
+        self.business_connection_id = None
         self._replies = []
         self.reply = AsyncMock(side_effect=self._collect_reply)
         self.answer = AsyncMock(side_effect=self._collect_reply)
@@ -379,3 +381,69 @@ async def test_process_pending_message_dispatches_youtube_music(monkeypatch):
 
     download_music.assert_awaited_once_with(message, direct_url="https://music.youtube.com/watch?v=abc123")
     download_video.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_process_batch_links_dispatches_each_supported_link(monkeypatch):
+    message = DummyMessage()
+    message.text = "https://youtu.be/demo and https://pin.it/demo123"
+    status_messages = [
+        SimpleNamespace(delete=AsyncMock()),
+        SimpleNamespace(delete=AsyncMock()),
+        SimpleNamespace(delete=AsyncMock()),
+        SimpleNamespace(delete=AsyncMock()),
+    ]
+    message.answer = AsyncMock(side_effect=status_messages)
+    process_supported_link = AsyncMock()
+
+    monkeypatch.setattr(user, "_process_supported_link", process_supported_link)
+    monkeypatch.setattr(user, "_resolve_batch_concurrency", lambda: 1)
+    monkeypatch.setattr(user, "send_analytics", AsyncMock())
+    monkeypatch.setattr(user, "update_info", AsyncMock())
+    monkeypatch.setattr(user.asyncio, "sleep", AsyncMock())
+
+    await user.process_batch_links(message)
+
+    assert process_supported_link.await_count == 2
+    process_supported_link.assert_any_await(message, "youtube", "https://youtu.be/demo")
+    process_supported_link.assert_any_await(message, "pinterest", "https://pin.it/demo123")
+    assert message.answer.await_count == 4
+    assert all(status.delete.await_count == 1 for status in status_messages)
+
+
+@pytest.mark.asyncio
+async def test_process_batch_links_can_run_parallel_when_load_is_low(monkeypatch):
+    message = DummyMessage()
+    message.text = "https://youtu.be/demo and https://pin.it/demo123"
+    status_messages = [
+        SimpleNamespace(delete=AsyncMock()),
+        SimpleNamespace(delete=AsyncMock()),
+        SimpleNamespace(delete=AsyncMock()),
+        SimpleNamespace(delete=AsyncMock()),
+    ]
+    message.answer = AsyncMock(side_effect=status_messages)
+    process_supported_link = AsyncMock()
+
+    monkeypatch.setattr(user, "_process_supported_link", process_supported_link)
+    monkeypatch.setattr(user, "_resolve_batch_concurrency", lambda: 2)
+    monkeypatch.setattr(user, "send_analytics", AsyncMock())
+    monkeypatch.setattr(user, "update_info", AsyncMock())
+    monkeypatch.setattr(user.asyncio, "sleep", AsyncMock())
+
+    await user.process_batch_links(message)
+
+    assert process_supported_link.await_count == 2
+    assert message.answer.await_count == 4
+    assert all(status.delete.await_count == 1 for status in status_messages)
+
+
+@pytest.mark.asyncio
+async def test_help_command_shows_supported_sites(monkeypatch):
+    message = DummyMessage()
+
+    await user.send_help(message)
+
+    message.reply.assert_awaited_once()
+    _, kwargs = message.reply.await_args
+    assert "reply_markup" in kwargs
+    assert kwargs["parse_mode"] == "HTML"

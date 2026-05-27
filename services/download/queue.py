@@ -7,6 +7,17 @@ from dataclasses import dataclass, field
 from itertools import count
 from typing import Any, Awaitable, Callable, Optional, TypeVar
 
+from config import (
+    DOWNLOAD_QUEUE_IDLE_SCALE_DOWN_SECONDS,
+    DOWNLOAD_QUEUE_MAX_SIZE,
+    DOWNLOAD_QUEUE_MAX_WORKERS,
+    DOWNLOAD_QUEUE_MIN_WORKERS,
+    DOWNLOAD_QUEUE_PER_USER_MAX_PENDING,
+    DOWNLOAD_QUEUE_PER_USER_PENDING_TIMEOUT_SECONDS,
+    DOWNLOAD_QUEUE_PER_USER_RATE_LIMIT,
+    DOWNLOAD_QUEUE_PER_USER_WINDOW_SECONDS,
+    DOWNLOAD_QUEUE_SCALE_COOLDOWN_SECONDS,
+)
 from services.logger import logger as logging
 
 logging = logging.bind(service="download_queue")
@@ -127,8 +138,8 @@ class AdaptiveDownloadQueue:
         self._processing_samples: dict[str, deque[float]] = defaultdict(lambda: deque(maxlen=metric_window))
         self._queue_wait_samples: dict[str, deque[float]] = defaultdict(lambda: deque(maxlen=metric_window))
         self._last_scale_action = 0.0
-        self._scale_cooldown_seconds = 8.0
-        self._idle_scale_down_seconds = 40.0
+        self._scale_cooldown_seconds = max(1.0, float(DOWNLOAD_QUEUE_SCALE_COOLDOWN_SECONDS))
+        self._idle_scale_down_seconds = max(5.0, float(DOWNLOAD_QUEUE_IDLE_SCALE_DOWN_SECONDS))
         self._last_non_empty_queue = time.monotonic()
         self._completed_jobs = 0
         self._active_jobs = 0
@@ -544,7 +555,15 @@ _download_queue: Optional[AdaptiveDownloadQueue] = None
 def get_download_queue() -> AdaptiveDownloadQueue:
     global _download_queue
     if _download_queue is None:
-        _download_queue = AdaptiveDownloadQueue()
+        _download_queue = AdaptiveDownloadQueue(
+            min_workers=DOWNLOAD_QUEUE_MIN_WORKERS,
+            max_workers=DOWNLOAD_QUEUE_MAX_WORKERS,
+            max_queue_size=DOWNLOAD_QUEUE_MAX_SIZE,
+            per_user_rate_limit=DOWNLOAD_QUEUE_PER_USER_RATE_LIMIT,
+            per_user_window_seconds=DOWNLOAD_QUEUE_PER_USER_WINDOW_SECONDS,
+            per_user_max_pending=DOWNLOAD_QUEUE_PER_USER_MAX_PENDING,
+            per_user_pending_timeout_seconds=DOWNLOAD_QUEUE_PER_USER_PENDING_TIMEOUT_SECONDS,
+        )
     return _download_queue
 
 

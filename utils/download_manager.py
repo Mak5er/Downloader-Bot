@@ -11,6 +11,7 @@ from typing import Awaitable, Callable, Mapping, MutableMapping, Optional
 
 import requests
 
+from config import DOWNLOAD_MAX_WORKERS_CAP
 from services.logger import logger as logging
 from services.download.queue import (
     QueueBackpressureError,
@@ -97,6 +98,10 @@ class DownloadConfig:
     retry_backoff: float = 0.75
     allow_resume: bool = True
     temp_suffix: str = ".part"
+
+    def __post_init__(self) -> None:
+        cap = max(1, int(DOWNLOAD_MAX_WORKERS_CAP))
+        self.max_workers = max(1, min(int(self.max_workers), cap))
 
 
 @dataclass(slots=True)

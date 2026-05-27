@@ -246,3 +246,72 @@ def inline_video_already_processing():
 
 def inline_video_already_sent():
     return "This inline video was already sent."
+
+
+def welcome_message():
+    return (
+        '<b>Welcome to MaxLoad <tg-emoji emoji-id="5420141555233071341">❤️</tg-emoji></b>\n\n'
+        "Send one link, or paste several links in one message, and I'll download what I can.\n\n"
+        "<b>Supported sites</b>\n"
+        '<tg-emoji emoji-id="5233671414023753035">📷</tg-emoji> Instagram\n'
+        '<tg-emoji emoji-id="5233597424622144804">🎵</tg-emoji> TikTok\n'
+        '<tg-emoji emoji-id="5233311027612913110">▶️</tg-emoji> YouTube\n'
+        '<tg-emoji emoji-id="5231309843435919433">🐦</tg-emoji> X / Twitter\n'
+        '<tg-emoji emoji-id="5233448977667492819">🎧</tg-emoji> SoundCloud\n'
+        '<tg-emoji emoji-id="5233210422298974231">📌</tg-emoji> Pinterest\n\n'
+        "Use the buttons below to try inline mode, tune settings, or share the bot."
+    )
+
+
+def supported_sites_message():
+    return (
+        "<b>Supported sites</b>\n\n"
+        "Instagram posts, reels, and albums\n"
+        "TikTok videos, photo posts, and profiles\n"
+        "YouTube videos and YouTube Music links\n"
+        "X / Twitter posts\n"
+        "SoundCloud tracks\n"
+        "Pinterest pins\n\n"
+        "You can send several supported links in one message. MaxLoad will handle them one by one."
+    )
+
+
+def batch_links_started(processed_total: int, detected_total: int | None = None):
+    if detected_total is not None and detected_total > processed_total:
+        return (
+            f"Found {detected_total} supported links. "
+            f"I'll process the first {processed_total} one by one so the chat stays readable."
+        )
+    return f"Found {processed_total} supported links. I'll process them one by one so the chat stays readable."
+
+
+def batch_link_progress(current: int, total: int, service_name: str):
+    return f"Processing link {current}/{total}: {service_name}..."
+
+
+def batch_links_finished(total: int):
+    return f"Finished batch processing for {total} links."
+
+
+def timeout_error():
+    return "Request timed out. The source may be slow right now. Please try again later."
+
+
+def something_went_wrong():
+    return (
+        "Couldn't process this link right now.\n"
+        "It may be private, deleted, region-limited, or temporarily blocked by the source. "
+        "Please try again later."
+    )
+
+
+def video_too_large():
+    return "The video is too large for Telegram. Try a shorter video or an MP3/audio option if available."
+
+
+def audio_too_large():
+    return "The audio is too large for Telegram. Try a shorter track or another source link."
+
+
+def nothing_found():
+    return "No media found. Check that the link is public, not expired, and points directly to a post or video."

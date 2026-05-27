@@ -17,13 +17,21 @@ from matplotlib.ticker import MaxNLocator
 
 import keyboards as kb
 import messages as bm
-from handlers.utils import get_message_text
+from config import (
+    BATCH_LINKS_MAX_CONCURRENCY,
+    BATCH_LINKS_MAX_ITEMS,
+    BATCH_LINKS_MIN_CONCURRENCY,
+    BATCH_LINKS_PARALLEL_ACTIVE_JOBS_THRESHOLD,
+    BATCH_LINKS_PARALLEL_QUEUE_DEPTH_THRESHOLD,
+)
+from handlers.utils import get_message_text, safe_delete_message
 from services.logger import logger as logging, summarize_url_for_log
 from app_context import db, send_analytics, bot
+from services.download.queue import get_download_queue
 from services.settings import parse_setting_toggle_callback, parse_settings_view_callback
 from services.storage.db import StatsSnapshot
 from services.inline.album_links import get_inline_album_request
-from services.links.detection import extract_supported_link
+from services.links.detection import extract_supported_link, extract_supported_links
 from services.runtime.pending_requests import pop_pending
 
 logging = logging.bind(service="user")
@@ -37,6 +45,7 @@ _stats_snapshot_cache: dict[str, tuple[float, StatsSnapshot]] = {}
 _stats_chart_cache: dict[tuple[str, str], tuple[float, bytes]] = {}
 _stats_chart_warmup_tasks: dict[str, asyncio.Task[None]] = {}
 _stats_render_lock = threading.Lock()
+_MAX_BATCH_LINKS = max(1, int(BATCH_LINKS_MAX_ITEMS))
 
 SERVICE_ORDER = ["Instagram", "TikTok", "YouTube", "SoundCloud", "Pinterest", "Twitter", "Other"]
 SERVICE_COLORS = ["#6C5DD3", "#FF6B6B", "#28C76F", "#FF8800", "#E60023", "#00CFE8", "#FFA500"]
@@ -48,6 +57,14 @@ SERVICE_EMOJI = {
     "Pinterest": "📌",
     "Twitter": "🐦",
     "Other": "📦",
+}
+SERVICE_DISPLAY_NAMES = {
+    "instagram": "Instagram",
+    "tiktok": "TikTok",
+    "youtube": "YouTube",
+    "soundcloud": "SoundCloud",
+    "pinterest": "Pinterest",
+    "twitter": "X / Twitter",
 }
 VALID_STATS_PERIODS = {"Week", "Month", "Year"}
 VALID_STATS_MODES = {"total", "split"}
@@ -148,7 +165,11 @@ async def send_welcome(message: types.Message):
         if payload and await _process_inline_album_deeplink(message, payload):
             return
 
-    await message.reply(bm.welcome_message())
+    await message.reply(
+        bm.welcome_message(),
+        reply_markup=kb.start_keyboard(),
+        parse_mode="HTML",
+    )
 
     if message.chat.type == ChatType.PRIVATE:
         pending = pop_pending(message.from_user.id)
@@ -158,6 +179,25 @@ async def send_welcome(message: types.Message):
             except Exception:
                 pass
             await _process_pending_message(_build_pending_private_message(message, pending.url))
+
+
+@router.message(Command("help"))
+async def send_help(message: types.Message):
+    await message.reply(
+        bm.supported_sites_message(),
+        reply_markup=kb.start_keyboard(),
+        parse_mode="HTML",
+    )
+
+
+@router.callback_query(F.data == "start_supported_sites")
+async def show_supported_sites(call: types.CallbackQuery):
+    await call.message.edit_text(
+        bm.supported_sites_message(),
+        reply_markup=kb.start_keyboard(),
+        parse_mode="HTML",
+    )
+    await call.answer()
 
 
 def _build_pending_private_message(message: types.Message, pending_text: str) -> types.Message:
@@ -282,7 +322,10 @@ async def _process_pending_message(message: types.Message) -> None:
     if not detected:
         return
     service, url = detected
+    await _process_supported_link(message, service, url)
 
+
+async def _process_supported_link(message: types.Message, service: str, url: str) -> None:
     if service == "tiktok":
         from handlers import tiktok
         await tiktok.process_tiktok(message, direct_url=url)
@@ -314,6 +357,106 @@ async def _process_pending_message(message: types.Message) -> None:
     if service == "twitter":
         from handlers import twitter
         await twitter.handle_tweet_links(message, direct_url=url)
+
+
+def _has_multiple_supported_links(message: types.Message) -> bool:
+    return len(extract_supported_links(get_message_text(message))) > 1
+
+
+def _resolve_batch_concurrency() -> int:
+    min_concurrency = max(1, int(BATCH_LINKS_MIN_CONCURRENCY))
+    max_concurrency = max(min_concurrency, int(BATCH_LINKS_MAX_CONCURRENCY))
+    load = get_download_queue().load_snapshot()
+    if (
+        load.queued_jobs > int(BATCH_LINKS_PARALLEL_QUEUE_DEPTH_THRESHOLD)
+        or load.active_jobs >= int(BATCH_LINKS_PARALLEL_ACTIVE_JOBS_THRESHOLD)
+    ):
+        return min_concurrency
+    return max_concurrency
+
+
+@router.message(_has_multiple_supported_links)
+async def process_batch_links(message: types.Message):
+    links = extract_supported_links(get_message_text(message))
+    if len(links) <= 1:
+        return
+
+    selected_links = links[:_MAX_BATCH_LINKS]
+    await send_analytics(
+        user_id=message.from_user.id,
+        chat_type=message.chat.type,
+        action_name="batch_links",
+    )
+    await update_info(message)
+
+    concurrency = min(len(selected_links), _resolve_batch_concurrency())
+    status_message = await message.answer(
+        bm.batch_links_started(len(selected_links), len(links)),
+        parse_mode="HTML",
+    )
+    try:
+        if concurrency > 1:
+            await safe_delete_message(status_message)
+            await _process_batch_links_parallel(message, selected_links, concurrency)
+            status_message = await message.answer(bm.batch_links_finished(len(selected_links)))
+            return
+
+        for index, (service, url) in enumerate(selected_links, start=1):
+            service_name = SERVICE_DISPLAY_NAMES.get(service, service.title())
+            await safe_delete_message(status_message)
+            status_message = await message.answer(
+                bm.batch_link_progress(index, len(selected_links), service_name),
+            )
+            try:
+                await _process_supported_link(message, service, url)
+            except Exception as exc:
+                logging.exception(
+                    "Batch link failed: user_id=%s service=%s url=%s error=%s",
+                    message.from_user.id,
+                    service,
+                    summarize_url_for_log(url),
+                    exc,
+                )
+                await message.reply(bm.something_went_wrong())
+
+        await safe_delete_message(status_message)
+        status_message = await message.answer(bm.batch_links_finished(len(selected_links)))
+    finally:
+        await asyncio.sleep(2)
+        await safe_delete_message(status_message)
+
+
+async def _process_batch_links_parallel(
+    message: types.Message,
+    links: list[tuple[str, str]],
+    concurrency: int,
+) -> None:
+    semaphore = asyncio.Semaphore(max(1, int(concurrency)))
+    total = len(links)
+
+    async def _run_one(index: int, service: str, url: str) -> None:
+        async with semaphore:
+            service_name = SERVICE_DISPLAY_NAMES.get(service, service.title())
+            status_message = await message.answer(
+                bm.batch_link_progress(index, total, service_name),
+            )
+            try:
+                await _process_supported_link(message, service, url)
+            except Exception as exc:
+                logging.exception(
+                    "Parallel batch link failed: user_id=%s service=%s url=%s error=%s",
+                    message.from_user.id,
+                    service,
+                    summarize_url_for_log(url),
+                    exc,
+                )
+                await message.reply(bm.something_went_wrong())
+            finally:
+                await safe_delete_message(status_message)
+
+    await asyncio.gather(
+        *(_run_one(index, service, url) for index, (service, url) in enumerate(links, start=1))
+    )
 
 
 @router.message(Command("settings"))
