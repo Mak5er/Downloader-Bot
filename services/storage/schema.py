@@ -1,5 +1,4 @@
 import asyncio
-import re
 import time
 from pathlib import Path
 
@@ -59,7 +58,19 @@ class SchemaManagerMixin:
 
     async def _apply_schema_migrations(self) -> None:
         action = self._select_schema_migration_action(await self._get_existing_tables())
-        await asyncio.to_thread(self._run_alembic_command, action, "head")
+        try:
+            await asyncio.to_thread(self._run_alembic_command, action, "head")
+        except Exception as exc:
+            logging.critical(
+                "Schema migration failed: action=%s error=%s. The bot will shut down to avoid running with a mismatched schema.",
+                action,
+                exc,
+                exc_info=True,
+            )
+            raise RuntimeError(
+                f"Database migration '{action}' failed. "
+                f"Check logs and fix schema before restarting."
+            ) from exc
 
     async def _create_schema_with_metadata(self) -> None:
         async with self.engine.begin() as conn:
@@ -87,7 +98,7 @@ class SchemaManagerMixin:
         else:
             await self._create_schema_with_metadata()
 
-        if re.sub(r"^postgresql:", "postgresql+asyncpg:", self.sync_url).startswith("postgresql+asyncpg"):
+        if self._dialect_name == "postgresql":
             await self._sync_postgresql_sequences()
 
         logging.perf(

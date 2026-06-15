@@ -223,6 +223,15 @@ async def process_tiktok_video(message: types.Message, data: dict, bot_url: str,
         status_message = await message.answer(bm.downloading_video_status())
     request_id = f"tiktok_video:{message.chat.id}:{message.message_id}:{info.id}"
     size_hint = get_tiktok_size_hint(data)
+    if size_hint and size_hint >= MAX_FILE_SIZE:
+        logging.warning(
+            "TikTok video preflight rejected: url=%s size_hint=%s max=%s",
+            summarize_url_for_log(db_video_url),
+            size_hint,
+            MAX_FILE_SIZE,
+        )
+        await handle_large_file(message, business_id)
+        return False
 
     async def _edit_status(text: str) -> None:
         await safe_edit_text(status_message, text)

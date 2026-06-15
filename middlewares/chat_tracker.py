@@ -1,11 +1,13 @@
 from typing import Any, Awaitable, Callable, Dict, Optional
 import time
+import uuid
 
 from aiogram import BaseMiddleware
 from aiogram.enums import ChatType
 from aiogram.types import Chat, Message, User
 
 from app_context import db
+from services.logger import logger as logging
 from services.storage.db import DataBase
 
 
@@ -26,7 +28,10 @@ class ChatTrackerMiddleware(BaseMiddleware):
         if isinstance(event, Message):
             await self._process_message(event)
 
-        return await handler(event, data)
+        request_id = str(uuid.uuid4())[:12]
+        user_id = getattr(getattr(event, "from_user", None), "id", None)
+        with logging.context(request_id=request_id, flow="handler", user_id=user_id):
+            return await handler(event, data)
 
     async def _process_message(self, message: Message) -> None:
         chat = message.chat

@@ -130,14 +130,13 @@ class AntifloodMiddleware(BaseMiddleware):
         if state is None:
             state = _UserFloodState(last_seen=now)
             self._users[scope_key] = state
+            self._users.move_to_end(scope_key)
+            overflow = len(self._users) - self._max_tracked_users
+            while overflow > 0:
+                self._users.popitem(last=False)
+                overflow -= 1
         else:
             state.last_seen = now
-            self._users.move_to_end(scope_key)
-
-        overflow = len(self._users) - self._max_tracked_users
-        while overflow > 0:
-            self._users.popitem(last=False)
-            overflow -= 1
 
         return state
 
@@ -177,13 +176,12 @@ class AntifloodMiddleware(BaseMiddleware):
 
         self._events_since_cleanup = 0
         stale_cutoff = now - self._user_ttl_seconds
-        stale_scope_keys = [
-            scope_key
-            for scope_key, state in self._users.items()
-            if state.last_seen <= stale_cutoff and state.blocked_until <= now
-        ]
-        for scope_key in stale_scope_keys:
-            self._users.pop(scope_key, None)
+        while self._users:
+            scope_key, state = next(iter(self._users.items()))
+            if state.last_seen > stale_cutoff:
+                break
+            if state.blocked_until <= now:
+                self._users.popitem(last=False)
 
         overflow = len(self._users) - self._max_tracked_users
         while overflow > 0:

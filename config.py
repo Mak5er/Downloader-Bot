@@ -1,8 +1,68 @@
+import ipaddress
 import os
+from urllib.parse import urlparse
 
 from dotenv import load_dotenv
 
 load_dotenv()
+
+
+_PRIVATE_IP_RANGES = (
+    ipaddress.ip_network("10.0.0.0/8"),
+    ipaddress.ip_network("172.16.0.0/12"),
+    ipaddress.ip_network("192.168.0.0/16"),
+    ipaddress.ip_network("169.254.0.0/16"),
+    ipaddress.ip_network("127.0.0.0/8"),
+    ipaddress.ip_network("::1/128"),
+    ipaddress.ip_network("fc00::/7"),
+)
+
+
+def _validate_custom_api_url(value: str, name: str) -> str:
+    if not value:
+        return value
+    try:
+        parsed = urlparse(value)
+    except Exception as exc:
+        raise RuntimeError(f"Invalid URL for {name}: {exc}") from exc
+
+    if parsed.scheme not in ("http", "https"):
+        raise RuntimeError(f"Invalid scheme for {name}: {parsed.scheme}. Must be http or https.")
+
+    host = (parsed.hostname or "").strip("[]")
+    if not host:
+        raise RuntimeError(f"No host in {name}: {value}")
+
+    return value
+
+
+def _validate_cobalt_api_url(value: str, name: str) -> str:
+    if not value:
+        return value
+    try:
+        parsed = urlparse(value)
+    except Exception as exc:
+        raise RuntimeError(f"Invalid URL for {name}: {exc}") from exc
+
+    if parsed.scheme != "https":
+        raise RuntimeError(
+            f"HTTPS is required for {name}. Found: {parsed.scheme}. "
+            f"Use https:// or set {name}_DANGER_ACCEPT_INSECURE=true to bypass."
+        )
+
+    host = (parsed.hostname or "").strip("[]")
+    if not host:
+        raise RuntimeError(f"No host in {name}: {value}")
+
+    try:
+        addr = ipaddress.ip_address(host)
+        for net in _PRIVATE_IP_RANGES:
+            if addr in net:
+                raise RuntimeError(f"Host {host} in {name} resolves to a private/internal IP range.")
+    except ValueError:
+        pass
+
+    return value
 
 
 def _read_env(name: str, *, required: bool = False, aliases: tuple[str, ...] = ()) -> str | None:
@@ -44,12 +104,16 @@ def _read_float_env(name: str, *, required: bool = False, aliases: tuple[str, ..
 BOT_TOKEN = _read_env("BOT_TOKEN", required=True)
 DATABASE_URL = _read_env("DATABASE_URL", required=True)
 ADMIN_ID = _read_int_env("ADMIN_ID", required=True, aliases=("admin_id",))
-CUSTOM_API_URL = _read_env("CUSTOM_API_URL", required=True, aliases=("custom_api_url",))
+CUSTOM_API_URL = _validate_custom_api_url(
+    _read_env("CUSTOM_API_URL", required=True, aliases=("custom_api_url",)) or "", "CUSTOM_API_URL"
+)
 MEASUREMENT_ID = _read_env("MEASUREMENT_ID")
 API_SECRET = _read_env("API_SECRET")
 CHANNEL_ID = _read_env("CHANNEL_ID")
 OUTPUT_DIR = "downloads"
 COBALT_API_URL = _read_env("COBALT_API_URL")
+if COBALT_API_URL and not os.getenv("COBALT_API_URL_DANGER_ACCEPT_INSECURE"):
+    COBALT_API_URL = _validate_cobalt_api_url(COBALT_API_URL, "COBALT_API_URL")
 COBALT_API_KEY = _read_env("COBALT_API_KEY")
 BOT_POLLING_TASKS_CONCURRENCY_LIMIT = _read_int_env("BOT_POLLING_TASKS_CONCURRENCY_LIMIT") or 256
 BOT_SESSION_CONNECTION_LIMIT = _read_int_env("BOT_SESSION_CONNECTION_LIMIT") or 400

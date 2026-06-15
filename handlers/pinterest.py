@@ -181,13 +181,16 @@ async def process_pinterest_single_video(
         )
 
     async def _download_media():
-        return await pinterest_service.download_media(
-            media.url,
-            download_name,
-            user_id=message.from_user.id,
-            chat_id=message.chat.id,
-            on_progress=on_progress,
-            on_retry=on_retry,
+        return await asyncio.wait_for(
+            pinterest_service.download_media(
+                media.url,
+                download_name,
+                user_id=message.from_user.id,
+                chat_id=message.chat.id,
+                on_progress=on_progress,
+                on_retry=on_retry,
+            ),
+            timeout=420.0,
         )
 
     async def _send_cached(file_id: str):

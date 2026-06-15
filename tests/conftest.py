@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
+from typing import Any, Optional
 from unittest.mock import AsyncMock
 
 import pytest
@@ -12,6 +13,72 @@ if str(PROJECT_ROOT) not in sys.path:
 
 import app_context
 from services.runtime import request_dedupe
+
+
+class FakeYoutubeDL:
+    """Reusable fake for yt-dlp's YoutubeDL across platform tests."""
+
+    def __init__(
+        self,
+        options: dict[str, Any],
+        *,
+        ext: str = "mp4",
+        payload: bytes = b"test-media",
+        extract_info_result: Optional[dict[str, Any]] = None,
+        extract_info_error: Optional[Exception] = None,
+    ):
+        self.options = options
+        self.ext = ext
+        self.payload = payload
+        self._extract_info_result = extract_info_result
+        self._extract_info_error = extract_info_error
+        self.urls: list[Any] = []
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        return False
+
+    def download(self, urls):
+        self.urls = list(urls)
+        outtmpl = self.options["outtmpl"]
+        if "%(ext)s" in outtmpl:
+            output_path = outtmpl.replace("%(ext)s", self.ext)
+        else:
+            stem, _ext = str(Path(outtmpl)).rsplit(".", 1)
+            output_path = f"{stem}.{self.ext}"
+        path = Path(output_path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(self.payload)
+        for hook in self.options.get("progress_hooks", []):
+            hook({
+                "status": "downloading",
+                "downloaded_bytes": len(self.payload),
+                "total_bytes": len(self.payload),
+                "speed": 1024.0,
+                "eta": 0,
+            })
+            hook({
+                "status": "finished",
+                "downloaded_bytes": len(self.payload),
+                "total_bytes": len(self.payload),
+                "speed": 1024.0,
+                "eta": 0,
+            })
+
+    def extract_info(self, url, download):
+        if self._extract_info_error is not None:
+            raise self._extract_info_error
+        if self._extract_info_result is not None:
+            return dict(self._extract_info_result)
+        return {
+            "id": "abc123",
+            "title": "Test Video",
+            "webpage_url": url,
+            "formats": [],
+            "_download_arg": download,
+        }
 
 
 class _AttrBag:
@@ -45,6 +112,9 @@ def isolate_runtime_request_state():
         send_analytics=_send_analytics,
     )
     request_dedupe.reset_request_tracking()
+    from middlewares import private_chat_guard
+    private_chat_guard._can_dm_cache.clear()
     yield
     request_dedupe.reset_request_tracking()
+    private_chat_guard._can_dm_cache.clear()
     app_context._context = None

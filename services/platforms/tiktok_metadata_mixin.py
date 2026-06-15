@@ -305,27 +305,39 @@ class TikTokMetadataMixin:
         return data
 
     async def fetch_tiktok_data(self, video_url: str) -> dict:
-        async with self._request_lock:
-            now = self._monotonic()
-            wait_for = max(0.0, 1.0 - (now - self._last_call_time))
-            self._last_call_time = now + wait_for
+        async with self._request_semaphore:
+            async with self._request_rate_limit_lock:
+                now = self._monotonic()
+                self._request_rate_limit_window = [
+                    ts for ts in self._request_rate_limit_window
+                    if now - ts < 1.0
+                ]
+                if len(self._request_rate_limit_window) >= 5:
+                    wait_for = self._request_rate_limit_window[0] + 1.0 - now
+                    if wait_for > 0:
+                        self._last_call_time = now + wait_for
+                    self._request_rate_limit_window.append(now + wait_for)
+                else:
+                    self._request_rate_limit_window.append(now)
+                self._last_call_time = self._request_rate_limit_window[-1]
 
-        if wait_for:
-            await asyncio.sleep(wait_for)
+            wait_for = max(0.0, self._last_call_time - now)
+            if wait_for:
+                await asyncio.sleep(wait_for)
 
-        try:
-            data = await self._fetch_tikwm_data(video_url)
-        except Exception as exc:
-            logging.warning("TikWM metadata failed, trying yt-dlp fallback: url=%s error=%s", video_url, exc)
-        else:
-            if not is_invalid_tiktok_payload(data):
-                return data
-            logging.warning(
-                "TikWM metadata invalid, trying yt-dlp fallback: url=%s code=%s error=%s",
-                video_url,
-                data.get("code"),
-                data.get("error"),
-            )
+            try:
+                data = await self._fetch_tikwm_data(video_url)
+            except Exception as exc:
+                logging.warning("TikWM metadata failed, trying yt-dlp fallback: url=%s error=%s", video_url, exc)
+            else:
+                if not is_invalid_tiktok_payload(data):
+                    return data
+                logging.warning(
+                    "TikWM metadata invalid, trying yt-dlp fallback: url=%s code=%s error=%s",
+                    video_url,
+                    data.get("code"),
+                    data.get("error"),
+                )
 
         logging.debug("Fetching TikTok data via yt-dlp fallback: url=%s", video_url)
         detail, status = await self._extract_tiktok_detail(video_url)
@@ -358,7 +370,6 @@ class TikTokMetadataMixin:
             return await self._retry_async_operation(
                 lambda: self.fetch_tiktok_data(target_url),
                 attempts=3,
-                delay_seconds=2.0,
                 should_retry_result=is_invalid_tiktok_payload,
                 on_retry=on_retry,
             )

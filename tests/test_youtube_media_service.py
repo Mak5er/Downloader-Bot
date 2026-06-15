@@ -7,40 +7,7 @@ from services.platforms.youtube_media import (
     YouTubeMediaService,
     build_ytdlp_youtube_options,
 )
-
-
-class _FakeYoutubeDL:
-    def __init__(self, options, *, ext: str = "mp4", payload: bytes = b"youtube-media"):
-        self.options = options
-        self.ext = ext
-        self.payload = payload
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, exc_type, exc, tb):
-        return False
-
-    def download(self, urls):
-        del urls
-        outtmpl = self.options["outtmpl"]
-        if "%(ext)s" in outtmpl:
-            output_path = outtmpl.replace("%(ext)s", self.ext)
-        else:
-            stem, _ext = str(Path(outtmpl)).rsplit(".", 1)
-            output_path = f"{stem}.{self.ext}"
-        path = Path(output_path)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_bytes(self.payload)
-
-    def extract_info(self, url, download):
-        return {
-            "id": "abc123",
-            "title": "Test Video",
-            "webpage_url": url,
-            "formats": [],
-            "_download_arg": download,
-        }
+from tests.conftest import FakeYoutubeDL
 
 
 def _make_service(tmp_path: Path, *, youtube_dl_factory=None) -> YouTubeMediaService:
@@ -50,7 +17,7 @@ def _make_service(tmp_path: Path, *, youtube_dl_factory=None) -> YouTubeMediaSer
     return YouTubeMediaService(
         str(tmp_path),
         retry_async_operation_func=passthrough_retry,
-        youtube_dl_factory=youtube_dl_factory or (lambda options: _FakeYoutubeDL(options)),
+        youtube_dl_factory=youtube_dl_factory or (lambda options: FakeYoutubeDL(options)),
     )
 
 
@@ -58,7 +25,7 @@ def _make_service(tmp_path: Path, *, youtube_dl_factory=None) -> YouTubeMediaSer
 async def test_download_with_ytdlp_resolves_postprocessed_extension(tmp_path):
     service = _make_service(
         tmp_path,
-        youtube_dl_factory=lambda options: _FakeYoutubeDL(options, ext="mkv", payload=b"video-bytes"),
+        youtube_dl_factory=lambda options: FakeYoutubeDL(options, ext="mkv", payload=b"video-bytes"),
     )
 
     resolved_path = await service.download_with_ytdlp(
@@ -74,7 +41,7 @@ async def test_download_with_ytdlp_resolves_postprocessed_extension(tmp_path):
 async def test_download_with_ytdlp_metrics_resolves_postprocessed_extension(tmp_path):
     service = _make_service(
         tmp_path,
-        youtube_dl_factory=lambda options: _FakeYoutubeDL(options, ext="mkv", payload=b"video-bytes"),
+        youtube_dl_factory=lambda options: FakeYoutubeDL(options, ext="mkv", payload=b"video-bytes"),
     )
 
     metrics = await service.download_with_ytdlp_metrics(
@@ -98,7 +65,7 @@ def test_ytdlp_format_720_prefers_progressive_and_falls_back_to_merge():
 def test_get_youtube_video_uses_single_video_metadata_options(tmp_path):
     captured = {}
 
-    class CapturingYoutubeDL(_FakeYoutubeDL):
+    class CapturingYoutubeDL(FakeYoutubeDL):
         def extract_info(self, url, download):
             captured["options"] = self.options
             captured["download"] = download

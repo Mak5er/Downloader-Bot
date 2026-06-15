@@ -965,6 +965,14 @@ async def clear_downloads_and_notify():
     except Exception as e:
         message = f"An error occurred while clearing the folder: {e}"
 
+    try:
+        deleted_files = await db.cleanup_expired_files()
+        if deleted_files > 0:
+            logging.event("file_cache_cleanup", deleted=deleted_files)
+            message += f"\nCleaned up {deleted_files} expired file cache entries."
+    except Exception as e:
+        logging.error("Failed to clean up expired file cache entries: %s", e)
+
     for admin_id in ADMINS_UID:
         try:
             await bot.send_message(chat_id=admin_id, text=message)

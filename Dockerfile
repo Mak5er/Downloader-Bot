@@ -30,6 +30,9 @@ RUN --mount=type=cache,target=/root/.cache/pip \
     pip install -r requirements.txt
 
 FROM python:3.14-slim
+# Pin to a digest for reproducible builds:
+#   docker pull python:3.14-slim && docker inspect --format='{{index .RepoDigests 0}}' python:3.14-slim
+#   Then use: FROM python:3.14-slim@sha256:...
 
 ENV TZ=UTC \
     PYTHONDONTWRITEBYTECODE=1 \

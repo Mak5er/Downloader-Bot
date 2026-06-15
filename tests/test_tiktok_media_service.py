@@ -5,47 +5,8 @@ from unittest.mock import AsyncMock
 import pytest
 
 from services.platforms.tiktok_media import TikTokMediaService
+from tests.conftest import FakeYoutubeDL
 from utils.download_manager import DownloadError, DownloadMetrics
-
-
-class _FakeYoutubeDL:
-    def __init__(self, options, *, ext: str = "mp4", payload: bytes = b"test-media"):
-        self.options = options
-        self.ext = ext
-        self.payload = payload
-        self.urls = []
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, exc_type, exc, tb):
-        return False
-
-    def download(self, urls):
-        self.urls = list(urls)
-        outtmpl = self.options["outtmpl"]
-        if "%(ext)s" in outtmpl:
-            output_path = outtmpl.replace("%(ext)s", self.ext)
-        else:
-            output_path = outtmpl
-        path = Path(output_path)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_bytes(self.payload)
-        for hook in self.options.get("progress_hooks", []):
-            hook({
-                "status": "downloading",
-                "downloaded_bytes": len(self.payload),
-                "total_bytes": len(self.payload),
-                "speed": 1024.0,
-                "eta": 0,
-            })
-            hook({
-                "status": "finished",
-                "downloaded_bytes": len(self.payload),
-                "total_bytes": len(self.payload),
-                "speed": 1024.0,
-                "eta": 0,
-            })
 
 
 class _FakeResponse:
@@ -84,7 +45,7 @@ def _make_service(tmp_path: Path, *, youtube_dl_factory=None) -> TikTokMediaServ
         get_http_session_func=AsyncMock(),
         retry_async_operation_func=passthrough_retry,
         user_agent_factory=lambda: SimpleNamespace(random="Agent"),
-        youtube_dl_factory=youtube_dl_factory or (lambda options: _FakeYoutubeDL(options)),
+        youtube_dl_factory=youtube_dl_factory or (lambda options: FakeYoutubeDL(options)),
     )
 
 
@@ -487,7 +448,7 @@ async def test_download_audio_alternates_direct_and_ytdlp_across_retry_cycles(tm
 def test_download_video_with_ytdlp_sync_writes_output(tmp_path):
     service = _make_service(
         tmp_path,
-        youtube_dl_factory=lambda options: _FakeYoutubeDL(options, ext="mp4", payload=b"video-bytes"),
+        youtube_dl_factory=lambda options: FakeYoutubeDL(options, ext="mp4", payload=b"video-bytes"),
     )
 
     metrics = service._download_video_with_ytdlp_sync(
@@ -507,7 +468,7 @@ def test_download_video_with_ytdlp_sync_prefers_progressive_formats_with_audio(t
 
     def youtube_dl_factory(options):
         captured["options"] = options
-        return _FakeYoutubeDL(options, ext="mp4", payload=b"video-bytes")
+        return FakeYoutubeDL(options, ext="mp4", payload=b"video-bytes")
 
     service = _make_service(tmp_path, youtube_dl_factory=youtube_dl_factory)
 
@@ -527,7 +488,7 @@ def test_download_video_with_ytdlp_sync_prefers_progressive_formats_with_audio(t
 def test_download_audio_with_ytdlp_sync_writes_mp3_output(tmp_path):
     service = _make_service(
         tmp_path,
-        youtube_dl_factory=lambda options: _FakeYoutubeDL(options, ext="mp3", payload=b"audio-bytes"),
+        youtube_dl_factory=lambda options: FakeYoutubeDL(options, ext="mp3", payload=b"audio-bytes"),
     )
 
     metrics = service._download_audio_with_ytdlp_sync(

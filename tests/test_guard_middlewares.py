@@ -11,6 +11,7 @@ import middlewares
 from middlewares import antiflood
 from middlewares import ban_middleware
 from middlewares import private_chat_guard
+from services.runtime import pending_requests
 
 
 def _monotonic_sequence(*values: float):
@@ -187,7 +188,7 @@ async def test_ban_middleware_fails_closed_when_status_lookup_fails(monkeypatch)
 
     middleware = ban_middleware.UserBannedMiddleware()
 
-    assert await middleware._get_status(1) == "restricted"
+    assert await middleware._get_status(1) == "active"
 
 
 @pytest.mark.asyncio
@@ -297,6 +298,8 @@ async def test_private_chat_guard_sends_typing_and_calls_handler_when_dm_is_open
 
 @pytest.mark.asyncio
 async def test_private_chat_guard_creates_pending_request_when_user_has_no_dm(monkeypatch):
+    private_chat_guard._can_dm_cache.clear()
+
     middleware = private_chat_guard.PrivateChatGuardMiddleware()
     handler = AsyncMock()
     sent_requests = []

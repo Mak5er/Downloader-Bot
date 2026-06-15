@@ -1,5 +1,6 @@
 import asyncio
 import json
+import random
 import time
 from typing import Any, Optional
 
@@ -37,7 +38,7 @@ async def fetch_cobalt_data(
     source: str = "cobalt",
     timeout: int = 15,
     attempts: int = 3,
-    retry_delay: float = 0.0,
+    retry_delay: float = 1.0,
 ) -> Optional[dict[str, Any]]:
     started_at = time.perf_counter()
     if not base_url:
@@ -151,8 +152,9 @@ async def fetch_cobalt_data(
                     total_attempts,
                     exc,
                 )
-                if retry_delay > 0:
-                    await asyncio.sleep(retry_delay)
+                backoff = min(30.0, retry_delay * (2 ** (attempt - 1)) + random.uniform(0, 1))
+                if backoff > 0:
+                    await asyncio.sleep(backoff)
                 continue
             break
         except Exception as exc:

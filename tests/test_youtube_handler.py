@@ -5,6 +5,7 @@ import pytest
 
 from handlers import youtube
 from services.inline.video_requests import create_inline_video_request, get_inline_video_request
+from tests.conftest import FakeYoutubeDL
 from utils.download_manager import DownloadMetrics
 
 
@@ -93,17 +94,7 @@ async def test_download_stream_calls_downloader(monkeypatch, tmp_path):
 
 
 def test_get_youtube_video_returns_none_on_error(monkeypatch):
-    class DummyYDL:
-        def __enter__(self):
-            return self
-
-        def __exit__(self, exc_type, exc, tb):
-            return False
-
-        def extract_info(self, url, download):
-            raise youtube.DownloadError("boom")
-
-    monkeypatch.setattr(youtube, "YoutubeDL", lambda opts: DummyYDL())
+    monkeypatch.setattr(youtube, "YoutubeDL", lambda opts: FakeYoutubeDL(opts, extract_info_error=youtube.DownloadError("boom")))
 
     result = youtube.get_youtube_video("https://example.com/video")
 

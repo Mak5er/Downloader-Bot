@@ -97,3 +97,44 @@ def test_repository_query_index_migration_creates_only_missing_indexes(monkeypat
     module.upgrade()
 
     create_index.assert_called_once_with("ix_users_status", "users", ["status"], unique=False)
+
+
+def test_analytics_user_id_index_migration_skips_existing(monkeypatch):
+    module = _load_migration_module("20260615_000005_analytics_user_id_index.py")
+    create_index = Mock()
+    monkeypatch.setattr(module.op, "create_index", create_index)
+    monkeypatch.setattr(module.op, "get_bind", lambda: object())
+    monkeypatch.setattr(
+        module.sa,
+        "inspect",
+        lambda _bind: SimpleNamespace(
+            get_indexes=lambda table: [
+                {"name": "ix_analytics_events_user_id"},
+                {"name": "ix_downloaded_files_date_added"},
+            ]
+        ),
+    )
+
+    module.upgrade()
+
+    create_index.assert_not_called()
+
+
+def test_analytics_user_id_index_migration_creates_missing(monkeypatch):
+    module = _load_migration_module("20260615_000005_analytics_user_id_index.py")
+    create_index = Mock()
+    monkeypatch.setattr(module.op, "create_index", create_index)
+    monkeypatch.setattr(module.op, "get_bind", lambda: object())
+    monkeypatch.setattr(
+        module.sa,
+        "inspect",
+        lambda _bind: SimpleNamespace(
+            get_indexes=lambda table: []
+        ),
+    )
+
+    module.upgrade()
+
+    assert create_index.call_count == 2
+    create_index.assert_any_call("ix_analytics_events_user_id", "analytics_events", ["user_id"], unique=False)
+    create_index.assert_any_call("ix_downloaded_files_date_added", "downloaded_files", ["date_added"], unique=False)

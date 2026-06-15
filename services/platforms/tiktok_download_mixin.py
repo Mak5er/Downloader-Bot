@@ -506,7 +506,6 @@ class TikTokDownloadMixin:
             return await self._retry_async_operation(
                 lambda: asyncio.to_thread(sync_download, progress_bridge),
                 attempts=1,
-                delay_seconds=2.0,
                 retry_on_exception=lambda exc: not isinstance(exc, (DownloadRateLimitError, DownloadQueueBusyError)),
                 on_retry=None,
             )

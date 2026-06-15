@@ -24,7 +24,7 @@ class UserBannedMiddleware(BaseMiddleware):
         try:
             user_status = await db.status(user_id)
         except Exception:
-            user_status = "restricted"
+            user_status = cached[1] if cached else "active"
 
         status_value = user_status or "active"
         self._status_cache[user_id] = (now, status_value)

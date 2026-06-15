@@ -366,17 +366,16 @@ async def retry_async_operation(
     operation: Callable[[], Awaitable[T]],
     *,
     attempts: int = 3,
-    delay_seconds: float = 2.0,
+    delay_seconds: float = 1.0,
     should_retry_result: Optional[Callable[[T], bool]] = None,
     retry_on_exception: Optional[Callable[[BaseException], bool]] = None,
     on_retry: Optional[Callable[[int, int, Optional[BaseException]], Awaitable[Any] | Any]] = None,
-) -> T:
+) -> Optional[T]:
     """
-    Retry an async operation with fixed delay.
+    Retry an async operation with exponential backoff and jitter.
+    """
+    import random
 
-    `on_retry` is called after a failed attempt and before sleeping.
-    Signature: `(failed_attempt, total_attempts, error_or_none)`.
-    """
     if attempts < 1:
         raise ValueError("attempts must be >= 1")
 
@@ -400,7 +399,7 @@ async def retry_async_operation(
             should_retry = True
 
         if not should_retry:
-            return last_result  # type: ignore[return-value]
+            return last_result
 
         if attempt >= attempts:
             break
@@ -410,9 +409,10 @@ async def retry_async_operation(
             if asyncio.iscoroutine(maybe):
                 await maybe
 
-        await asyncio.sleep(max(0.0, delay_seconds))
+        backoff = min(30.0, delay_seconds * (2 ** (attempt - 1)) + random.uniform(0, 1))
+        await asyncio.sleep(backoff)
 
     if last_error is not None:
         raise last_error
 
-    return last_result  # type: ignore[return-value]
+    return last_result

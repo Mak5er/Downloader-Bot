@@ -184,9 +184,8 @@ class SoundCloudMediaService:
             self._cobalt_api_key,
             payload,
             source="soundcloud",
-            timeout=20,
+            timeout=15,
             attempts=3,
-            retry_delay=0.0,
         )
         if not data:
             return None
@@ -221,7 +220,6 @@ class SoundCloudMediaService:
             return await self._retry_async_operation(
                 _download_once,
                 attempts=3,
-                delay_seconds=2.0,
                 retry_on_exception=lambda exc: not isinstance(exc, (DownloadRateLimitError, DownloadQueueBusyError)),
                 on_retry=on_retry,
             )

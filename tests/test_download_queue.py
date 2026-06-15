@@ -203,3 +203,67 @@ async def test_queue_metrics_snapshot_contains_percentiles():
     assert "tiktok" in snapshot
     assert snapshot["tiktok"].count >= 1
     assert snapshot["tiktok"].processing_p95_ms >= snapshot["tiktok"].processing_p50_ms
+
+
+@pytest.mark.asyncio
+async def test_queue_submit_during_shutdown_does_not_deadlock():
+    queue = AdaptiveDownloadQueue(min_workers=2, max_workers=2, per_user_rate_limit=20, max_queue_size=50)
+
+    async def _runner():
+        await asyncio.sleep(0.05)
+        return "ok"
+
+    task_a = asyncio.create_task(queue.submit(_runner, priority=10, source="test", user_id=1))
+    await asyncio.sleep(0.01)
+    shutdown_task = asyncio.create_task(queue.shutdown())
+    task_b = asyncio.create_task(queue.submit(_runner, priority=10, source="test", user_id=2))
+
+    results = await asyncio.gather(task_a, shutdown_task, task_b, return_exceptions=True)
+    await queue.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_queue_per_user_slot_race():
+    queue = AdaptiveDownloadQueue(min_workers=1, max_workers=1, per_user_rate_limit=20, per_user_max_pending=1, max_queue_size=50)
+
+    async def _slow():
+        await asyncio.sleep(0.1)
+        return "slow"
+
+    async def _fast():
+        return "fast"
+
+    task_a = asyncio.create_task(queue.submit(_slow, priority=10, source="test", user_id=1))
+    await asyncio.sleep(0.02)
+    task_b = asyncio.create_task(queue.submit(_fast, priority=10, source="test", user_id=1))
+
+    results = await asyncio.gather(task_a, task_b, return_exceptions=True)
+    await queue.shutdown()
+
+    assert results[0] == "slow"
+    assert results[1] == "fast"
+
+
+@pytest.mark.asyncio
+async def test_request_dedupe_concurrent_same_key():
+    from services.runtime.request_dedupe import claim_request, finish_request, reset_request_tracking
+
+    reset_request_tracking()
+
+    async def _claim(user_id: int):
+        return claim_request(user_id, None, "test_svc", "https://example.com/post/1")
+
+    results = await asyncio.gather(
+        _claim(1),
+        _claim(1),
+        _claim(1),
+    )
+
+    accepted = sum(1 for r in results if r == "accepted")
+    active = sum(1 for r in results if r == "active")
+
+    assert accepted == 1, f"Expected 1 accepted, got {accepted} (active={active}). Race condition detected."
+    assert active == 2, f"Expected 2 active, got {active}"
+
+    finish_request(1, None, "test_svc", "https://example.com/post/1", success=True)
+    reset_request_tracking()

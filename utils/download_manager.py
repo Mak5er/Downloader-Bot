@@ -122,8 +122,6 @@ class ResilientDownloader:
     """
 
     _thread_local: threading.local = threading.local()
-    _inflight_downloads: dict[str, asyncio.Future[DownloadMetrics]] = {}
-    _inflight_lock: asyncio.Lock = asyncio.Lock()
 
     def __init__(
         self,
@@ -137,6 +135,8 @@ class ResilientDownloader:
         self.config = config or DownloadConfig()
         self._default_headers: MutableMapping[str, str] = dict(default_headers or {})
         self.source = source
+        self._inflight_downloads: dict[str, asyncio.Future[DownloadMetrics]] = {}
+        self._inflight_lock: asyncio.Lock = asyncio.Lock()
         threshold_mb = os.getenv("DOWNLOAD_SUBPROCESS_THRESHOLD_MB", "0")
         try:
             threshold_mb_value = int(threshold_mb or "0")

@@ -207,13 +207,16 @@ async def process_instagram_video(message: types.Message, data: InstagramVideo, 
         )
 
     async def _download_media():
-        return await inst_service.download_media(
-            media.url,
-            download_name,
-            user_id=message.from_user.id,
-            chat_id=message.chat.id,
-            on_progress=on_progress,
-            on_retry=on_retry,
+        return await asyncio.wait_for(
+            inst_service.download_media(
+                media.url,
+                download_name,
+                user_id=message.from_user.id,
+                chat_id=message.chat.id,
+                on_progress=on_progress,
+                on_retry=on_retry,
+            ),
+            timeout=420.0,
         )
 
     async def _send_downloaded(path: str):

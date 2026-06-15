@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import threading
 import time
 from collections import OrderedDict
 from typing import Hashable, Literal, Optional
@@ -24,6 +25,7 @@ _MAX_ENTRIES = max(1, int(REQUEST_DEDUPE_MAX_ENTRIES))
 
 _active_requests: "OrderedDict[RequestFingerprint, float]" = OrderedDict()
 _completed_requests: "OrderedDict[RequestFingerprint, float]" = OrderedDict()
+_lock = threading.Lock()
 
 
 def normalize_request_service(service: str) -> str:
@@ -64,40 +66,43 @@ def same_request(first_service: str, first_url: str, second_service: str, second
 
 def claim_request(user_id: int, chat_id: Optional[int], service: str, url: str) -> RequestClaimStatus:
     now = time.monotonic()
-    _cleanup(now)
     fingerprint = build_request_fingerprint(user_id, chat_id, service, url)
     if not fingerprint[3]:
         return "accepted"
 
-    active_at = _active_requests.get(fingerprint)
-    if active_at is not None and now - active_at <= _ACTIVE_TTL_SECONDS:
+    with _lock:
+        _cleanup_locked(now)
+        active_at = _active_requests.get(fingerprint)
+        if active_at is not None and now - active_at <= _ACTIVE_TTL_SECONDS:
+            _active_requests.move_to_end(fingerprint)
+            return "active"
+
+        completed_at = _completed_requests.get(fingerprint)
+        if completed_at is not None and now - completed_at <= _COMPLETED_TTL_SECONDS:
+            _completed_requests.move_to_end(fingerprint)
+            return "recent"
+
+        _active_requests[fingerprint] = now
         _active_requests.move_to_end(fingerprint)
-        return "active"
-
-    completed_at = _completed_requests.get(fingerprint)
-    if completed_at is not None and now - completed_at <= _COMPLETED_TTL_SECONDS:
-        _completed_requests.move_to_end(fingerprint)
-        return "recent"
-
-    _active_requests[fingerprint] = now
-    _active_requests.move_to_end(fingerprint)
-    _trim()
-    return "accepted"
+        _trim_locked()
+        return "accepted"
 
 
 def finish_request(user_id: int, chat_id: Optional[int], service: str, url: str, *, success: bool) -> None:
     now = time.monotonic()
     fingerprint = build_request_fingerprint(user_id, chat_id, service, url)
-    _active_requests.pop(fingerprint, None)
-    if success and fingerprint[3]:
-        _completed_requests[fingerprint] = now
-        _completed_requests.move_to_end(fingerprint)
-    _cleanup(now)
+    with _lock:
+        _active_requests.pop(fingerprint, None)
+        if success and fingerprint[3]:
+            _completed_requests[fingerprint] = now
+            _completed_requests.move_to_end(fingerprint)
+        _cleanup_locked(now)
 
 
 def reset_request_tracking() -> None:
-    _active_requests.clear()
-    _completed_requests.clear()
+    with _lock:
+        _active_requests.clear()
+        _completed_requests.clear()
 
 
 def _normalize_generic_url(url: str) -> str:
@@ -164,10 +169,10 @@ def _normalize_youtube_url(url: str) -> str:
     return _normalize_generic_url(url)
 
 
-def _cleanup(now: float) -> None:
+def _cleanup_locked(now: float) -> None:
     _prune_expired(_active_requests, now, _ACTIVE_TTL_SECONDS)
     _prune_expired(_completed_requests, now, _COMPLETED_TTL_SECONDS)
-    _trim()
+    _trim_locked()
 
 
 def _prune_expired(store: "OrderedDict[Hashable, float]", now: float, ttl_seconds: float) -> None:
@@ -182,7 +187,7 @@ def _prune_expired(store: "OrderedDict[Hashable, float]", now: float, ttl_second
         store.pop(key, None)
 
 
-def _trim() -> None:
+def _trim_locked() -> None:
     overflow = (len(_active_requests) + len(_completed_requests)) - _MAX_ENTRIES
     while overflow > 0 and _completed_requests:
         _completed_requests.popitem(last=False)

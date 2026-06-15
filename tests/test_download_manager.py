@@ -11,8 +11,8 @@ from utils.download_manager import DownloadConfig, DownloadMetrics, ResilientDow
 
 @pytest.mark.asyncio
 async def test_download_deduplicates_same_target(monkeypatch, tmp_path):
-    ResilientDownloader._inflight_downloads.clear()
     downloader = ResilientDownloader(str(tmp_path))
+    downloader._inflight_downloads.clear()
     call_count = {"value": 0}
 
     async def fake_submit(runner, **_kwargs):
@@ -49,8 +49,8 @@ async def test_download_deduplicates_same_target(monkeypatch, tmp_path):
 
 @pytest.mark.asyncio
 async def test_download_does_not_deduplicate_different_urls_with_same_filename(monkeypatch, tmp_path):
-    ResilientDownloader._inflight_downloads.clear()
     downloader = ResilientDownloader(str(tmp_path))
+    downloader._inflight_downloads.clear()
     call_count = {"value": 0}
 
     async def fake_submit(runner, **_kwargs):

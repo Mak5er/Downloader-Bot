@@ -43,6 +43,9 @@ class StatsSnapshot:
 
 class DownloadedFile(Base):
     __tablename__ = "downloaded_files"
+    __table_args__ = (
+        Index("ix_downloaded_files_date_added", "date_added"),
+    )
 
     id = Column(BigInteger, primary_key=True, autoincrement=True)
     url = Column(Text, unique=True, nullable=False)

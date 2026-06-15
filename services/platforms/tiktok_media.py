@@ -74,6 +74,9 @@ class TikTokMediaService(
         self._expanded_tiktok_url_cache: "OrderedDict[str, str]" = OrderedDict()
         self._expanded_tiktok_url_lock = asyncio.Lock()
         self._request_lock = asyncio.Lock()
+        self._request_semaphore = asyncio.Semaphore(3)
+        self._request_rate_limit_lock = asyncio.Lock()
+        self._request_rate_limit_window: list[float] = []
         self._last_call_time = 0.0
 
     @staticmethod

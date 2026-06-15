@@ -262,7 +262,6 @@ class YouTubeMediaService:
             metrics = await self._retry_async_operation(
                 _download_once,
                 attempts=3,
-                delay_seconds=2.0,
                 retry_on_exception=lambda exc: not isinstance(
                     exc,
                     (DownloadRateLimitError, DownloadQueueBusyError, DownloadTooLargeError),

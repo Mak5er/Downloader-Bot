@@ -1,6 +1,6 @@
 import time
 
-from sqlalchemy import delete, select, update
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
@@ -79,30 +79,30 @@ class UserRepositoryMixin:
 
     async def user_count(self):
         async with self.SessionLocal() as session:
-            result = await session.execute(select(User.user_id))
-            return len(result.scalars().all())
+            result = await session.execute(select(func.count(User.user_id)))
+            return result.scalar() or 0
 
     async def active_user_count(self):
         async with self.SessionLocal() as session:
-            result = await session.execute(select(User.user_id).where(User.status == "active"))
-            return len(result.scalars().all())
+            result = await session.execute(select(func.count(User.user_id)).where(User.status == "active"))
+            return result.scalar() or 0
 
     async def inactive_user_count(self):
         async with self.SessionLocal() as session:
-            result = await session.execute(select(User.user_id).where(User.status != "active"))
-            return len(result.scalars().all())
+            result = await session.execute(select(func.count(User.user_id)).where(User.status != "active"))
+            return result.scalar() or 0
 
     async def private_chat_count(self):
         async with self.SessionLocal() as session:
-            result = await session.execute(select(User.user_id).where(User.chat_type == "private"))
-            return len(result.scalars().all())
+            result = await session.execute(select(func.count(User.user_id)).where(User.chat_type == "private"))
+            return result.scalar() or 0
 
     async def group_chat_count(self):
         async with self.SessionLocal() as session:
             result = await session.execute(
-                select(User.user_id).where(User.chat_type != "private", User.chat_type.isnot(None))
+                select(func.count(User.user_id)).where(User.chat_type != "private", User.chat_type.isnot(None))
             )
-            return len(result.scalars().all())
+            return result.scalar() or 0
 
     async def all_users(self):
         async with self.SessionLocal() as session:

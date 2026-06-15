@@ -56,6 +56,46 @@ def get_instagram_preview_url(media: Optional[InstagramMedia]) -> Optional[str]:
     return media.thumb or None
 
 
+def _extract_cobalt_description(data: dict, fallback_url: str) -> str:
+    metadata = data.get("metadata") or data.get("output", {}).get("metadata") or {}
+    if isinstance(metadata, dict):
+        fields = ("description", "caption", "title", "text")
+        for field_name in fields:
+            val = metadata.get(field_name)
+            if isinstance(val, str) and val.strip():
+                return val.strip()
+    if isinstance(data.get("filename"), str) and data["filename"].strip():
+        return data["filename"].strip()
+    return ""
+
+
+def _extract_cobalt_author(data: dict, filename: str) -> str:
+    metadata = data.get("metadata") or data.get("output", {}).get("metadata") or {}
+    if isinstance(metadata, dict):
+        fields = ("author", "uploader", "username", "creator", "channel")
+        for field_name in fields:
+            val = metadata.get(field_name)
+            if isinstance(val, str) and val.strip():
+                return val.strip()
+    if filename:
+        parts = filename.replace("\\", "/").split("/")
+        for part in parts:
+            part = part.strip()
+            if part and not part.startswith(".") and "_" in part:
+                maybe = part.split("_")[0]
+                if maybe and len(maybe) >= 2:
+                    return maybe
+    return ""
+
+
+def _extract_instagram_post_id(url: str) -> str:
+    import re
+    match = re.search(r"instagram\.com/(?:p|reels|reel)/([^/?#&]+)", url)
+    if match:
+        return match.group(1)
+    return ""
+
+
 class InstagramMediaService:
     def __init__(
         self,
@@ -93,13 +133,14 @@ class InstagramMediaService:
             source="instagram",
             timeout=15,
             attempts=3,
-            retry_delay=0.0,
         )
         if not data:
             return None
 
         media_list = []
         status = data.get("status")
+        description = ""
+        author = ""
 
         if not status:
             if "url" in data:
@@ -109,6 +150,7 @@ class InstagramMediaService:
 
         if status in {"tunnel", "redirect"}:
             media_url = data.get("url")
+            filename = data.get("filename", "")
             if isinstance(media_url, str) and media_url:
                 media_list.append(
                     InstagramMedia(
@@ -116,11 +158,14 @@ class InstagramMediaService:
                         type=classify_cobalt_media_type(
                             media_url,
                             audio_only=audio_only,
-                            filename=data.get("filename"),
+                            filename=filename,
                         ),
                         thumb=_extract_instagram_thumb(data),
                     )
                 )
+            if isinstance(filename, str):
+                description = _extract_cobalt_description(data, fallback_url=url)
+            author = _extract_cobalt_author(data, filename)
         elif status == "picker":
             picker_audio_url = data.get("audio")
             if audio_only and isinstance(picker_audio_url, str) and picker_audio_url:
@@ -144,6 +189,8 @@ class InstagramMediaService:
                             thumb=_extract_instagram_thumb(item),
                         )
                     )
+            description = _extract_cobalt_description(data, fallback_url=url)
+            author = _extract_cobalt_author(data, "")
         elif status == "local-processing":
             tunnel_urls = data.get("tunnel") or []
             output = data.get("output") or {}
@@ -173,6 +220,8 @@ class InstagramMediaService:
                         thumb=_extract_instagram_thumb(data) or _extract_instagram_thumb(output),
                     )
                 )
+            description = _extract_cobalt_description(data, fallback_url=url)
+            author = _extract_cobalt_author(data, output.get("filename", "") if isinstance(output, dict) else "")
         elif status == "error":
             error_obj = data.get("error") or {}
             logging.error(
@@ -189,10 +238,11 @@ class InstagramMediaService:
             logging.error("Cobalt response has no media items: status=%s payload=%s", status, data)
             return None
 
+        post_id = _extract_instagram_post_id(url) or str(int(datetime.datetime.now().timestamp()))
         return InstagramVideo(
-            id=str(int(datetime.datetime.now().timestamp())),
-            description="",
-            author="instagram_user",
+            id=post_id,
+            description=description,
+            author=author or "instagram_user",
             media_list=media_list,
         )
 
@@ -225,7 +275,6 @@ class InstagramMediaService:
             return await self._retry_async_operation(
                 _download_once,
                 attempts=3,
-                delay_seconds=2.0,
                 retry_on_exception=lambda exc: not isinstance(exc, (DownloadRateLimitError, DownloadQueueBusyError)),
                 on_retry=on_retry,
             )

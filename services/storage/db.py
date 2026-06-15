@@ -1,6 +1,8 @@
+from sqlalchemy import event
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from config import DATABASE_URL, DB_MAX_OVERFLOW, DB_POOL_SIZE, DB_POOL_TIMEOUT
+from services.logger import logger as logging
 from services.storage.analytics_repository import AnalyticsRepositoryMixin
 from services.storage.database_url import to_async_database_url, to_sync_database_url
 from services.storage.file_cache_repository import FileCacheRepositoryMixin
@@ -18,6 +20,8 @@ from services.storage.models import (
 from services.storage.schema import SchemaManagerMixin
 from services.storage.user_repository import UserRepositoryMixin
 
+logging = logging.bind(service="db")
+
 __all__ = [
     "APP_SCHEMA_TABLES",
     "AnalyticsEvent",
@@ -29,6 +33,57 @@ __all__ = [
     "StatsSnapshot",
     "User",
 ]
+
+
+_POOL_LOG_INTERVAL = 5
+
+
+def _register_pool_listeners(engine) -> None:
+    if engine.dialect.name != "postgresql":
+        return
+
+    sync_engine = getattr(engine, "sync_engine", engine)
+    pool = getattr(sync_engine, "pool", None)
+    if pool is None:
+        return
+    tracked_checked_out = 0
+
+    @event.listens_for(pool, "checkout")
+    def _on_checkout(dbapi_connection, connection_record, connection_proxy):
+        nonlocal tracked_checked_out
+        tracked_checked_out += 1
+        overflow = pool.overflow()
+        if overflow > 0 and tracked_checked_out % _POOL_LOG_INTERVAL == 0:
+            logging.perf(
+                "db_pool_checkout",
+                duration_ms=0,
+                pool_size=pool.size(),
+                overflow=overflow,
+                checkedout=pool.checkedout(),
+            )
+
+    @event.listens_for(pool, "checkin")
+    def _on_checkin(dbapi_connection, connection_record):
+        pass
+
+    @event.listens_for(pool, "connect")
+    def _on_connect(dbapi_connection, connection_record):
+        logging.event(
+            "db_pool_connect",
+            pool_size=pool.size(),
+            overflow=pool.overflow(),
+            checkedout=pool.checkedout(),
+        )
+
+    @event.listens_for(sync_engine, "close")
+    def _on_engine_close(engine):
+        logging.event("db_engine_close")
+
+    logging.event(
+        "db_pool_listeners_registered",
+        pool_size=pool.size(),
+        max_overflow=pool._max_overflow,
+    )
 
 
 class DataBase(
@@ -75,3 +130,4 @@ class DataBase(
         self._status_cache_max_entries = 4096
         self._cache_cleanup_interval_seconds = 60.0
         self._last_cache_cleanup_monotonic = 0.0
+        _register_pool_listeners(self.engine)

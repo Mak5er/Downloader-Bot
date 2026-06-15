@@ -1,6 +1,6 @@
 import time
 
-from sqlalchemy import func, select, update
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
@@ -90,3 +90,16 @@ class FileCacheRepositoryMixin:
             except Exception as exc:
                 logging.error("Error in get_file_id: %s", exc)
                 return None
+
+    async def cleanup_expired_files(self, max_age_days: int = 30) -> int:
+        from datetime import datetime, timedelta, timezone
+
+        cutoff = datetime.now(timezone.utc) - timedelta(days=max(int(max_age_days), 1))
+        async with self.SessionLocal() as session:
+            async with session.begin():
+                result = await session.execute(
+                    delete(DownloadedFile).where(DownloadedFile.date_added < cutoff)
+                )
+                deleted = result.rowcount
+                self._file_cache.clear()
+                return deleted

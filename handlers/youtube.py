@@ -194,6 +194,82 @@ async def _get_youtube_video_with_timeout(url: str):
     | F.caption.regexp(YOUTUBE_VIDEO_URL_REGEX, mode="search")
 )
 @with_message_logging("youtube", "video_message")
+async def _download_youtube_media(
+    video: dict | None,
+    yt: dict,
+    name: str,
+    size_hint: int | None,
+    user_id: int,
+    chat_id: int,
+    on_progress: Any,
+    on_retry_download: Any,
+) -> DownloadMetrics | None:
+    if not video:
+        return await asyncio.wait_for(
+            retry_async_operation(
+                lambda: download_with_ytdlp_metrics(
+                    yt["webpage_url"],
+                    name,
+                    YTDLP_FORMAT_720,
+                    "youtube_video_ytdlp_merged",
+                    max_filesize=MAX_FILE_SIZE - 1,
+                ),
+                attempts=3,
+                should_retry_result=lambda result: result is None,
+                on_retry=on_retry_download,
+            ),
+            timeout=900.0,
+        )
+    if _is_manifest_stream(video):
+        return await asyncio.wait_for(
+            retry_async_operation(
+                lambda: download_with_ytdlp_metrics(
+                    yt["webpage_url"],
+                    name,
+                    YTDLP_FORMAT_720,
+                    "youtube_video_ytdlp_manifest",
+                    max_filesize=MAX_FILE_SIZE - 1,
+                ),
+                attempts=3,
+                should_retry_result=lambda result: result is None,
+                on_retry=on_retry_download,
+            ),
+            timeout=900.0,
+        )
+
+    metrics = await asyncio.wait_for(
+        download_stream(
+            video,
+            name,
+            "youtube_video",
+            user_id=user_id,
+            chat_id=chat_id,
+            size_hint=size_hint,
+            max_size_bytes=MAX_FILE_SIZE,
+            on_progress=on_progress,
+            on_retry=on_retry_download,
+        ),
+        timeout=540.0,
+    )
+    if metrics:
+        return metrics
+    return await asyncio.wait_for(
+        retry_async_operation(
+            lambda: download_with_ytdlp_metrics(
+                yt["webpage_url"],
+                name,
+                YTDLP_FORMAT_720,
+                "youtube_video_ytdlp_merged",
+                max_filesize=MAX_FILE_SIZE - 1,
+            ),
+            attempts=3,
+            should_retry_result=lambda result: result is None,
+            on_retry=on_retry_download,
+        ),
+        timeout=900.0,
+    )
+
+
 async def download_video(message: types.Message, direct_url: Optional[str] = None):
     url = direct_url or _extract_youtube_url(get_message_text(message), YOUTUBE_VIDEO_URL_REGEX)
     if not url:
@@ -260,72 +336,10 @@ async def download_video(message: types.Message, direct_url: Optional[str] = Non
             )
 
         async def _download_media():
-            if not video:
-                return await asyncio.wait_for(
-                    retry_async_operation(
-                        lambda: download_with_ytdlp_metrics(
-                            yt['webpage_url'],
-                            name,
-                            YTDLP_FORMAT_720,
-                            "youtube_video_ytdlp_merged",
-                            max_filesize=MAX_FILE_SIZE - 1,
-                        ),
-                        attempts=3,
-                        delay_seconds=2.0,
-                        should_retry_result=lambda result: result is None,
-                        on_retry=on_retry_download,
-                    ),
-                    timeout=900.0,
-                )
-            if _is_manifest_stream(video):
-                return await asyncio.wait_for(
-                    retry_async_operation(
-                        lambda: download_with_ytdlp_metrics(
-                            yt['webpage_url'],
-                            name,
-                            YTDLP_FORMAT_720,
-                            "youtube_video_ytdlp_manifest",
-                            max_filesize=MAX_FILE_SIZE - 1,
-                        ),
-                        attempts=3,
-                        delay_seconds=2.0,
-                        should_retry_result=lambda result: result is None,
-                        on_retry=on_retry_download,
-                    ),
-                    timeout=900.0,
-                )
-
-            metrics = await asyncio.wait_for(
-                download_stream(
-                    video,
-                    name,
-                    "youtube_video",
-                    user_id=message.from_user.id,
-                    chat_id=message.chat.id,
-                    size_hint=size_hint,
-                    max_size_bytes=MAX_FILE_SIZE,
-                    on_progress=on_progress,
-                    on_retry=on_retry_download,
-                ),
-                timeout=540.0,
-            )
-            if metrics:
-                return metrics
-            return await asyncio.wait_for(
-                retry_async_operation(
-                    lambda: download_with_ytdlp_metrics(
-                            yt['webpage_url'],
-                            name,
-                            YTDLP_FORMAT_720,
-                            "youtube_video_ytdlp_merged",
-                            max_filesize=MAX_FILE_SIZE - 1,
-                        ),
-                        attempts=3,
-                    delay_seconds=2.0,
-                    should_retry_result=lambda result: result is None,
-                    on_retry=on_retry_download,
-                ),
-                timeout=900.0,
+            return await _download_youtube_media(
+                video, yt, name, size_hint,
+                message.from_user.id, message.chat.id,
+                on_progress, on_retry_download,
             )
 
         async def _send_cached(file_id: str):

@@ -77,6 +77,8 @@ def _guard_message(
 
 @pytest.mark.asyncio
 async def test_group_link_requires_dm_then_replays_after_private_start(monkeypatch):
+    from middlewares import private_chat_guard
+    private_chat_guard._can_dm_cache.clear()
     monkeypatch.setattr(pending_requests, "_pending", {})
     monkeypatch.setattr(pending_requests, "_loaded", True)
     monkeypatch.setattr(pending_requests, "_persist_pending", lambda: None)
@@ -149,7 +151,8 @@ async def test_group_link_requires_dm_then_replays_after_private_start(monkeypat
 
 @pytest.mark.asyncio
 async def test_realistic_chain_allows_same_user_in_multiple_group_chats(monkeypatch):
-    from middlewares import antiflood
+    from middlewares import antiflood, private_chat_guard
+    private_chat_guard._can_dm_cache.clear()
 
     monkeypatch.setattr(antiflood.time, "monotonic", _monotonic_sequence(0.0, 0.2, 0.4, 0.4))
 
@@ -190,5 +193,5 @@ async def test_realistic_chain_allows_same_user_in_multiple_group_chats(monkeypa
     assert await _run_chain(repeated_first_group_message) is None
 
     assert final_handler.await_count == 2
-    assert shared_bot.send_chat_action.await_count == 2
+    assert shared_bot.send_chat_action.await_count == 1
     repeated_first_group_message.answer.assert_not_awaited()

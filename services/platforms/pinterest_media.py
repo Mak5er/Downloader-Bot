@@ -148,7 +148,7 @@ def parse_pinterest_post(data: dict) -> Optional[PinterestPost]:
         return None
 
     return PinterestPost(
-        id=str(int(datetime.datetime.now().timestamp())),
+        id=str(hash(str(sorted(data.items())))),
         description=_derive_description(data),
         media_list=media_list,
     )
@@ -189,9 +189,8 @@ class PinterestMediaService:
             self._cobalt_api_key,
             payload,
             source="pinterest",
-            timeout=20,
+            timeout=15,
             attempts=3,
-            retry_delay=0.0,
         )
         if not data:
             return None
@@ -226,7 +225,6 @@ class PinterestMediaService:
             return await self._retry_async_operation(
                 _download_once,
                 attempts=3,
-                delay_seconds=2.0,
                 retry_on_exception=lambda exc: not isinstance(exc, (DownloadRateLimitError, DownloadQueueBusyError)),
                 on_retry=on_retry,
             )

@@ -22,6 +22,33 @@ env:
   PYTHONPATH: ${{ github.workspace }}
 
 jobs:
+  lint:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.14"
+          cache: "pip"
+          cache-dependency-path: |
+            requirements.txt
+            requirements-dev.txt
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-dev.txt
+          pip install ruff mypy
+
+      - name: Run ruff
+        run: ruff check --select=E,F,W --ignore=E501 .
+
+      - name: Run mypy
+        run: mypy --check-untyped-defs --ignore-missing-imports .
+
   pytest:
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -48,7 +75,7 @@ jobs:
 
       - name: Run tests with coverage
         run: |
-          pytest --cov=. --cov-report=term-missing:skip-covered --cov-report=xml --junitxml=pytest.xml
+          pytest --cov=. --cov-fail-under=80 --cov-report=term-missing:skip-covered --cov-report=xml --junitxml=pytest.xml
 
       - name: Upload test artifacts
         if: always()
@@ -72,7 +99,7 @@ jobs:
       - name: Build Docker image
         run: docker build -t downloader-bot:test .
 
-      - name: Smoke-test container imports
+      - name: Smoke-test container startup
         run: |
           docker run --rm \
             -e BOT_TOKEN \
@@ -80,9 +107,30 @@ jobs:
             -e ADMIN_ID \
             -e CUSTOM_API_URL \
             -e CHANNEL_ID \
+            -e MIGRATE_ON_STARTUP=1 \
             --entrypoint python \
             downloader-bot:test \
-            -c "import handlers; from services.logger import summarize_text_for_log; print(summarize_text_for_log('https://example.com/demo'))"
+            -c "
+import asyncio
+import os
+from services.storage.db import DataBase
+os.environ.update({
+    'BOT_TOKEN': '$BOT_TOKEN',
+    'DATABASE_URL': '$DATABASE_URL',
+    'ADMIN_ID': '$ADMIN_ID',
+    'CUSTOM_API_URL': '$CUSTOM_API_URL',
+})
+async def main():
+    db = DataBase()
+    await db.init_db()
+    print('Migrations applied successfully.')
+    tables = await db._get_existing_tables()
+    assert 'users' in tables, f'Missing users table: {tables}'
+    assert 'downloaded_files' in tables, f'Missing downloaded_files table: {tables}'
+    assert 'alembic_version' in tables, f'Missing alembic_version table: {tables}'
+    print('All tables verified.')
+asyncio.run(main())
+"
 
   postgres-integration:
     runs-on: ubuntu-latest

@@ -8,10 +8,24 @@ services:
     volumes:
       - downloader_downloads:/app/downloads
       - downloader_log:/app/logs
-      - ./cookies:/app/cookies:ro
+      - ./cookies:/app/cookies
     env_file: .env
     container_name: downloader-bot
-    restart: always
+    restart: on-failure:5
+    healthcheck:
+      test: ["CMD", "python", "-c", "import asyncio; asyncio.run(asyncio.wait_for(asyncio.sleep(0.1), timeout=5))"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 1G
+        reservations:
+          cpus: '0.5'
+          memory: 256M
 
 volumes:
   downloader_downloads:
