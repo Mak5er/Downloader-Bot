@@ -1,4 +1,3 @@
-import asyncio
 import time
 
 from aiogram import BaseMiddleware
@@ -36,26 +35,31 @@ class UserBannedMiddleware(BaseMiddleware):
             if message.chat.type == 'private':
                 await message.answer(('You are banned please contact to @mak5er for more information!'),
                                      parse_mode='HTML')
-            raise asyncio.CancelledError
+            data["_skip_handler"] = True
+            return
         if user_status == "restricted":
             if message.chat.type == "private":
                 await message.answer(_ACCESS_TEMPORARILY_UNAVAILABLE)
-            raise asyncio.CancelledError
+            data["_skip_handler"] = True
+            return
 
     async def on_pre_process_callback_query(self, callback_query: CallbackQuery, data: dict):
         user_status = await self._get_status(callback_query.from_user.id)
         if user_status == 'ban':
             await callback_query.answer(('You are banned please contact to @mak5er for more information!'),
                                         show_alert=True)
-            raise asyncio.CancelledError
+            data["_skip_handler"] = True
+            return
         if user_status == "restricted":
             await callback_query.answer(_ACCESS_TEMPORARILY_UNAVAILABLE, show_alert=True)
-            raise asyncio.CancelledError
+            data["_skip_handler"] = True
+            return
 
     async def on_pre_process_inline_query(self, inline_query: InlineQuery, data: dict):
         user_status = await self._get_status(inline_query.from_user.id)
         if user_status in {"ban", "restricted"}:
-            raise asyncio.CancelledError
+            data["_skip_handler"] = True
+            return
 
     async def __call__(self, handler, event, data):
         if isinstance(event, Message):
@@ -64,4 +68,6 @@ class UserBannedMiddleware(BaseMiddleware):
             await self.on_pre_process_callback_query(event, data)
         elif isinstance(event, InlineQuery):
             await self.on_pre_process_inline_query(event, data)
+        if data.get("_skip_handler"):
+            return None
         return await handler(event, data)
