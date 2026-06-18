@@ -161,16 +161,9 @@ class UserRepositoryMixin:
         try:
             async with self.SessionLocal() as session:
                 result = await session.execute(
-                    select(Settings).where(Settings.user_id == user_id_int).order_by(Settings.id.desc())
+                    select(Settings).where(Settings.user_id == user_id_int).limit(1)
                 )
-                settings_rows = result.scalars().all()
-                if len(settings_rows) > 1:
-                    logging.warning(
-                        "Detected duplicated settings rows; using latest entry: user_id=%s duplicates=%s",
-                        user_id_int,
-                        len(settings_rows),
-                    )
-                settings = settings_rows[0] if settings_rows else None
+                settings = result.scalar_one_or_none()
                 if settings:
                     payload = {
                         "captions": settings.captions or SETTING_DISABLED,
