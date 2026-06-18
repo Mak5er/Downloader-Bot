@@ -12,6 +12,7 @@ from aiogram.client.default import DefaultBotProperties
 from aiogram.client.session.aiohttp import AiohttpSession
 from aiogram.client.telegram import TelegramAPIServer
 from aiogram.enums.parse_mode import ParseMode
+from sqlalchemy import insert as sql_insert
 
 from app_context import set_app_context
 from config import (
@@ -150,15 +151,13 @@ async def _persist_analytics_batch(batch: list[_AnalyticsPayload]) -> None:
     if not batch:
         return
 
+    rows = [
+        {"user_id": p.user_id, "chat_type": p.chat_type, "action_name": p.action_name}
+        for p in batch
+    ]
+
     async with db.SessionLocal() as db_session:
-        for payload in batch:
-            db_session.add(
-                AnalyticsEvent(
-                    user_id=payload.user_id,
-                    chat_type=payload.chat_type,
-                    action_name=payload.action_name,
-                )
-            )
+        await db_session.execute(sql_insert(AnalyticsEvent), rows)
         await db_session.commit()
 
 
