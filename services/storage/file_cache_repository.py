@@ -95,11 +95,25 @@ class FileCacheRepositoryMixin:
         from datetime import datetime, timedelta, timezone
 
         cutoff = datetime.now(timezone.utc) - timedelta(days=max(int(max_age_days), 1))
-        async with self.SessionLocal() as session:
-            async with session.begin():
-                result = await session.execute(
-                    delete(DownloadedFile).where(DownloadedFile.date_added < cutoff)
-                )
-                deleted = result.rowcount
-                self._file_cache.clear()
-                return deleted
+        total_deleted = 0
+        batch_size = 1000
+
+        while True:
+            async with self.SessionLocal() as session:
+                async with session.begin():
+                    result = await session.execute(
+                        delete(DownloadedFile)
+                        .where(DownloadedFile.date_added < cutoff)
+                        .limit(batch_size)
+                    )
+                    deleted = result.rowcount
+                    total_deleted += deleted
+
+            if deleted < batch_size:
+                break
+
+        if total_deleted > 0:
+            self._file_cache.clear()
+            logging.info("cleanup_expired_files: deleted %d entries older than %d days", total_deleted, max_age_days)
+
+        return total_deleted
