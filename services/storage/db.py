@@ -1,5 +1,16 @@
+import asyncio
+from typing import Any
 from sqlalchemy import event
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+
+
+class SafeAsyncSession(AsyncSession):
+    async def rollback(self) -> None:
+        await asyncio.shield(super().rollback())
+
+    async def close(self) -> None:
+        await asyncio.shield(super().close())
+
 
 from config import DATABASE_URL, DB_MAX_OVERFLOW, DB_POOL_SIZE, DB_POOL_TIMEOUT
 from services.logger import logger as logging
@@ -116,7 +127,7 @@ class DataBase(
         self.SessionLocal = async_sessionmaker(
             bind=self.engine,
             expire_on_commit=False,
-            class_=AsyncSession,
+            class_=SafeAsyncSession,
         )
         self._settings_cache: dict[int, tuple[float, dict[str, str]]] = {}
         self._file_cache: dict[str, tuple[float, str | None]] = {}

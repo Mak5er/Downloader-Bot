@@ -357,6 +357,8 @@ async def main():
                 await close_http_session()
             with suppress(Exception):
                 await session.close()
+            with suppress(Exception):
+                await db.engine.dispose()
 
 
 if __name__ == "__main__":
