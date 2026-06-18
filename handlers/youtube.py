@@ -51,6 +51,7 @@ from handlers.utils import (
 from services.logger import logger as logging, summarize_url_for_log
 from app_context import bot, db, send_analytics
 from utils.download_manager import (
+    DownloadError,
     DownloadQueueBusyError,
     DownloadRateLimitError,
     DownloadTooLargeError,
@@ -185,15 +186,6 @@ async def _get_youtube_video_with_timeout(url: str):
     )
 
 
-@router.message(
-    F.text.regexp(YOUTUBE_VIDEO_URL_REGEX, mode="search")
-    | F.caption.regexp(YOUTUBE_VIDEO_URL_REGEX, mode="search")
-)
-@router.business_message(
-    F.text.regexp(YOUTUBE_VIDEO_URL_REGEX, mode="search")
-    | F.caption.regexp(YOUTUBE_VIDEO_URL_REGEX, mode="search")
-)
-@with_message_logging("youtube", "video_message")
 async def _download_youtube_media(
     video: dict | None,
     yt: dict,
@@ -270,6 +262,14 @@ async def _download_youtube_media(
     )
 
 
+@router.message(
+    F.text.regexp(YOUTUBE_VIDEO_URL_REGEX, mode="search")
+    | F.caption.regexp(YOUTUBE_VIDEO_URL_REGEX, mode="search")
+)
+@router.business_message(
+    F.text.regexp(YOUTUBE_VIDEO_URL_REGEX, mode="search")
+    | F.caption.regexp(YOUTUBE_VIDEO_URL_REGEX, mode="search")
+)
 async def download_video(message: types.Message, direct_url: Optional[str] = None):
     url = direct_url or _extract_youtube_url(get_message_text(message), YOUTUBE_VIDEO_URL_REGEX)
     if not url:

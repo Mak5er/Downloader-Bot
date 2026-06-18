@@ -65,8 +65,8 @@ def with_message_logging(service: str, flow: str) -> Callable[[Callable[P, Await
                     result = await func(*args, **kwargs)
                     logging.event("flow_completed", entrypoint=func.__name__)
                     return result
-                except Exception:
-                    logging.event("flow_failed", level=40, entrypoint=func.__name__)
+                except Exception as exc:
+                    logging.event("flow_failed", level=40, entrypoint=func.__name__, error=str(exc))
                     raise
                 finally:
                     log_duration("flow_total", started_at, entrypoint=func.__name__)
@@ -99,8 +99,8 @@ def with_inline_query_logging(service: str, flow: str) -> Callable[[Callable[P, 
                     result = await func(*args, **kwargs)
                     logging.event("flow_completed", entrypoint=func.__name__)
                     return result
-                except Exception:
-                    logging.event("flow_failed", level=40, entrypoint=func.__name__)
+                except Exception as exc:
+                    logging.event("flow_failed", level=40, entrypoint=func.__name__, error=str(exc))
                     raise
                 finally:
                     log_duration("flow_total", started_at, entrypoint=func.__name__)
@@ -136,8 +136,8 @@ def with_callback_logging(service: str, flow: str) -> Callable[[Callable[P, Awai
                     result = await func(*args, **kwargs)
                     logging.event("flow_completed", entrypoint=func.__name__)
                     return result
-                except Exception:
-                    logging.event("flow_failed", level=40, entrypoint=func.__name__)
+                except Exception as exc:
+                    logging.event("flow_failed", level=40, entrypoint=func.__name__, error=str(exc))
                     raise
                 finally:
                     log_duration("flow_total", started_at, entrypoint=func.__name__)
@@ -170,8 +170,8 @@ def with_chosen_inline_logging(service: str, flow: str) -> Callable[[Callable[P,
                     outcome = await func(*args, **kwargs)
                     logging.event("flow_completed", entrypoint=func.__name__)
                     return outcome
-                except Exception:
-                    logging.event("flow_failed", level=40, entrypoint=func.__name__)
+                except Exception as exc:
+                    logging.event("flow_failed", level=40, entrypoint=func.__name__, error=str(exc))
                     raise
                 finally:
                     log_duration("flow_total", started_at, entrypoint=func.__name__)
@@ -201,8 +201,8 @@ def with_inline_send_logging(service: str, flow: str) -> Callable[[Callable[P, A
                     outcome = await func(*args, **kwargs)
                     logging.event("flow_completed", entrypoint=func.__name__)
                     return outcome
-                except Exception:
-                    logging.event("flow_failed", level=40, entrypoint=func.__name__)
+                except Exception as exc:
+                    logging.event("flow_failed", level=40, entrypoint=func.__name__, error=str(exc))
                     raise
                 finally:
                     log_duration("flow_total", started_at, entrypoint=func.__name__)

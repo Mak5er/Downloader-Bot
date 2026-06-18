@@ -183,7 +183,7 @@ def make_status_text_progress_updater(
     label: str,
     update_text: Callable[[str], Awaitable[None]],
     *,
-    min_interval_seconds: float = 2.5,
+    min_interval_seconds: float = 0.8,
 ) -> Callable[[DownloadProgress], Awaitable[None]]:
     state = {"last": 0.0}
 
@@ -339,10 +339,10 @@ def build_queue_status(label: str, ticket: QueueTicket) -> str:
     )
 
 
-def _build_progress_bar(percent: float, width: int = 12) -> str:
+def _build_progress_bar(percent: float, width: int = 10) -> str:
     filled = round(percent / 100 * width)
     filled = max(0, min(width, filled))
-    return "▓" * filled + "░" * (width - filled)
+    return "🟩" * filled + "⬜" * (width - filled)
 
 
 def build_progress_status(label: str, progress: DownloadProgress) -> str:
