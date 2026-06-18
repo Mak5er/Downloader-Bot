@@ -64,7 +64,7 @@ def test_database_configures_engine_pool(monkeypatch):
     assert captured["kwargs"]["pool_size"] == db_module.DB_POOL_SIZE
     assert captured["kwargs"]["max_overflow"] == db_module.DB_MAX_OVERFLOW
     assert captured["kwargs"]["pool_timeout"] == db_module.DB_POOL_TIMEOUT
-    assert captured["kwargs"]["pool_use_lifo"] is True
+    assert captured["kwargs"]["pool_use_lifo"] is False
 
 
 def test_database_url_helpers_normalize_postgres_urls():

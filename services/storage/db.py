@@ -117,11 +117,11 @@ class DataBase(
             echo=False,
             future=True,
             pool_pre_ping=True,
-            pool_recycle=1800,
+            pool_recycle=300,
             pool_size=max(1, int(DB_POOL_SIZE)),
             max_overflow=max(0, int(DB_MAX_OVERFLOW)),
             pool_timeout=max(1.0, float(DB_POOL_TIMEOUT)),
-            pool_use_lifo=True,
+            pool_use_lifo=False,
         )
         self._dialect_name = self.engine.dialect.name
         self.SessionLocal = async_sessionmaker(
