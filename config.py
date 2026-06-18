@@ -1,4 +1,5 @@
 import ipaddress
+import logging as _std_logging
 import os
 from urllib.parse import urlparse
 
@@ -32,6 +33,14 @@ def _validate_custom_api_url(value: str, name: str) -> str:
     host = (parsed.hostname or "").strip("[]")
     if not host:
         raise RuntimeError(f"No host in {name}: {value}")
+
+    try:
+        addr = ipaddress.ip_address(host)
+        for net in _PRIVATE_IP_RANGES:
+            if addr in net:
+                raise RuntimeError(f"Host {host} in {name} resolves to a private/internal IP range.")
+    except ValueError:
+        pass
 
     return value
 
@@ -112,8 +121,13 @@ API_SECRET = _read_env("API_SECRET")
 CHANNEL_ID = _read_env("CHANNEL_ID")
 OUTPUT_DIR = "downloads"
 COBALT_API_URL = _read_env("COBALT_API_URL")
-if COBALT_API_URL and not os.getenv("COBALT_API_URL_DANGER_ACCEPT_INSECURE"):
-    COBALT_API_URL = _validate_cobalt_api_url(COBALT_API_URL, "COBALT_API_URL")
+if COBALT_API_URL:
+    if os.getenv("COBALT_API_URL_DANGER_ACCEPT_INSECURE"):
+        _std_logging.warning(
+            "COBALT_API_URL_DANGER_ACCEPT_INSECURE is set — HTTPS and private IP validation is disabled for COBALT_API_URL"
+        )
+    else:
+        COBALT_API_URL = _validate_cobalt_api_url(COBALT_API_URL, "COBALT_API_URL")
 COBALT_API_KEY = _read_env("COBALT_API_KEY")
 BOT_POLLING_TASKS_CONCURRENCY_LIMIT = _read_int_env("BOT_POLLING_TASKS_CONCURRENCY_LIMIT") or 256
 BOT_SESSION_CONNECTION_LIMIT = _read_int_env("BOT_SESSION_CONNECTION_LIMIT") or 400
