@@ -183,7 +183,7 @@ def make_status_text_progress_updater(
     label: str,
     update_text: Callable[[str], Awaitable[None]],
     *,
-    min_interval_seconds: float = 1.0,
+    min_interval_seconds: float = 2.5,
 ) -> Callable[[DownloadProgress], Awaitable[None]]:
     state = {"last": 0.0}
 
@@ -320,6 +320,17 @@ def _format_eta(seconds: Optional[float]) -> str:
     return f"ETA: {minutes:02d}:{sec:02d}"
 
 
+def _format_eta_short(seconds: Optional[float]) -> str:
+    if seconds is None:
+        return "ETA --:--"
+    total = max(0, int(seconds))
+    minutes, sec = divmod(total, 60)
+    hours, minutes = divmod(minutes, 60)
+    if hours > 0:
+        return f"ETA {hours}:{minutes:02d}:{sec:02d}"
+    return f"ETA {minutes}:{sec:02d}"
+
+
 def build_queue_status(label: str, ticket: QueueTicket) -> str:
     return (
         f"Queueing {label}...\n"
@@ -328,22 +339,27 @@ def build_queue_status(label: str, ticket: QueueTicket) -> str:
     )
 
 
+def _build_progress_bar(percent: float, width: int = 12) -> str:
+    filled = round(percent / 100 * width)
+    filled = max(0, min(width, filled))
+    return "▓" * filled + "░" * (width - filled)
+
+
 def build_progress_status(label: str, progress: DownloadProgress) -> str:
     speed = _format_bytes(int(progress.speed_bps)) + "/s"
     downloaded = _format_bytes(progress.downloaded_bytes)
     if progress.total_bytes > 0:
         total = _format_bytes(progress.total_bytes)
         percent = (progress.downloaded_bytes / progress.total_bytes) * 100.0
-        percent_text = f"{percent:5.1f}%"
+        bar = _build_progress_bar(percent)
         return (
-            f"Downloading {label}... {percent_text}\n"
-            f"{downloaded} / {total}\n"
-            f"{speed} | {_format_eta(progress.eta_seconds)}"
+            f"⬇️ {label}\n"
+            f"{bar} {percent:.0f}%\n"
+            f"{downloaded} / {total} • {speed} • {_format_eta_short(progress.eta_seconds)}"
         )
     return (
-        f"Downloading {label}...\n"
-        f"{downloaded}\n"
-        f"{speed} | {_format_eta(progress.eta_seconds)}"
+        f"⬇️ {label}\n"
+        f"{downloaded} • {speed} • {_format_eta_short(progress.eta_seconds)}"
     )
 
 
