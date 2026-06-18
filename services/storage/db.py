@@ -86,7 +86,7 @@ def _register_pool_listeners(engine) -> None:
         )
 
     @event.listens_for(sync_engine, "close")
-    def _on_engine_close(engine):
+    def _on_engine_close(*args):
         logging.event("db_engine_close")
 
     logging.event(
