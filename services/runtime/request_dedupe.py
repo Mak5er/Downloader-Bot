@@ -153,7 +153,7 @@ def _normalize_youtube_url(url: str) -> str:
     if host.startswith("www."):
         host = host[4:]
 
-    if host.endswith("youtube.com"):
+    if host == "youtube.com" or host.endswith(".youtube.com"):
         if path == "/watch":
             video_id = (query.get("v") or [""])[0].strip()
             if video_id:
