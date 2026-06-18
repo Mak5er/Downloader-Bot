@@ -104,6 +104,28 @@ class UserRepositoryMixin:
             )
             return result.scalar() or 0
 
+    async def get_user_counts(self) -> dict[str, int]:
+        async with self.SessionLocal() as session:
+            result = await session.execute(
+                select(
+                    func.count(User.user_id).label("user_count"),
+                    func.count(User.user_id).filter(User.status == "active").label("active_user_count"),
+                    func.count(User.user_id).filter(User.status != "active").label("inactive_user_count"),
+                    func.count(User.user_id).filter(User.chat_type == "private").label("private_chat_count"),
+                    func.count(User.user_id).filter(
+                        User.chat_type != "private", User.chat_type.isnot(None)
+                    ).label("group_chat_count"),
+                )
+            )
+            row = result.one()
+            return {
+                "user_count": row.user_count,
+                "active_user_count": row.active_user_count,
+                "inactive_user_count": row.inactive_user_count,
+                "private_chat_count": row.private_chat_count,
+                "group_chat_count": row.group_chat_count,
+            }
+
     async def all_users(self):
         async with self.SessionLocal() as session:
             result = await session.execute(select(User.user_id))

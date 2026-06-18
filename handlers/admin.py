@@ -162,13 +162,7 @@ def _build_log_size_lines() -> list[str]:
 
 
 async def _get_admin_counts() -> dict[str, int]:
-    return {
-        "user_count": await db.user_count(),
-        "private_chat_count": await db.private_chat_count(),
-        "group_chat_count": await db.group_chat_count(),
-        "active_user_count": await db.active_user_count(),
-        "inactive_user_count": await db.inactive_user_count(),
-    }
+    return await db.get_user_counts()
 
 
 def _is_path_within_root(path: Path, root: Path) -> bool:
