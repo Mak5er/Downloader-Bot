@@ -5,6 +5,7 @@ import pytest
 
 import handlers
 from handlers import user
+from services.stats import chart
 
 
 class DummyMessage:
@@ -191,7 +192,7 @@ async def test_stats_command_sends_photo(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_switch_stats_edits_existing_message(monkeypatch):
-    monkeypatch.setattr(user, "_render_stats", AsyncMock(return_value=(b"chart", "<b>Caption</b>")))
+    monkeypatch.setattr(chart, "_render_stats", AsyncMock(return_value=(b"chart", "<b>Caption</b>")))
     monkeypatch.setattr(user.kb, "stats_keyboard", lambda period, mode: ("keyboard", period, mode))
 
     call = DummyCallback("stats:Month:split")
@@ -212,9 +213,9 @@ async def test_switch_stats_falls_back_when_edit_media_fails(monkeypatch):
     class FakeTelegramError(Exception):
         pass
 
-    monkeypatch.setattr(user, "TelegramBadRequest", FakeTelegramError)
-    monkeypatch.setattr(user, "TelegramAPIError", FakeTelegramError)
-    monkeypatch.setattr(user, "_render_stats", AsyncMock(return_value=(b"chart", "<b>Caption</b>")))
+    monkeypatch.setattr(chart, "TelegramBadRequest", FakeTelegramError)
+    monkeypatch.setattr(chart, "TelegramAPIError", FakeTelegramError)
+    monkeypatch.setattr(chart, "_render_stats", AsyncMock(return_value=(b"chart", "<b>Caption</b>")))
     monkeypatch.setattr(user.kb, "stats_keyboard", lambda period, mode: ("keyboard", period, mode))
 
     call = DummyCallback("stats:Year:total")
@@ -229,7 +230,7 @@ async def test_switch_stats_falls_back_when_edit_media_fails(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_switch_period_uses_total_mode(monkeypatch):
-    monkeypatch.setattr(user, "_render_stats", AsyncMock(return_value=(b"chart", "<b>Caption</b>")))
+    monkeypatch.setattr(chart, "_render_stats", AsyncMock(return_value=(b"chart", "<b>Caption</b>")))
     monkeypatch.setattr(user.kb, "stats_keyboard", lambda period, mode: ("keyboard", period, mode))
 
     call = DummyCallback("date_Month")

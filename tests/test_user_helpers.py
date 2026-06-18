@@ -4,7 +4,7 @@ from unittest.mock import Mock
 
 import pytest
 
-from handlers import user
+from services.stats import chart
 from services.storage.db import StatsSnapshot
 
 
@@ -16,13 +16,13 @@ class FixedDateTime(datetime.datetime):
 
 @pytest.fixture(autouse=True)
 def clear_stats_caches():
-    user._stats_snapshot_cache.clear()
-    user._stats_chart_cache.clear()
-    user._stats_chart_warmup_tasks.clear()
+    chart._stats_snapshot_cache.clear()
+    chart._stats_chart_cache.clear()
+    chart._stats_chart_warmup_tasks.clear()
     yield
-    user._stats_snapshot_cache.clear()
-    user._stats_chart_cache.clear()
-    user._stats_chart_warmup_tasks.clear()
+    chart._stats_snapshot_cache.clear()
+    chart._stats_chart_cache.clear()
+    chart._stats_chart_warmup_tasks.clear()
 
 
 @pytest.mark.parametrize(
@@ -39,14 +39,14 @@ def clear_stats_caches():
     ],
 )
 def test_prepare_series_sorts_dates(data, expected):
-    assert user._prepare_series(data) == expected
+    assert chart._prepare_series(data) == expected
 
 
 def test_decimate_series_limits_points():
     dates = [datetime.datetime(2025, 1, day + 1) for day in range(10)]
     counts = list(range(10))
 
-    sampled_dates, sampled_counts = user._decimate_series(dates, counts, max_points=4)
+    sampled_dates, sampled_counts = chart._decimate_series(dates, counts, max_points=4)
 
     assert len(sampled_dates) < len(dates)
     assert sampled_dates[-1] == dates[-1]
@@ -54,8 +54,8 @@ def test_decimate_series_limits_points():
 
 
 def test_prepare_series_for_year_aggregates_fixed_month_axis(monkeypatch):
-    monkeypatch.setattr(user.datetime, "datetime", FixedDateTime)
-    dates, counts = user._prepare_series_for_period(
+    monkeypatch.setattr(chart.datetime, "datetime", FixedDateTime)
+    dates, counts = chart._prepare_series_for_period(
         {
             "2024-02-01": 2,
             "2024-02-12": 3,
@@ -71,7 +71,7 @@ def test_prepare_series_for_year_aggregates_fixed_month_axis(monkeypatch):
 
 
 def test_build_stats_caption_empty():
-    caption = user.build_stats_caption("Week", StatsSnapshot())
+    caption = chart.build_stats_caption("Week", StatsSnapshot())
     assert "Statistics for Week" in caption
     assert "No downloads recorded" in caption
 
@@ -89,7 +89,7 @@ def test_build_stats_caption_split_includes_top_platforms():
         total_downloads=10,
     )
 
-    caption = user.build_stats_caption("Month", snapshot, "split")
+    caption = chart.build_stats_caption("Month", snapshot, "split")
 
     assert "Total downloads: <b>10</b>" in caption
     assert "<b>Top platforms</b>" in caption
@@ -100,10 +100,10 @@ def test_build_stats_caption_split_includes_top_platforms():
 async def test_fetch_stats_snapshot_uses_cache(monkeypatch):
     snapshot = StatsSnapshot(total_downloads=3)
     fake_db = type("FakeDb", (), {"get_download_stats": AsyncMock(return_value=snapshot)})()
-    monkeypatch.setattr(user, "db", fake_db)
+    monkeypatch.setattr(chart, "db", fake_db)
 
-    first = await user.fetch_stats_snapshot("Week")
-    second = await user.fetch_stats_snapshot("Week")
+    first = await chart.fetch_stats_snapshot("Week")
+    second = await chart.fetch_stats_snapshot("Week")
 
     assert first is snapshot
     assert second is snapshot
@@ -117,14 +117,14 @@ async def test_fetch_stats_snapshot_refreshes_and_clears_chart_cache(monkeypatch
         (),
         {"get_download_stats": AsyncMock(return_value=StatsSnapshot(total_downloads=1))},
     )()
-    monkeypatch.setattr(user, "db", fake_db)
-    monkeypatch.setattr(user, "_schedule_stats_chart_warmup", lambda period, snapshot: None)
-    user._stats_snapshot_cache["Week"] = (0.0, StatsSnapshot(total_downloads=9))
-    user._stats_chart_cache[("Week", "total")] = (user.time.monotonic(), b"stale")
+    monkeypatch.setattr(chart, "db", fake_db)
+    monkeypatch.setattr(chart, "_schedule_stats_chart_warmup", lambda period, snapshot: None)
+    chart._stats_snapshot_cache["Week"] = (0.0, StatsSnapshot(total_downloads=9))
+    chart._stats_chart_cache[("Week", "total")] = (chart.time.monotonic(), b"stale")
 
-    await user.fetch_stats_snapshot("Week")
+    await chart.fetch_stats_snapshot("Week")
 
-    assert ("Week", "total") not in user._stats_chart_cache
+    assert ("Week", "total") not in chart._stats_chart_cache
     fake_db.get_download_stats.assert_awaited_once_with("Week")
 
 
@@ -133,39 +133,39 @@ async def test_fetch_stats_snapshot_starts_chart_warmup(monkeypatch):
     snapshot = StatsSnapshot(total_downloads=4)
     fake_db = type("FakeDb", (), {"get_download_stats": AsyncMock(return_value=snapshot)})()
     warmup_calls = []
-    monkeypatch.setattr(user, "db", fake_db)
-    monkeypatch.setattr(user, "_schedule_stats_chart_warmup", lambda period, current_snapshot: warmup_calls.append((period, current_snapshot)))
+    monkeypatch.setattr(chart, "db", fake_db)
+    monkeypatch.setattr(chart, "_schedule_stats_chart_warmup", lambda period, current_snapshot: warmup_calls.append((period, current_snapshot)))
 
-    await user.fetch_stats_snapshot("Month")
+    await chart.fetch_stats_snapshot("Month")
 
     assert warmup_calls == [("Month", snapshot)]
 
 
 def test_render_stats_chart_returns_png_bytes_without_filesystem_writes(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr(user.datetime, "datetime", FixedDateTime)
-    user.plt.switch_backend("Agg")
+    monkeypatch.setattr(chart.datetime, "datetime", FixedDateTime)
+    chart.plt.switch_backend("Agg")
     snapshot = StatsSnapshot(
         totals_by_date={"2025-01-01": 3, "2025-01-02": 5},
         total_downloads=8,
     )
 
-    chart_bytes = user.render_stats_chart(snapshot, "Week", "total")
+    chart_bytes = chart.render_stats_chart(snapshot, "Week", "total")
 
     assert chart_bytes.startswith(b"\x89PNG")
     assert list(tmp_path.iterdir()) == []
 
 
 def test_render_stats_chart_uses_cache(monkeypatch):
-    monkeypatch.setattr(user.datetime, "datetime", FixedDateTime)
-    user.plt.switch_backend("Agg")
+    monkeypatch.setattr(chart.datetime, "datetime", FixedDateTime)
+    chart.plt.switch_backend("Agg")
     snapshot = StatsSnapshot(
         totals_by_date={"2025-01-01": 3, "2025-01-02": 5},
         total_downloads=8,
     )
 
-    first = user.render_stats_chart(snapshot, "Week", "total")
-    second = user.render_stats_chart(snapshot, "Week", "total")
+    first = chart.render_stats_chart(snapshot, "Week", "total")
+    second = chart.render_stats_chart(snapshot, "Week", "total")
 
     assert first == second
 
@@ -177,12 +177,12 @@ async def test_render_stats_offloads_chart_generation_to_thread(monkeypatch):
     fake_to_thread = AsyncMock(return_value=b"chart")
     fake_render = Mock(return_value=b"chart")
 
-    monkeypatch.setattr(user, "fetch_stats_snapshot", fake_fetch)
-    monkeypatch.setattr(user.asyncio, "to_thread", fake_to_thread)
-    monkeypatch.setattr(user, "render_stats_chart", fake_render)
-    monkeypatch.setattr(user, "build_stats_caption", lambda period, current_snapshot, mode: f"{period}:{mode}:{current_snapshot.total_downloads}")
+    monkeypatch.setattr(chart, "fetch_stats_snapshot", fake_fetch)
+    monkeypatch.setattr(chart.asyncio, "to_thread", fake_to_thread)
+    monkeypatch.setattr(chart, "render_stats_chart", fake_render)
+    monkeypatch.setattr(chart, "build_stats_caption", lambda period, current_snapshot, mode: f"{period}:{mode}:{current_snapshot.total_downloads}")
 
-    chart_bytes, caption = await user._render_stats("Week", "split")
+    chart_bytes, caption = await chart._render_stats("Week", "split")
 
     assert chart_bytes == b"chart"
     assert caption == "Week:split:8"

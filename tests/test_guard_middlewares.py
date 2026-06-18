@@ -207,16 +207,16 @@ async def test_ban_middleware_blocks_banned_events(monkeypatch):
     )
     inline_query = SimpleNamespace(from_user=SimpleNamespace(id=1))
 
-    with pytest.raises(asyncio.CancelledError):
-        await middleware.on_pre_process_message(message, {})
+    result = await middleware.on_pre_process_message(message, {})
+    assert result is None
     message.answer.assert_awaited_once()
 
-    with pytest.raises(asyncio.CancelledError):
-        await middleware.on_pre_process_callback_query(callback, {})
+    result = await middleware.on_pre_process_callback_query(callback, {})
+    assert result is None
     callback.answer.assert_awaited_once()
 
-    with pytest.raises(asyncio.CancelledError):
-        await middleware.on_pre_process_inline_query(inline_query, {})
+    result = await middleware.on_pre_process_inline_query(inline_query, {})
+    assert result is None
 
 
 @pytest.mark.asyncio

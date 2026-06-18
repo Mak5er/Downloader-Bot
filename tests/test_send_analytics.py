@@ -10,7 +10,7 @@ from services.runtime import analytics_status
 
 class DummySession:
     def __init__(self):
-        self.added = []
+        self.executed_rows = []
         self.committed = False
 
     async def __aenter__(self):
@@ -19,8 +19,8 @@ class DummySession:
     async def __aexit__(self, exc_type, exc, tb):
         return False
 
-    def add(self, event):
-        self.added.append(event)
+    async def execute(self, stmt, rows):
+        self.executed_rows.extend(rows)
 
     async def commit(self):
         self.committed = True
@@ -74,12 +74,12 @@ async def test_send_analytics_records_event(monkeypatch):
     assert dummy_db.sessions, "No database session was created"
     session = dummy_db.sessions[0]
     assert session.committed is True
-    assert len(session.added) == 1
+    assert len(session.executed_rows) == 1
 
-    event = session.added[0]
-    assert event.user_id == 123
-    assert event.chat_type == ChatType.PRIVATE.value
-    assert event.action_name == "start"
+    row = session.executed_rows[0]
+    assert row["user_id"] == 123
+    assert row["chat_type"] == ChatType.PRIVATE.value
+    assert row["action_name"] == "start"
 
     assert len(dummy_client.calls) == 1
     call = dummy_client.calls[0]
