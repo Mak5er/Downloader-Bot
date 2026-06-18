@@ -34,14 +34,6 @@ def _validate_custom_api_url(value: str, name: str) -> str:
     if not host:
         raise RuntimeError(f"No host in {name}: {value}")
 
-    try:
-        addr = ipaddress.ip_address(host)
-        for net in _PRIVATE_IP_RANGES:
-            if addr in net:
-                raise RuntimeError(f"Host {host} in {name} resolves to a private/internal IP range.")
-    except ValueError:
-        pass
-
     return value
 
 
