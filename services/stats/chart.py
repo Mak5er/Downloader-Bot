@@ -4,7 +4,7 @@ import io
 import threading
 import time
 from collections import defaultdict
-from typing import List, Tuple
+from typing import List
 
 import matplotlib.pyplot as plt
 from aiogram import types
