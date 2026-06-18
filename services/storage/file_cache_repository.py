@@ -11,7 +11,7 @@ logging = logging.bind(service="db_files")
 
 
 class FileCacheRepositoryMixin:
-    async def add_file(self, url, file_id, file_type):
+    async def add_file(self, url: str, file_id: str, file_type: str | None) -> None:
         async with self.SessionLocal() as session:
             try:
                 if self._dialect_name == "postgresql":
@@ -68,7 +68,7 @@ class FileCacheRepositoryMixin:
                 logging.error("Error in add_file: %s", exc)
                 await session.rollback()
 
-    async def get_file_id(self, url):
+    async def get_file_id(self, url: str) -> str | None:
         now = time.monotonic()
         self._prune_local_caches(now)
         cached = self._file_cache.get(url)

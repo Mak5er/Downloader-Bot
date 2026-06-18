@@ -58,7 +58,7 @@ class AnalyticsRepositoryMixin:
                 total_downloads=total_downloads,
             )
 
-    async def get_downloaded_files_count(self, period: str):
+    async def get_downloaded_files_count(self, period: str) -> dict[str, int]:
         snapshot = await self.get_download_stats(period)
         return snapshot.totals_by_date
 

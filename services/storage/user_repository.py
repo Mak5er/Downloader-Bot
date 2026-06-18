@@ -1,4 +1,5 @@
 import time
+from typing import Any
 
 from sqlalchemy import delete, func, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
@@ -12,7 +13,7 @@ logging = logging.bind(service="db_users")
 
 
 class UserRepositoryMixin:
-    async def add_user(self, user_id, user_name, user_username, chat_type, language, status):
+    async def add_user(self, user_id: int, user_name: str | None, user_username: str | None, chat_type: str | None, language: str | None, status: str | None) -> None:
         async with self.SessionLocal() as session:
             async with session.begin():
                 user = User(
@@ -26,7 +27,7 @@ class UserRepositoryMixin:
                 session.add(user)
         self._status_cache[int(user_id)] = (time.monotonic(), status)
 
-    async def upsert_chat(self, user_id, user_name, user_username, chat_type, language=None, status="active"):
+    async def upsert_chat(self, user_id: int, user_name: str | None, user_username: str | None, chat_type: str | None, language: str | None = None, status: str = "active") -> None:
         values = {
             "user_name": user_name,
             "user_username": user_username,
@@ -68,7 +69,7 @@ class UserRepositoryMixin:
                         )
         self._status_cache[int(user_id)] = (time.monotonic(), status)
 
-    async def delete_user(self, user_id):
+    async def delete_user(self, user_id: int) -> None:
         async with self.SessionLocal() as session:
             async with session.begin():
                 await session.execute(delete(Settings).where(Settings.user_id == user_id))
@@ -77,27 +78,27 @@ class UserRepositoryMixin:
         self._status_cache.pop(user_id_int, None)
         self._settings_cache.pop(user_id_int, None)
 
-    async def user_count(self):
+    async def user_count(self) -> int:
         async with self.SessionLocal() as session:
             result = await session.execute(select(func.count(User.user_id)))
             return result.scalar() or 0
 
-    async def active_user_count(self):
+    async def active_user_count(self) -> int:
         async with self.SessionLocal() as session:
             result = await session.execute(select(func.count(User.user_id)).where(User.status == "active"))
             return result.scalar() or 0
 
-    async def inactive_user_count(self):
+    async def inactive_user_count(self) -> int:
         async with self.SessionLocal() as session:
             result = await session.execute(select(func.count(User.user_id)).where(User.status != "active"))
             return result.scalar() or 0
 
-    async def private_chat_count(self):
+    async def private_chat_count(self) -> int:
         async with self.SessionLocal() as session:
             result = await session.execute(select(func.count(User.user_id)).where(User.chat_type == "private"))
             return result.scalar() or 0
 
-    async def group_chat_count(self):
+    async def group_chat_count(self) -> int:
         async with self.SessionLocal() as session:
             result = await session.execute(
                 select(func.count(User.user_id)).where(User.chat_type != "private", User.chat_type.isnot(None))
@@ -126,17 +127,17 @@ class UserRepositoryMixin:
                 "group_chat_count": row.group_chat_count,
             }
 
-    async def all_users(self):
+    async def all_users(self) -> list[int]:
         async with self.SessionLocal() as session:
             result = await session.execute(select(User.user_id))
             return result.scalars().all()
 
-    async def user_exist(self, user_id):
+    async def user_exist(self, user_id: int) -> bool:
         async with self.SessionLocal() as session:
             result = await session.execute(select(User).where(User.user_id == user_id))
             return result.scalar() is not None
 
-    async def user_update_name(self, user_id, user_name, user_username):
+    async def user_update_name(self, user_id: int, user_name: str | None, user_username: str | None) -> None:
         async with self.SessionLocal() as session:
             async with session.begin():
                 await session.execute(
@@ -145,11 +146,11 @@ class UserRepositoryMixin:
                     .values(user_name=user_name, user_username=user_username)
                 )
 
-    async def get_user_setting(self, user_id, field):
+    async def get_user_setting(self, user_id: int, field: str) -> str | None:
         settings = await self.user_settings(user_id)
         return settings.get(field)
 
-    async def user_settings(self, user_id):
+    async def user_settings(self, user_id: int) -> dict[str, str]:
         user_id_int = int(user_id)
         now = time.monotonic()
         cached = self._settings_cache.get(user_id_int)
@@ -198,7 +199,7 @@ class UserRepositoryMixin:
         self._settings_cache[user_id_int] = (now, payload)
         return dict(payload)
 
-    async def set_user_setting(self, user_id, field, value):
+    async def set_user_setting(self, user_id: int, field: str, value: str) -> None:
         user_id_int = int(user_id)
         if field not in SETTING_FIELDS:
             raise ValueError(f"Unsupported user setting field: {field}")
@@ -247,21 +248,21 @@ class UserRepositoryMixin:
         updated[field] = normalized_value
         self._settings_cache[user_id_int] = (time.monotonic(), updated)
 
-    async def set_inactive(self, user_id):
+    async def set_inactive(self, user_id: int) -> None:
         async with self.SessionLocal() as session:
             async with session.begin():
                 user_id_int = int(user_id)
                 await session.execute(update(User).where(User.user_id == user_id_int).values(status="inactive"))
         self._status_cache[int(user_id)] = (time.monotonic(), "inactive")
 
-    async def set_active(self, user_id):
+    async def set_active(self, user_id: int) -> None:
         async with self.SessionLocal() as session:
             async with session.begin():
                 user_id_int = int(user_id)
                 await session.execute(update(User).where(User.user_id == user_id_int).values(status="active"))
         self._status_cache[int(user_id)] = (time.monotonic(), "active")
 
-    async def status(self, user_id):
+    async def status(self, user_id: int) -> str | None:
         user_id_int = int(user_id)
         now = time.monotonic()
         self._prune_local_caches(now)
@@ -275,28 +276,28 @@ class UserRepositoryMixin:
             self._status_cache[user_id_int] = (now, value)
             return value
 
-    async def get_user_info(self, user_id):
+    async def get_user_info(self, user_id: int) -> Any:
         async with self.SessionLocal() as session:
             result = await session.execute(
                 select(User.user_name, User.user_username, User.status).where(User.user_id == user_id)
             )
             return result.first()
 
-    async def get_user_info_username(self, user_username):
+    async def get_user_info_username(self, user_username: str) -> Any:
         async with self.SessionLocal() as session:
             result = await session.execute(
                 select(User.user_name, User.user_id, User.status).where(User.user_username == user_username)
             )
             return result.first()
 
-    async def get_all_users_info(self):
+    async def get_all_users_info(self) -> list[Any]:
         async with self.SessionLocal() as session:
             result = await session.execute(
                 select(User.user_id, User.chat_type, User.user_name, User.user_username, User.language, User.status)
             )
             return result.all()
 
-    async def ban_user(self, user_id):
+    async def ban_user(self, user_id: int) -> None:
         async with self.SessionLocal() as session:
             async with session.begin():
                 user_id_int = int(user_id)
