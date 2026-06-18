@@ -343,7 +343,7 @@ class YouTubeMediaService:
         out_template = f"{base_path}.%(ext)s"
         final_path = f"{base_path}.mp3"
         ydl_opts = build_ytdlp_youtube_options(
-            format="bestaudio/best",
+            format="bestaudio[ext=m4a]/bestaudio/best",
             outtmpl=out_template,
             postprocessors=[{
                 "key": "FFmpegExtractAudio",
