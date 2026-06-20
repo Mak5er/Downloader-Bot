@@ -11,6 +11,9 @@ services:
       - ./cookies:/app/cookies
     env_file: .env
     container_name: downloader-bot
+    depends_on:
+      db-init:
+        condition: service_completed_successfully
     restart: on-failure:5
     healthcheck:
       test: ["CMD", "python", "-c", "import asyncio; asyncio.run(asyncio.wait_for(asyncio.sleep(0.1), timeout=5))"]
@@ -27,6 +30,70 @@ services:
           cpus: '0.5'
           memory: 256M
 
+  postgres:
+    image: postgres:17-alpine
+    container_name: downloader-postgres
+    environment:
+      POSTGRES_DB: downloader_bot
+      POSTGRES_USER: bot_user
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-changeme}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "127.0.0.1:5432:5432"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U bot_user -d downloader_bot"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  db-init:
+    build:
+      context: .
+      dockerfile: Dockerfile.backup
+    container_name: downloader-db-init
+    environment:
+      RESTORE_HOST: postgres
+      RESTORE_DB: downloader_bot
+      RESTORE_USER: bot_user
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-changeme}
+      RESTORE_REPOSITORY: ${RESTIC_REPOSITORY:-}
+      RESTORE_PASSWORD: ${RESTIC_PASSWORD:-}
+      B2_KEY_ID: ${B2_KEY_ID:-}
+      B2_APP_KEY: ${B2_APP_KEY:-}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - postgres_backups:/backups
+    restart: "no"
+    entrypoint: ["/restore.sh"]
+
+  backup:
+    build:
+      context: .
+      dockerfile: Dockerfile.backup
+    container_name: downloader-backup
+    environment:
+      BACKUP_HOST: postgres
+      BACKUP_DB: downloader_bot
+      BACKUP_USER: bot_user
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-changeme}
+      RESTIC_REPOSITORY: ${RESTIC_REPOSITORY:-}
+      RESTIC_PASSWORD: ${RESTIC_PASSWORD:-}
+      B2_KEY_ID: ${B2_KEY_ID:-}
+      B2_APP_KEY: ${B2_APP_KEY:-}
+      BACKUP_CRON: ${BACKUP_CRON:-0 3 * * *}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - postgres_backups:/backups
+    restart: unless-stopped
+
 volumes:
   downloader_downloads:
   downloader_log:
+  postgres_data:
+  postgres_backups:

@@ -1,0 +1,12 @@
+FROM python:3.14-alpine
+
+RUN apk add --no-cache bash curl postgresql17-client && \
+    pip install --no-cache-dir b2
+
+COPY scripts/backup-service/entrypoint.sh /entrypoint.sh
+COPY scripts/backup-service/backup.sh /backup.sh
+COPY scripts/backup-service/restore.sh /restore.sh
+
+RUN chmod +x /entrypoint.sh /backup.sh /restore.sh
+
+ENTRYPOINT ["/entrypoint.sh"]
