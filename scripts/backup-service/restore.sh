@@ -72,13 +72,20 @@ fi
 if [ -n "$B2_KEY_ID" ] && [ -n "$B2_APP_KEY" ] && [ -n "$B2_BUCKET" ]; then
     log "No local dump found, trying B2..."
     b2 authorize-account "$B2_KEY_ID" "$B2_APP_KEY" 2>/dev/null || true
-    LATEST_B2=$(b2 ls --long "b2://${B2_BUCKET}/backups/" 2>/dev/null | tail -1 | awk '{print $1}')
+    log "B2 files in backups/:"
+    b2 ls "b2://${B2_BUCKET}/backups/" 2>&1 | while read -r line; do log "  $line"; done
+    LATEST_B2=$(b2 ls --long "b2://${B2_BUCKET}/backups/" 2>/dev/null | grep '\.dump$' | tail -1 | awk '{print $1}')
     if [ -n "$LATEST_B2" ]; then
+        log "Downloading backup by ID: ${LATEST_B2}"
         b2 download-file-by-id "$LATEST_B2" > /tmp/latest_backup.dump 2>/dev/null
+        DUMP_SIZE=$(ls -lh /tmp/latest_backup.dump 2>/dev/null | awk '{print $5}')
+        log "Downloaded: ${DUMP_SIZE}"
         restore_from_dump "/tmp/latest_backup.dump"
         rm -f /tmp/latest_backup.dump
         log "Restore from B2 completed"
         exit 0
+    else
+        log "No .dump files found in B2 bucket backups/"
     fi
 fi
 
