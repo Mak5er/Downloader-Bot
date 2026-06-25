@@ -16,14 +16,22 @@ log() { echo "${LOG_PREFIX} $*"; }
 restore_from_dump() {
     local dump_file="$1"
     log "Dropping and recreating database..."
-    psql -h "$RESTORE_HOST" -U "$RESTORE_USER" -d postgres -c "DROP DATABASE IF EXISTS ${RESTORE_DB};"
-    psql -h "$RESTORE_HOST" -U "$RESTORE_USER" -d postgres -c "CREATE DATABASE ${RESTORE_DB} OWNER ${RESTORE_USER};"
+    psql -h "$RESTORE_HOST" -U "$RESTORE_USER" -d postgres -c "DROP DATABASE IF EXISTS ${RESTORE_DB};" || {
+        log "ERROR: Failed to drop database"
+        return 1
+    }
+    psql -h "$RESTORE_HOST" -U "$RESTORE_USER" -d postgres -c "CREATE DATABASE ${RESTORE_DB} OWNER ${RESTORE_USER};" || {
+        log "ERROR: Failed to create database"
+        return 1
+    }
 
     log "Restoring from dump..."
-    pg_restore -h "$RESTORE_HOST" -U "$RESTORE_USER" -d "$RESTORE_DB" "$dump_file" 2>/dev/null || true
+    pg_restore -h "$RESTORE_HOST" -U "$RESTORE_USER" -d "$RESTORE_DB" "$dump_file" 2>&1 || {
+        log "WARNING: pg_restore reported errors (non-fatal, partial restore possible)"
+    }
 
     log "Fixing ownership and privileges..."
-    psql -h "$RESTORE_HOST" -U "$RESTORE_USER" -d "$RESTORE_DB" <<-'EOSQL'
+    psql -h "$RESTORE_HOST" -U "$RESTORE_USER" -d "$RESTORE_DB" <<-'EOSQL' || true
         DO $$
         DECLARE r RECORD;
         BEGIN
@@ -44,7 +52,7 @@ EOSQL
         UNION ALL SELECT 'files', COUNT(*) FROM downloaded_files
         UNION ALL SELECT 'events', COUNT(*) FROM analytics_events
         UNION ALL SELECT 'settings', COUNT(*) FROM settings;
-    "
+    " || log "WARNING: Verification query failed"
 }
 
 # Check if database has tables
@@ -63,30 +71,43 @@ log "Database is empty (${TABLE_COUNT} tables) — attempting restore..."
 LATEST_DUMP=$(find /backups -name "*.dump" -type f 2>/dev/null | sort -r | head -1)
 if [ -n "$LATEST_DUMP" ]; then
     log "Found local dump: ${LATEST_DUMP}"
-    restore_from_dump "$LATEST_DUMP"
-    log "Restore from local dump completed"
-    exit 0
+    if restore_from_dump "$LATEST_DUMP"; then
+        log "Restore from local dump completed"
+        exit 0
+    fi
+    log "WARNING: Local dump restore failed"
 fi
 
 # Try B2
 if [ -n "$B2_KEY_ID" ] && [ -n "$B2_APP_KEY" ] && [ -n "$B2_BUCKET" ]; then
     log "No local dump found, trying B2..."
-    b2 authorize-account "$B2_KEY_ID" "$B2_APP_KEY" 2>/dev/null || true
-    log "B2 files in backups/:"
-    b2 ls "b2://${B2_BUCKET}/backups/" 2>&1 | while read -r line; do log "  $line"; done
-    LATEST_B2=$(b2 ls --long "b2://${B2_BUCKET}/backups/" 2>/dev/null | grep '\.dump$' | tail -1 | awk '{print $1}')
+    b2 authorize-account "$B2_KEY_ID" "$B2_APP_KEY" >/dev/null 2>&1 || {
+        log "WARNING: B2 authorization failed"
+        log "WARNING: No backup found — starting with empty database"
+        exit 0
+    }
+    log "B2 authorized, listing backups..."
+    LATEST_B2=$(b2 ls --long "b2://${B2_BUCKET}/backups/" 2>/dev/null | grep '\.dump$' | tail -1 | awk '{print $1}' || true)
     if [ -n "$LATEST_B2" ]; then
         log "Downloading backup by ID: ${LATEST_B2}"
-        b2 download-file-by-id "$LATEST_B2" > /tmp/latest_backup.dump 2>/dev/null
-        DUMP_SIZE=$(ls -lh /tmp/latest_backup.dump 2>/dev/null | awk '{print $5}')
-        log "Downloaded: ${DUMP_SIZE}"
-        restore_from_dump "/tmp/latest_backup.dump"
+        if b2 download-file-by-id "$LATEST_B2" > /tmp/latest_backup.dump 2>/dev/null; then
+            DUMP_SIZE=$(ls -lh /tmp/latest_backup.dump 2>/dev/null | awk '{print $5}')
+            log "Downloaded: ${DUMP_SIZE}"
+            if restore_from_dump "/tmp/latest_backup.dump"; then
+                rm -f /tmp/latest_backup.dump
+                log "Restore from B2 completed"
+                exit 0
+            fi
+            log "WARNING: B2 dump restore failed"
+        else
+            log "WARNING: B2 download failed"
+        fi
         rm -f /tmp/latest_backup.dump
-        log "Restore from B2 completed"
-        exit 0
     else
         log "No .dump files found in B2 bucket backups/"
     fi
 fi
 
 log "WARNING: No backup found — starting with empty database"
+log "The bot will create tables via Alembic migrations on first start."
+exit 0
