@@ -32,16 +32,18 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: "3.14"
-          cache: "pip"
-          cache-dependency-path: |
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v8
+        with:
+          enable-cache: true
+          cache-dependency-glob: |
             requirements.txt
             requirements-dev.txt
 
       - name: Install dependencies
         run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements-dev.txt
-          pip install ruff mypy
+          uv pip install --system -r requirements-dev.txt ruff mypy
 
       - name: Run ruff
         run: ruff check --select=E,F,W --ignore=E501 .
@@ -63,15 +65,18 @@ jobs:
         uses: actions/setup-python@v6
         with:
           python-version: "3.14"
-          cache: "pip"
-          cache-dependency-path: |
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v8
+        with:
+          enable-cache: true
+          cache-dependency-glob: |
             requirements.txt
             requirements-dev.txt
 
       - name: Install dependencies
         run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements-dev.txt
+          uv pip install --system -r requirements-dev.txt
 
       - name: Run tests with coverage
         run: |
@@ -89,6 +94,20 @@ jobs:
   docker-smoke:
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: downloader_bot_test
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d downloader_bot_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
     env:
       DATABASE_URL: postgresql://postgres:postgres@localhost:5432/downloader_bot_test
 
@@ -96,12 +115,23 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v6
 
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
       - name: Build Docker image
-        run: docker build -t downloader-bot:test .
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: ./Dockerfile
+          load: true
+          tags: downloader-bot:test
+          cache-from: type=gha,scope=downloader-bot
+          cache-to: type=gha,mode=max,scope=downloader-bot,ignore-error=true
 
       - name: Smoke-test container startup
         run: |
           docker run --rm \
+            --network host \
             -e BOT_TOKEN \
             -e DATABASE_URL \
             -e ADMIN_ID \
@@ -110,27 +140,30 @@ jobs:
             -e MIGRATE_ON_STARTUP=1 \
             --entrypoint python \
             downloader-bot:test \
-            -c "
-import asyncio
-import os
-from services.storage.db import DataBase
-os.environ.update({
-    'BOT_TOKEN': '$BOT_TOKEN',
-    'DATABASE_URL': '$DATABASE_URL',
-    'ADMIN_ID': '$ADMIN_ID',
-    'CUSTOM_API_URL': '$CUSTOM_API_URL',
-})
-async def main():
-    db = DataBase()
-    await db.init_db()
-    print('Migrations applied successfully.')
-    tables = await db._get_existing_tables()
-    assert 'users' in tables, f'Missing users table: {tables}'
-    assert 'downloaded_files' in tables, f'Missing downloaded_files table: {tables}'
-    assert 'alembic_version' in tables, f'Missing alembic_version table: {tables}'
-    print('All tables verified.')
-asyncio.run(main())
-"
+            - <<'PY'
+          import asyncio
+          import os
+          from services.storage.db import DataBase
+
+          os.environ.update({
+              'BOT_TOKEN': os.environ['BOT_TOKEN'],
+              'DATABASE_URL': os.environ['DATABASE_URL'],
+              'ADMIN_ID': os.environ['ADMIN_ID'],
+              'CUSTOM_API_URL': os.environ['CUSTOM_API_URL'],
+          })
+
+          async def main():
+              db = DataBase()
+              await db.init_db()
+              print('Migrations applied successfully.')
+              tables = await db._get_existing_tables()
+              assert 'users' in tables, f'Missing users table: {tables}'
+              assert 'downloaded_files' in tables, f'Missing downloaded_files table: {tables}'
+              assert 'alembic_version' in tables, f'Missing alembic_version table: {tables}'
+              print('All tables verified.')
+
+          asyncio.run(main())
+          PY
 
   postgres-integration:
     runs-on: ubuntu-latest
@@ -161,15 +194,18 @@ asyncio.run(main())
         uses: actions/setup-python@v6
         with:
           python-version: "3.14"
-          cache: "pip"
-          cache-dependency-path: |
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v8
+        with:
+          enable-cache: true
+          cache-dependency-glob: |
             requirements.txt
             requirements-dev.txt
 
       - name: Install dependencies
         run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements-dev.txt
+          uv pip install --system -r requirements-dev.txt
 
       - name: Run PostgreSQL integration tests
         run: |

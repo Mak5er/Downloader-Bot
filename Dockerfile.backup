@@ -1,7 +1,9 @@
 FROM python:3.14-alpine
 
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
+
 RUN apk add --no-cache bash curl postgresql17-client && \
-    pip install --no-cache-dir b2
+    uv pip install --system --no-cache b2
 
 COPY scripts/backup-service/entrypoint.sh /entrypoint.sh
 COPY scripts/backup-service/backup.sh /backup.sh

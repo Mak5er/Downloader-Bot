@@ -2,9 +2,12 @@
 
 FROM python:3.14-slim AS builder
 
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
+
 ENV TZ=UTC \
-    PIP_DISABLE_PIP_VERSION_CHECK=1 \
-    PIP_ROOT_USER_ACTION=ignore \
+    UV_COMPILE_BYTECODE=1 \
+    UV_LINK_MODE=copy \
+    UV_PYTHON_DOWNLOADS=never \
     PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     VIRTUAL_ENV=/opt/venv \
@@ -25,9 +28,8 @@ RUN python -m venv "$VIRTUAL_ENV"
 
 COPY requirements.txt ./
 
-RUN --mount=type=cache,target=/root/.cache/pip \
-    pip install -U pip setuptools wheel && \
-    pip install -r requirements.txt
+RUN --mount=type=cache,target=/root/.cache/uv,sharing=locked \
+    uv pip install --python "$VIRTUAL_ENV/bin/python" -r requirements.txt
 
 FROM python:3.14-slim
 # Pin to a digest for reproducible builds:
