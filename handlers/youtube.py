@@ -4,6 +4,7 @@ from typing import Optional
 
 from aiogram import types, Router, F
 from aiogram.types import FSInputFile
+from aiogram.exceptions import TelegramBadRequest
 from yt_dlp import YoutubeDL
 
 import keyboards as kb
@@ -41,6 +42,7 @@ from handlers.utils import (
     safe_edit_inline_text,
     safe_answer_inline_query,
     send_chat_action_if_needed,
+    should_skip_outgoing_business_message,
     retry_async_operation,
     with_callback_logging,
     with_chosen_inline_logging,
@@ -274,6 +276,11 @@ async def download_video(message: types.Message, direct_url: Optional[str] = Non
     url = direct_url or _extract_youtube_url(get_message_text(message), YOUTUBE_VIDEO_URL_REGEX)
     if not url:
         return
+    business_id = message.business_connection_id
+    if await should_skip_outgoing_business_message(message, bot, service_name="YouTube video", logger=logging):
+        await update_info(message)
+        return
+
     logging.info(
         "Downloading YouTube video : user_id=%s username=%s url=%s",
         message.from_user.id,
@@ -283,7 +290,6 @@ async def download_video(message: types.Message, direct_url: Optional[str] = Non
     await send_analytics(user_id=message.from_user.id, chat_type=message.chat.type, action_name="youtube_video")
     status_message: Optional[types.Message] = None
     request_lease = None
-    business_id = message.business_connection_id
     show_service_status = business_id is None
     try:
         request_lease = await claim_message_request(message, service="youtube", url=url)
@@ -348,12 +354,15 @@ async def download_video(message: types.Message, direct_url: Optional[str] = Non
                 summarize_url_for_log(yt['webpage_url']),
                 file_id,
             )
-            return await message.reply_video(
-                video=file_id,
-                caption=bm.captions(user_captions, yt['title'], bot_url),
-                reply_markup=_reply_markup(),
-                parse_mode="HTML",
-            )
+            try:
+                return await message.reply_video(
+                    video=file_id,
+                    caption=bm.captions(user_captions, yt['title'], bot_url),
+                    reply_markup=_reply_markup(),
+                    parse_mode="HTML",
+                )
+            except TelegramBadRequest:
+                return None
 
         async def _send_downloaded(path: str):
             return await message.reply_video(
@@ -440,6 +449,11 @@ async def download_music(message: types.Message, direct_url: Optional[str] = Non
     url = direct_url or _extract_youtube_url(get_message_text(message), YOUTUBE_MUSIC_URL_REGEX)
     if not url:
         return
+    business_id = message.business_connection_id
+    if await should_skip_outgoing_business_message(message, bot, service_name="YouTube audio", logger=logging):
+        await update_info(message)
+        return
+
     logging.info(
         "Downloading YouTube audio: user_id=%s username=%s url=%s",
         message.from_user.id,
@@ -448,7 +462,6 @@ async def download_music(message: types.Message, direct_url: Optional[str] = Non
     )
     status_message: Optional[types.Message] = None
     request_lease = None
-    business_id = message.business_connection_id
     show_service_status = business_id is None
     try:
         request_lease = await claim_message_request(message, service="youtube", url=url)

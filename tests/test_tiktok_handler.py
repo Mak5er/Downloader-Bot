@@ -1,9 +1,10 @@
+import asyncio
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
 
-from handlers import tiktok
+from handlers import telegram_ui_utils, tiktok
 from services.inline.album_links import get_inline_album_request
 from services.inline.video_requests import create_inline_video_request, get_inline_video_request
 
@@ -106,6 +107,131 @@ async def test_video_info_returns_dataclass():
 async def test_video_info_none_on_error():
     assert await tiktok.video_info({"error": "quota"}) is None
     assert await tiktok.video_info({"error": None, "code": 1, "message": "bad"}) is None
+
+
+@pytest.mark.asyncio
+async def test_process_tiktok_skips_outgoing_business_owner_message(monkeypatch):
+    telegram_ui_utils._business_owner_user_cache.clear()
+    message = SimpleNamespace(
+        from_user=SimpleNamespace(id=42, username="owner"),
+        chat=SimpleNamespace(id=99, type="private"),
+        message_id=7,
+        business_connection_id="business-1",
+        sender_business_bot=None,
+        text="https://www.tiktok.com/@creator/video/123",
+        caption=None,
+    )
+
+    monkeypatch.setattr(tiktok, "get_bot_url", AsyncMock(return_value="https://t.me/maxloadbot"))
+    monkeypatch.setattr(
+        tiktok.bot,
+        "get_business_connection",
+        AsyncMock(return_value=SimpleNamespace(user=SimpleNamespace(id=42))),
+    )
+    monkeypatch.setattr(tiktok, "fetch_tiktok_data_with_retry", AsyncMock())
+    monkeypatch.setattr(tiktok, "claim_message_request", AsyncMock())
+    monkeypatch.setattr(tiktok, "react_to_message", AsyncMock())
+    monkeypatch.setattr(tiktok, "update_info", AsyncMock())
+
+    await tiktok.process_tiktok(message)
+
+    tiktok.bot.get_business_connection.assert_awaited_once_with("business-1")
+    tiktok.fetch_tiktok_data_with_retry.assert_not_awaited()
+    tiktok.claim_message_request.assert_not_awaited()
+    tiktok.react_to_message.assert_not_awaited()
+    tiktok.update_info.assert_awaited_once_with(message)
+
+
+@pytest.mark.asyncio
+async def test_process_tiktok_video_reuses_inflight_download_across_business_chats(monkeypatch):
+    from services.media import orchestration
+
+    orchestration.reset_single_media_flow_tracking()
+    file_ids: dict[str, str] = {}
+    download_started = asyncio.Event()
+    allow_download_finish = asyncio.Event()
+    downloaded_sends = 0
+    cached_sends = 0
+
+    info_payload = {
+        "error": None,
+        "code": 0,
+        "data": {
+            "id": "123",
+            "title": "Funny video",
+            "cover": "https://example.com/cover.jpg",
+            "play_count": 1000,
+            "digg_count": 100,
+            "comment_count": 25,
+            "share_count": 10,
+            "music_info": {"play": "https://example.com/music.mp3"},
+            "author": {"unique_id": "creator"},
+        },
+    }
+
+    async def fake_get_file_id(key: str):
+        return file_ids.get(key)
+
+    async def fake_add_file(key: str, file_id: str, _file_type: str):
+        file_ids[key] = file_id
+
+    async def fake_download_video(*_args, **_kwargs):
+        download_started.set()
+        await allow_download_finish.wait()
+        return SimpleNamespace(path="/tmp/tiktok-demo.mp4", size=1024)
+
+    def make_message(chat_id: int, message_id: int):
+        async def reply_video(video, **_kwargs):
+            nonlocal downloaded_sends, cached_sends
+            if video == "telegram-file-id-1":
+                cached_sends += 1
+                return SimpleNamespace(video=SimpleNamespace(file_id="cached-reply-file-id"))
+            downloaded_sends += 1
+            return SimpleNamespace(video=SimpleNamespace(file_id="telegram-file-id-1"))
+
+        return SimpleNamespace(
+            from_user=SimpleNamespace(id=42, username="sender"),
+            chat=SimpleNamespace(id=chat_id, type="private"),
+            message_id=message_id,
+            reply_video=AsyncMock(side_effect=reply_video),
+        )
+
+    monkeypatch.setattr(tiktok, "send_analytics", AsyncMock())
+    monkeypatch.setattr(tiktok.db, "get_file_id", AsyncMock(side_effect=fake_get_file_id))
+    monkeypatch.setattr(tiktok.db, "add_file", AsyncMock(side_effect=fake_add_file))
+    monkeypatch.setattr(tiktok.tiktok_service, "download_video", AsyncMock(side_effect=fake_download_video))
+    monkeypatch.setattr(tiktok, "build_video_send_kwargs", AsyncMock(return_value={}))
+    monkeypatch.setattr(tiktok, "send_chat_action_if_needed", AsyncMock())
+    monkeypatch.setattr(tiktok, "safe_delete_message", AsyncMock())
+    monkeypatch.setattr(tiktok, "maybe_delete_user_message", AsyncMock())
+    monkeypatch.setattr(tiktok, "remove_file", AsyncMock())
+
+    settings = {
+        "captions": "on",
+        "delete_message": "off",
+        "info_buttons": "off",
+        "url_button": "off",
+        "audio_button": "off",
+    }
+    first = make_message(1001, 11)
+    second = make_message(1002, 22)
+
+    first_task = asyncio.create_task(
+        tiktok.process_tiktok_video(first, info_payload, "https://t.me/maxloadbot", settings, "business-1")
+    )
+    await download_started.wait()
+    second_task = asyncio.create_task(
+        tiktok.process_tiktok_video(second, info_payload, "https://t.me/maxloadbot", settings, "business-2")
+    )
+    await asyncio.sleep(0)
+    allow_download_finish.set()
+
+    assert await asyncio.gather(first_task, second_task) == [True, True]
+    assert tiktok.tiktok_service.download_video.await_count == 1
+    assert tiktok.tiktok_service.download_video.await_args.kwargs["request_id"] == "tiktok_video:123"
+    tiktok.db.add_file.assert_awaited_once_with("tiktok#video:123", "telegram-file-id-1", "video")
+    assert downloaded_sends == 1
+    assert cached_sends == 1
 
 
 @pytest.mark.asyncio

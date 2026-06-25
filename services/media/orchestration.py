@@ -106,13 +106,17 @@ async def run_single_media_flow(
     inflight_future: asyncio.Future[Optional[str]] | None = None
     owns_inflight = False
     resolved_file_id: Optional[str] = None
+    ignored_cached_file_ids: set[str] = set()
     try:
         while True:
             cached_file_id = await db_service.get_file_id(cache_key)
-            if cached_file_id:
+            if cached_file_id and cached_file_id not in ignored_cached_file_ids:
                 await update_status(upload_status_text)
                 await send_chat_action(upload_action)
                 sent_cached = await send_cached(cached_file_id)
+                if sent_cached is None:
+                    ignored_cached_file_ids.add(cached_file_id)
+                    continue
                 if on_after_send:
                     await on_after_send()
                 return sent_cached
@@ -126,6 +130,9 @@ async def run_single_media_flow(
                 await update_status(upload_status_text)
                 await send_chat_action(upload_action)
                 sent_cached = await send_cached(resolved_file_id)
+                if sent_cached is None:
+                    ignored_cached_file_ids.add(resolved_file_id)
+                    continue
                 if on_after_send:
                     await on_after_send()
                 return sent_cached
@@ -143,6 +150,8 @@ async def run_single_media_flow(
         await update_status(upload_status_text)
         await send_chat_action(upload_action)
         sent = await send_downloaded(metrics.path)
+        if sent is None:
+            raise RuntimeError("Downloaded media send returned no message")
 
         resolved_file_id = extract_file_id(sent)
         if resolved_file_id:

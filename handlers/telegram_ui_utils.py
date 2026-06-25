@@ -6,7 +6,7 @@ from typing import Any, Awaitable, Callable, Optional, TypeVar
 
 from aiogram import Bot, types
 from aiogram.enums import ChatType
-from aiogram.exceptions import TelegramAPIError
+from aiogram.exceptions import TelegramAPIError, TelegramBadRequest
 
 import messages as bm
 from services.logger import logger as logging
@@ -20,11 +20,70 @@ _chat_action_cache_maxsize = 2048
 _chat_action_ttl_seconds = 4.0
 _message_edit_cache: "OrderedDict[tuple[Any, ...], tuple[str, tuple[tuple[str, str], ...]]]" = OrderedDict()
 _message_edit_cache_maxsize = 4096
+_business_owner_user_cache: dict[str, tuple[float, int]] = {}
+_business_owner_cache_ttl_seconds = 300.0
 
 
 def get_message_text(message: types.Message) -> str:
     """Return the message text or caption, falling back to empty string."""
     return message.text or message.caption or ""
+
+
+async def get_business_owner_user_id(bot: Bot, business_id: str) -> int | None:
+    now = time.monotonic()
+    cached = _business_owner_user_cache.get(business_id)
+    if cached and now - cached[0] <= _business_owner_cache_ttl_seconds:
+        return cached[1]
+
+    try:
+        connection = await bot.get_business_connection(business_id)
+    except Exception as exc:
+        logging.warning("Failed to resolve business owner: business_id=%s error=%s", business_id, exc)
+        return None
+
+    owner_id = getattr(getattr(connection, "user", None), "id", None)
+    if owner_id is None:
+        return None
+
+    owner_id = int(owner_id)
+    _business_owner_user_cache[business_id] = (now, owner_id)
+    return owner_id
+
+
+async def is_outgoing_business_message(message: types.Message, bot: Bot) -> bool:
+    business_id = getattr(message, "business_connection_id", None)
+    if not business_id:
+        return False
+
+    if getattr(message, "sender_business_bot", None) is not None:
+        return True
+
+    sender_id = getattr(getattr(message, "from_user", None), "id", None)
+    if sender_id is None:
+        return False
+
+    owner_id = await get_business_owner_user_id(bot, str(business_id))
+    return owner_id is not None and int(sender_id) == owner_id
+
+
+async def should_skip_outgoing_business_message(
+    message: types.Message,
+    bot: Bot,
+    *,
+    service_name: str,
+    logger: Any,
+) -> bool:
+    if not await is_outgoing_business_message(message, bot):
+        return False
+
+    logger.info(
+        "Skipping outgoing %s business message: user_id=%s business_id=%s chat_id=%s",
+        service_name,
+        getattr(getattr(message, "from_user", None), "id", None),
+        getattr(message, "business_connection_id", None),
+        getattr(getattr(message, "chat", None), "id", None),
+    )
+    return True
 
 
 async def react_to_message(
@@ -75,7 +134,10 @@ async def _send_with_reaction(
     if not responder:
         raise AttributeError(f"Message object has no method '{method}'")
 
-    await responder(text, **kwargs)
+    try:
+        await responder(text, **kwargs)
+    except TelegramBadRequest:
+        pass
 
 
 async def handle_download_error(

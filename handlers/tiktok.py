@@ -7,6 +7,7 @@ from urllib.parse import urlparse
 import aiohttp
 from aiogram import types, Router, F
 from aiogram.types import FSInputFile
+from aiogram.exceptions import TelegramBadRequest
 from fake_useragent import UserAgent
 from yt_dlp import YoutubeDL
 
@@ -28,6 +29,7 @@ from handlers.utils import (
     get_message_text,
     handle_download_error,
     handle_video_too_large,
+    is_outgoing_business_message,
     load_user_settings,
     make_retry_status_notifier,
     make_status_text_progress_updater,
@@ -133,6 +135,15 @@ async def process_tiktok(message: types.Message, direct_url: Optional[str] = Non
             summarize_text_for_log(text),
         )
 
+        if await is_outgoing_business_message(message, bot):
+            logging.info(
+                "Skipping outgoing TikTok business message: user_id=%s business_id=%s chat_id=%s",
+                message.from_user.id,
+                business_id,
+                getattr(getattr(message, "chat", None), "id", None),
+            )
+            return
+
         stripped = (text or "").strip()
 
         # Profile lookup: allow messages like "@username" without a URL.
@@ -221,7 +232,8 @@ async def process_tiktok_video(message: types.Message, data: dict, bot_url: str,
     status_message: Optional[types.Message] = None
     if show_service_status:
         status_message = await message.answer(bm.downloading_video_status())
-    request_id = f"tiktok_video:{message.chat.id}:{message.message_id}:{info.id}"
+    media_cache_key = build_media_cache_key("tiktok", variant=f"video:{info.id}")
+    request_id = f"tiktok_video:{info.id}"
     size_hint = get_tiktok_size_hint(data)
     if size_hint and size_hint >= MAX_FILE_SIZE:
         logging.warning(
@@ -271,12 +283,15 @@ async def process_tiktok_video(message: types.Message, data: dict, bot_url: str,
             summarize_url_for_log(db_video_url),
             file_id,
         )
-        return await message.reply_video(
-            video=file_id,
-            caption=bm.captions(user_settings["captions"], info.description, bot_url),
-            reply_markup=_reply_markup(),
-            parse_mode="HTML",
-        )
+        try:
+            return await message.reply_video(
+                video=file_id,
+                caption=bm.captions(user_settings["captions"], info.description, bot_url),
+                reply_markup=_reply_markup(),
+                parse_mode="HTML",
+            )
+        except TelegramBadRequest:
+            return None
 
     async def _send_downloaded(path: str):
         return await message.reply_video(
@@ -319,7 +334,7 @@ async def process_tiktok_video(message: types.Message, data: dict, bot_url: str,
         await handle_download_error(message, business_id=business_id)
 
     sent_message = await run_single_media_flow(
-        cache_key=db_video_url,
+        cache_key=media_cache_key,
         cache_file_type="video",
         db_service=db,
         upload_status_text=bm.uploading_status(),

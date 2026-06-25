@@ -5,6 +5,7 @@ from typing import Optional
 
 from aiogram import F, Router, types
 from aiogram.types import FSInputFile
+from aiogram.exceptions import TelegramBadRequest
 
 import keyboards as kb
 import messages as bm
@@ -44,6 +45,7 @@ from handlers.utils import (
     safe_edit_inline_text,
     safe_answer_inline_query,
     send_chat_action_if_needed,
+    should_skip_outgoing_business_message,
     with_callback_logging,
     with_chosen_inline_logging,
     with_inline_query_logging,
@@ -100,6 +102,9 @@ async def process_pinterest(message: types.Message, direct_url: Optional[str] = 
         business_id = message.business_connection_id
         text = get_message_text(message)
         bot_url = await get_bot_url(bot)
+        if await should_skip_outgoing_business_message(message, bot, service_name="Pinterest", logger=logging):
+            return
+
         if direct_url:
             source_url = strip_pinterest_url(direct_url)
         else:
@@ -195,12 +200,15 @@ async def process_pinterest_single_video(
         )
 
     async def _send_cached(file_id: str):
-        return await message.reply_video(
-            video=file_id,
-            caption=bm.captions(user_settings["captions"], post.description, bot_url),
-            reply_markup=_reply_markup(),
-            parse_mode="HTML",
-        )
+        try:
+            return await message.reply_video(
+                video=file_id,
+                caption=bm.captions(user_settings["captions"], post.description, bot_url),
+                reply_markup=_reply_markup(),
+                parse_mode="HTML",
+            )
+        except TelegramBadRequest:
+            return None
 
     async def _send_downloaded(path: str):
         return await message.reply_video(
@@ -293,12 +301,15 @@ async def process_pinterest_single_photo(
         )
 
     async def _send_cached(file_id: str):
-        return await message.reply_photo(
-            photo=file_id,
-            caption=bm.captions(user_settings["captions"], post.description, bot_url),
-            reply_markup=_reply_markup(),
-            parse_mode="HTML",
-        )
+        try:
+            return await message.reply_photo(
+                photo=file_id,
+                caption=bm.captions(user_settings["captions"], post.description, bot_url),
+                reply_markup=_reply_markup(),
+                parse_mode="HTML",
+            )
+        except TelegramBadRequest:
+            return None
 
     async def _send_downloaded(path: str):
         return await message.reply_photo(

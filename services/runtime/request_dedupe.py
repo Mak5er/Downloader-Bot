@@ -17,7 +17,7 @@ from services.platforms.soundcloud_media import strip_soundcloud_url
 from services.platforms.tiktok_common import strip_tiktok_tracking
 
 RequestClaimStatus = Literal["accepted", "active", "recent"]
-RequestFingerprint = tuple[int, Optional[int], str, str]
+RequestFingerprint = tuple[int, Optional[int], Optional[str], str, str]
 
 _ACTIVE_TTL_SECONDS = max(1.0, float(REQUEST_DEDUPE_ACTIVE_TTL_SECONDS))
 _COMPLETED_TTL_SECONDS = max(0.0, float(REQUEST_DEDUPE_COMPLETED_TTL_SECONDS))
@@ -53,8 +53,22 @@ def normalize_request_url(service: str, url: str) -> str:
     return _normalize_generic_url(raw_url)
 
 
-def build_request_fingerprint(user_id: int, chat_id: Optional[int], service: str, url: str) -> RequestFingerprint:
-    return int(user_id), int(chat_id) if chat_id is not None else None, normalize_request_service(service), normalize_request_url(service, url)
+def build_request_fingerprint(
+    user_id: int,
+    chat_id: Optional[int],
+    service: str,
+    url: str,
+    *,
+    scope_id: Optional[str] = None,
+) -> RequestFingerprint:
+    normalized_scope = str(scope_id).strip() if scope_id is not None else None
+    return (
+        int(user_id),
+        int(chat_id) if chat_id is not None else None,
+        normalized_scope or None,
+        normalize_request_service(service),
+        normalize_request_url(service, url),
+    )
 
 
 def same_request(first_service: str, first_url: str, second_service: str, second_url: str) -> bool:
@@ -64,10 +78,17 @@ def same_request(first_service: str, first_url: str, second_service: str, second
     )
 
 
-def claim_request(user_id: int, chat_id: Optional[int], service: str, url: str) -> RequestClaimStatus:
+def claim_request(
+    user_id: int,
+    chat_id: Optional[int],
+    service: str,
+    url: str,
+    *,
+    scope_id: Optional[str] = None,
+) -> RequestClaimStatus:
     now = time.monotonic()
-    fingerprint = build_request_fingerprint(user_id, chat_id, service, url)
-    if not fingerprint[3]:
+    fingerprint = build_request_fingerprint(user_id, chat_id, service, url, scope_id=scope_id)
+    if not fingerprint[4]:
         return "accepted"
 
     with _lock:
@@ -88,12 +109,20 @@ def claim_request(user_id: int, chat_id: Optional[int], service: str, url: str) 
         return "accepted"
 
 
-def finish_request(user_id: int, chat_id: Optional[int], service: str, url: str, *, success: bool) -> None:
+def finish_request(
+    user_id: int,
+    chat_id: Optional[int],
+    service: str,
+    url: str,
+    *,
+    success: bool,
+    scope_id: Optional[str] = None,
+) -> None:
     now = time.monotonic()
-    fingerprint = build_request_fingerprint(user_id, chat_id, service, url)
+    fingerprint = build_request_fingerprint(user_id, chat_id, service, url, scope_id=scope_id)
     with _lock:
         _active_requests.pop(fingerprint, None)
-        if success and fingerprint[3]:
+        if success and fingerprint[4]:
             _completed_requests[fingerprint] = now
             _completed_requests.move_to_end(fingerprint)
         _cleanup_locked(now)

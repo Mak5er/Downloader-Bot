@@ -257,6 +257,52 @@ def test_request_dedupe_isolated_per_chat(monkeypatch):
     assert request_dedupe.claim_request(9, -3001, "youtube", "https://www.youtube.com/watch?v=demo123") == "active"
 
 
+def test_request_dedupe_isolated_per_business_connection(monkeypatch):
+    request_dedupe.reset_request_tracking()
+    now = 350.0
+    monkeypatch.setattr(request_dedupe.time, "monotonic", lambda: now)
+
+    assert (
+        request_dedupe.claim_request(
+            42,
+            42,
+            "tiktok",
+            "https://www.tiktok.com/@demo/video/1",
+            scope_id="business-a",
+        )
+        == "accepted"
+    )
+    request_dedupe.finish_request(
+        42,
+        42,
+        "tiktok",
+        "https://www.tiktok.com/@demo/video/1",
+        success=True,
+        scope_id="business-a",
+    )
+
+    assert (
+        request_dedupe.claim_request(
+            42,
+            42,
+            "tiktok",
+            "https://www.tiktok.com/@demo/video/1?share=1",
+            scope_id="business-b",
+        )
+        == "accepted"
+    )
+    assert (
+        request_dedupe.claim_request(
+            42,
+            42,
+            "tiktok",
+            "https://www.tiktok.com/@demo/video/1?share=2",
+            scope_id="business-a",
+        )
+        == "recent"
+    )
+
+
 def test_request_dedupe_normalizes_youtube_and_twitter_variants():
     request_dedupe.reset_request_tracking()
 

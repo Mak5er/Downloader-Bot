@@ -5,6 +5,7 @@ from typing import Optional
 
 from aiogram import types, Router, F
 from aiogram.types import FSInputFile
+from aiogram.exceptions import TelegramBadRequest
 
 import keyboards as kb
 import messages as bm
@@ -37,6 +38,7 @@ from handlers.utils import (
     safe_edit_inline_text,
     safe_answer_inline_query,
     send_chat_action_if_needed,
+    should_skip_outgoing_business_message,
     retry_async_operation,
     with_callback_logging,
     with_chosen_inline_logging,
@@ -100,6 +102,9 @@ async def process_instagram(message: types.Message, direct_url: Optional[str] = 
         bot_url = await get_bot_url(bot)
         business_id = message.business_connection_id
         text = get_message_text(message)
+
+        if await should_skip_outgoing_business_message(message, bot, service_name="Instagram", logger=logging):
+            return
 
         if direct_url:
             url = strip_instagram_url(direct_url)
@@ -200,12 +205,15 @@ async def process_instagram_video(message: types.Message, data: InstagramVideo, 
             summarize_url_for_log(db_video_url),
             file_id,
         )
-        return await message.reply_video(
-            video=file_id,
-            caption=bm.captions(user_settings["captions"], data.description, bot_url),
-            reply_markup=_reply_markup(),
-            parse_mode="HTML",
-        )
+        try:
+            return await message.reply_video(
+                video=file_id,
+                caption=bm.captions(user_settings["captions"], data.description, bot_url),
+                reply_markup=_reply_markup(),
+                parse_mode="HTML",
+            )
+        except TelegramBadRequest:
+            return None
 
     async def _download_media():
         return await asyncio.wait_for(

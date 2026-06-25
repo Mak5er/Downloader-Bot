@@ -79,6 +79,54 @@ async def test_get_bot_url_and_id_share_identity_fetch(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_is_outgoing_business_message_detects_owner_and_caches():
+    telegram_ui_utils._business_owner_user_cache.clear()
+    bot = SimpleNamespace(
+        get_business_connection=AsyncMock(return_value=SimpleNamespace(user=SimpleNamespace(id=42)))
+    )
+    message = SimpleNamespace(
+        business_connection_id="business-1",
+        sender_business_bot=None,
+        from_user=SimpleNamespace(id=42),
+    )
+
+    first = await utils.is_outgoing_business_message(message, bot)
+    second = await utils.is_outgoing_business_message(message, bot)
+
+    assert first is True
+    assert second is True
+    bot.get_business_connection.assert_awaited_once_with("business-1")
+
+
+@pytest.mark.asyncio
+async def test_is_outgoing_business_message_keeps_customer_messages():
+    telegram_ui_utils._business_owner_user_cache.clear()
+    bot = SimpleNamespace(
+        get_business_connection=AsyncMock(return_value=SimpleNamespace(user=SimpleNamespace(id=42)))
+    )
+    message = SimpleNamespace(
+        business_connection_id="business-1",
+        sender_business_bot=None,
+        from_user=SimpleNamespace(id=99),
+    )
+
+    assert await utils.is_outgoing_business_message(message, bot) is False
+
+
+@pytest.mark.asyncio
+async def test_is_outgoing_business_message_detects_sender_business_bot_without_lookup():
+    bot = SimpleNamespace(get_business_connection=AsyncMock())
+    message = SimpleNamespace(
+        business_connection_id="business-1",
+        sender_business_bot=SimpleNamespace(id=777),
+        from_user=SimpleNamespace(id=99),
+    )
+
+    assert await utils.is_outgoing_business_message(message, bot) is True
+    bot.get_business_connection.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_get_bot_avatar_thumbnail_uses_small_audio_compatible_photo(monkeypatch, tmp_path):
     monkeypatch.setattr(bot_profile_cache, "_bot_username", None)
     monkeypatch.setattr(bot_profile_cache, "_bot_id", None)
