@@ -1,4 +1,3 @@
-import asyncio
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 
@@ -11,7 +10,6 @@ import middlewares
 from middlewares import antiflood
 from middlewares import ban_middleware
 from middlewares import private_chat_guard
-from services.runtime import pending_requests
 
 
 def _monotonic_sequence(*values: float):

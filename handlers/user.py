@@ -5,7 +5,7 @@ from typing import Optional
 
 from aiogram import types, Router, F
 from aiogram.enums import ChatMemberStatus, ChatType
-from aiogram.exceptions import TelegramAPIError, TelegramBadRequest
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import Command
 from aiogram.types import ChatMemberUpdated
 

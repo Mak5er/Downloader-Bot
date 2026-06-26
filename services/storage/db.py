@@ -1,16 +1,7 @@
 import asyncio
+
 from sqlalchemy import event
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
-
-
-class SafeAsyncSession(AsyncSession):
-    async def rollback(self) -> None:
-        await asyncio.shield(super().rollback())
-
-    async def close(self) -> None:
-        await asyncio.shield(super().close())
-
-
 from config import DATABASE_URL, DB_MAX_OVERFLOW, DB_POOL_SIZE, DB_POOL_TIMEOUT
 from services.logger import logger as logging
 from services.storage.analytics_repository import AnalyticsRepositoryMixin
@@ -29,6 +20,15 @@ from services.storage.models import (
 )
 from services.storage.schema import SchemaManagerMixin
 from services.storage.user_repository import UserRepositoryMixin
+
+
+class SafeAsyncSession(AsyncSession):
+    async def rollback(self) -> None:
+        await asyncio.shield(super().rollback())
+
+    async def close(self) -> None:
+        await asyncio.shield(super().close())
+
 
 logging = logging.bind(service="db")
 

@@ -1,6 +1,6 @@
 import asyncio
 import re
-from typing import Optional
+from typing import Any, Optional
 
 from aiogram import types, Router, F
 from aiogram.types import FSInputFile
@@ -53,7 +53,6 @@ from handlers.utils import (
 from services.logger import logger as logging, summarize_url_for_log
 from app_context import bot, db, send_analytics
 from utils.download_manager import (
-    DownloadError,
     DownloadQueueBusyError,
     DownloadRateLimitError,
     DownloadTooLargeError,

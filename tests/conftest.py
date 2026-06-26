@@ -11,8 +11,8 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-import app_context
-from services.runtime import request_dedupe
+import app_context  # noqa: E402
+from services.runtime import request_dedupe  # noqa: E402
 
 
 class FakeYoutubeDL:

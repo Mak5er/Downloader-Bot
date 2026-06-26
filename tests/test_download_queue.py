@@ -218,7 +218,7 @@ async def test_queue_submit_during_shutdown_does_not_deadlock():
     shutdown_task = asyncio.create_task(queue.shutdown())
     task_b = asyncio.create_task(queue.submit(_runner, priority=10, source="test", user_id=2))
 
-    results = await asyncio.gather(task_a, shutdown_task, task_b, return_exceptions=True)
+    await asyncio.gather(task_a, shutdown_task, task_b, return_exceptions=True)
     await queue.shutdown()
 
 
