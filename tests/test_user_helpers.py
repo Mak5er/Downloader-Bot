@@ -119,7 +119,8 @@ async def test_fetch_stats_snapshot_refreshes_and_clears_chart_cache(monkeypatch
     )()
     monkeypatch.setattr(chart, "db", fake_db)
     monkeypatch.setattr(chart, "_schedule_stats_chart_warmup", lambda period, snapshot: None)
-    chart._stats_snapshot_cache["Week"] = (0.0, StatsSnapshot(total_downloads=9))
+    expired_at = chart.time.monotonic() - chart._STATS_CACHE_TTL_SECONDS - 1
+    chart._stats_snapshot_cache["Week"] = (expired_at, StatsSnapshot(total_downloads=9))
     chart._stats_chart_cache[("Week", "total")] = (chart.time.monotonic(), b"stale")
 
     await chart.fetch_stats_snapshot("Week")
