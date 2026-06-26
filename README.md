@@ -167,7 +167,7 @@ Recommended setup:
 
 The `cookies` directory is kept in git with `cookies/.gitkeep`, but real cookie files are ignored by git and Docker builds. Treat `cookies/youtube.txt` like a password: do not commit it, paste it in chats, or bake it into images.
 
-For Docker Compose, the repository mounts `./cookies` into the container as `/app/cookies:ro`, so the same `cookies/youtube.txt` path works inside the container.
+For Docker Compose, the repository mounts `./cookies` into the container as `/app/cookies`, so the same `cookies/youtube.txt` path works inside the container. The bot startup fixes ownership on that mount because `yt-dlp` may need to update the cookie jar.
 
 ## Docker
 
