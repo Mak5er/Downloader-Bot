@@ -171,6 +171,8 @@ maxload.db
 downloads
 logs/
 .runtime_state.json
+.antigravitycli/
+.antigravitycli
 
 # Local browser/session cookies for yt-dlp. Keep the directory, never commit cookies.
 cookies/*

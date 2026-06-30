@@ -27,10 +27,8 @@ def _chown_path(path: Path, *, uid: int, gid: int) -> bool:
 
 
 def _ensure_runtime_access(path: Path, *, owner_only: bool) -> None:
-    if owner_only:
-        access_mode = 0o700 if path.is_dir() else 0o600
-    else:
-        access_mode = 0o777 if path.is_dir() else 0o666
+    # Завжди даємо повний доступ (777/666), щоб і хост-користувач, і докер мали доступ
+    access_mode = 0o777 if path.is_dir() else 0o666
     try:
         os.chmod(path, access_mode)
     except PermissionError:
@@ -116,6 +114,9 @@ def main(argv: list[str] | None = None) -> int:
         _prepare_runtime_paths(uid=user.pw_uid, gid=group.gr_gid)
         _prepare_youtube_cookie_file(uid=user.pw_uid, gid=group.gr_gid)
         _drop_privileges(user_name=user.pw_name, group_name=group.gr_name)
+
+    # Встановлюємо umask 0, щоб всі нові файли створювалися з правами 666/777
+    os.umask(0o000)
 
     os.execvp(command[0], command)
     return 0
