@@ -42,7 +42,7 @@ from handlers.utils import (
     safe_edit_inline_text,
     safe_answer_inline_query,
     send_chat_action_if_needed,
-    should_skip_outgoing_business_message,
+    should_skip_duplicate_business_message,
     retry_async_operation,
     with_callback_logging,
     with_chosen_inline_logging,
@@ -278,7 +278,7 @@ async def download_video(message: types.Message, direct_url: Optional[str] = Non
     if not url:
         return
     business_id = message.business_connection_id
-    if await should_skip_outgoing_business_message(message, bot, service_name="YouTube video", logger=logging):
+    if await should_skip_duplicate_business_message(message, bot, service_name="YouTube video", logger=logging):
         await update_info(message)
         return
 
@@ -451,7 +451,7 @@ async def download_music(message: types.Message, direct_url: Optional[str] = Non
     if not url:
         return
     business_id = message.business_connection_id
-    if await should_skip_outgoing_business_message(message, bot, service_name="YouTube audio", logger=logging):
+    if await should_skip_duplicate_business_message(message, bot, service_name="YouTube audio", logger=logging):
         await update_info(message)
         return
 

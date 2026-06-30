@@ -38,7 +38,7 @@ from handlers.utils import (
     safe_edit_inline_text,
     safe_answer_inline_query,
     send_chat_action_if_needed,
-    should_skip_outgoing_business_message,
+    should_skip_duplicate_business_message,
     retry_async_operation,
     with_callback_logging,
     with_chosen_inline_logging,
@@ -103,7 +103,7 @@ async def process_instagram(message: types.Message, direct_url: Optional[str] = 
         business_id = message.business_connection_id
         text = get_message_text(message)
 
-        if await should_skip_outgoing_business_message(message, bot, service_name="Instagram", logger=logging):
+        if await should_skip_duplicate_business_message(message, bot, service_name="Instagram", logger=logging):
             return
 
         if direct_url:

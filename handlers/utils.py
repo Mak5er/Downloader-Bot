@@ -39,7 +39,7 @@ from handlers.telegram_ui_utils import (
     get_message_text,
     handle_download_error,
     handle_video_too_large,
-    is_outgoing_business_message,
+    should_skip_duplicate_business_message,
     load_user_settings,
     make_retry_status_notifier,
     make_status_text_progress_updater,
@@ -53,7 +53,7 @@ from handlers.telegram_ui_utils import (
     safe_edit_inline_text,
     safe_edit_text,
     send_chat_action_if_needed,
-    should_skip_outgoing_business_message,
+    should_skip_duplicate_business_message,
 )
 
 __all__ = [
@@ -82,7 +82,7 @@ __all__ = [
     "get_message_text",
     "handle_download_error",
     "handle_video_too_large",
-    "is_outgoing_business_message",
+    "should_skip_duplicate_business_message",
     "load_user_settings",
     "log_context_scope",
     "log_duration",
@@ -100,7 +100,7 @@ __all__ = [
     "safe_edit_text",
     "sanitize_inline_results",
     "send_chat_action_if_needed",
-    "should_skip_outgoing_business_message",
+    "should_skip_duplicate_business_message",
     "with_callback_logging",
     "with_chosen_inline_logging",
     "with_inline_query_logging",

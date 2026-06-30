@@ -43,7 +43,7 @@ from handlers.utils import (
     safe_edit_inline_text,
     safe_answer_inline_query,
     send_chat_action_if_needed,
-    should_skip_outgoing_business_message,
+    should_skip_duplicate_business_message,
     with_callback_logging,
     with_chosen_inline_logging,
     with_inline_query_logging,
@@ -454,7 +454,7 @@ async def handle_tweet_links(message, direct_url: Optional[str] = None):
         business_id,
         summarize_text_for_log(text),
     )
-    if await should_skip_outgoing_business_message(message, bot, service_name="Twitter", logger=logging):
+    if await should_skip_duplicate_business_message(message, bot, service_name="Twitter", logger=logging):
         return
 
     request_url_match = re.search(_TWITTER_LINK_REGEX, text or "")

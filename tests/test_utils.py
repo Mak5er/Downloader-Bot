@@ -10,6 +10,7 @@ from handlers import bot_profile_cache, telegram_ui_utils
 from handlers import utils
 from services.logger import summarize_text_for_log, summarize_url_for_log
 from utils.download_manager import DownloadProgress
+import logging
 
 
 @pytest.mark.asyncio
@@ -79,7 +80,7 @@ async def test_get_bot_url_and_id_share_identity_fetch(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_is_outgoing_business_message_detects_owner_and_caches():
+async def test_should_skip_duplicate_business_message_detects_owner_and_caches():
     telegram_ui_utils._business_owner_user_cache.clear()
     bot = SimpleNamespace(
         get_business_connection=AsyncMock(return_value=SimpleNamespace(user=SimpleNamespace(id=42)))
@@ -90,16 +91,16 @@ async def test_is_outgoing_business_message_detects_owner_and_caches():
         from_user=SimpleNamespace(id=42),
     )
 
-    first = await utils.is_outgoing_business_message(message, bot)
-    second = await utils.is_outgoing_business_message(message, bot)
+    first = await utils.should_skip_duplicate_business_message(message, bot, service_name="test", logger=logging)
+    second = await utils.should_skip_duplicate_business_message(message, bot, service_name="test", logger=logging)
 
-    assert first is True
+    assert first is False
     assert second is True
     bot.get_business_connection.assert_awaited_once_with("business-1")
 
 
 @pytest.mark.asyncio
-async def test_is_outgoing_business_message_keeps_customer_messages():
+async def test_should_skip_duplicate_business_message_keeps_customer_messages():
     telegram_ui_utils._business_owner_user_cache.clear()
     bot = SimpleNamespace(
         get_business_connection=AsyncMock(return_value=SimpleNamespace(user=SimpleNamespace(id=42)))
@@ -110,11 +111,15 @@ async def test_is_outgoing_business_message_keeps_customer_messages():
         from_user=SimpleNamespace(id=99),
     )
 
-    assert await utils.is_outgoing_business_message(message, bot) is False
+    first = await utils.should_skip_duplicate_business_message(message, bot, service_name="test", logger=logging)
+    second = await utils.should_skip_duplicate_business_message(message, bot, service_name="test", logger=logging)
+
+    assert first is False
+    assert second is True
 
 
 @pytest.mark.asyncio
-async def test_is_outgoing_business_message_detects_sender_business_bot_without_lookup():
+async def test_should_skip_duplicate_business_message_detects_sender_business_bot_without_lookup():
     bot = SimpleNamespace(get_business_connection=AsyncMock())
     message = SimpleNamespace(
         business_connection_id="business-1",
@@ -122,7 +127,7 @@ async def test_is_outgoing_business_message_detects_sender_business_bot_without_
         from_user=SimpleNamespace(id=99),
     )
 
-    assert await utils.is_outgoing_business_message(message, bot) is True
+    assert await utils.should_skip_duplicate_business_message(message, bot, service_name="test", logger=logging) is True
     bot.get_business_connection.assert_not_awaited()
 
 

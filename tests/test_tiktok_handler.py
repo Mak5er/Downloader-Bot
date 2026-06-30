@@ -130,8 +130,7 @@ async def test_process_tiktok_skips_outgoing_business_owner_message(monkeypatch)
     )
     monkeypatch.setattr(tiktok, "fetch_tiktok_data_with_retry", AsyncMock())
     monkeypatch.setattr(tiktok, "claim_message_request", AsyncMock())
-    monkeypatch.setattr(tiktok, "react_to_message", AsyncMock())
-    monkeypatch.setattr(tiktok, "update_info", AsyncMock())
+    monkeypatch.setattr(tiktok, "should_skip_duplicate_business_message", AsyncMock(return_value=True))
 
     await tiktok.process_tiktok(message)
 

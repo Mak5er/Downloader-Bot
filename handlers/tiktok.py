@@ -29,7 +29,7 @@ from handlers.utils import (
     get_message_text,
     handle_download_error,
     handle_video_too_large,
-    is_outgoing_business_message,
+    should_skip_duplicate_business_message,
     load_user_settings,
     make_retry_status_notifier,
     make_status_text_progress_updater,
@@ -135,7 +135,7 @@ async def process_tiktok(message: types.Message, direct_url: Optional[str] = Non
             summarize_text_for_log(text),
         )
 
-        if await is_outgoing_business_message(message, bot):
+        if await should_skip_duplicate_business_message(message, bot, service_name="TikTok", logger=logging):
             logging.info(
                 "Skipping outgoing TikTok business message: user_id=%s business_id=%s chat_id=%s",
                 message.from_user.id,

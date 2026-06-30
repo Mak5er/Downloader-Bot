@@ -45,7 +45,7 @@ from handlers.utils import (
     safe_edit_inline_text,
     safe_answer_inline_query,
     send_chat_action_if_needed,
-    should_skip_outgoing_business_message,
+    should_skip_duplicate_business_message,
     with_callback_logging,
     with_chosen_inline_logging,
     with_inline_query_logging,
@@ -102,7 +102,7 @@ async def process_pinterest(message: types.Message, direct_url: Optional[str] = 
         business_id = message.business_connection_id
         text = get_message_text(message)
         bot_url = await get_bot_url(bot)
-        if await should_skip_outgoing_business_message(message, bot, service_name="Pinterest", logger=logging):
+        if await should_skip_duplicate_business_message(message, bot, service_name="Pinterest", logger=logging):
             return
 
         if direct_url:

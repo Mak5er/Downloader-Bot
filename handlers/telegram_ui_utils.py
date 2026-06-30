@@ -22,6 +22,9 @@ _message_edit_cache: "OrderedDict[tuple[Any, ...], tuple[str, tuple[tuple[str, s
 _message_edit_cache_maxsize = 4096
 _business_owner_user_cache: dict[str, tuple[float, int]] = {}
 _business_owner_cache_ttl_seconds = 300.0
+_business_message_dedup_cache: "OrderedDict[tuple[int, int, int, str], float]" = OrderedDict()
+_business_message_dedup_ttl_seconds = 60.0
+_business_message_dedup_maxsize = 4096
 
 
 def get_message_text(message: types.Message) -> str:
@@ -50,7 +53,13 @@ async def get_business_owner_user_id(bot: Bot, business_id: str) -> int | None:
     return owner_id
 
 
-async def is_outgoing_business_message(message: types.Message, bot: Bot) -> bool:
+async def should_skip_duplicate_business_message(
+    message: types.Message,
+    bot: Bot,
+    *,
+    service_name: str,
+    logger: Any,
+) -> bool:
     business_id = getattr(message, "business_connection_id", None)
     if not business_id:
         return False
@@ -63,27 +72,48 @@ async def is_outgoing_business_message(message: types.Message, bot: Bot) -> bool
         return False
 
     owner_id = await get_business_owner_user_id(bot, str(business_id))
-    return owner_id is not None and int(sender_id) == owner_id
-
-
-async def should_skip_outgoing_business_message(
-    message: types.Message,
-    bot: Bot,
-    *,
-    service_name: str,
-    logger: Any,
-) -> bool:
-    if not await is_outgoing_business_message(message, bot):
+    if owner_id is None:
         return False
 
-    logger.info(
-        "Skipping outgoing %s business message: user_id=%s business_id=%s chat_id=%s",
-        service_name,
-        getattr(getattr(message, "from_user", None), "id", None),
-        getattr(message, "business_connection_id", None),
-        getattr(getattr(message, "chat", None), "id", None),
-    )
-    return True
+    sender_id = int(sender_id)
+    chat_id = getattr(getattr(message, "chat", None), "id", None)
+    if chat_id is None:
+        return False
+        
+    chat_id = int(chat_id)
+
+    if sender_id == owner_id:
+        receiver_id = chat_id
+    else:
+        receiver_id = owner_id
+
+    # Some messages might not have text (e.g. only media), but we use whatever text is available.
+    text = get_message_text(message)
+    msg_date = getattr(message, "date", None)
+    timestamp = int(msg_date.timestamp()) if msg_date else 0
+
+    dedup_key = (sender_id, receiver_id, timestamp, text)
+    
+    now = time.monotonic()
+    
+    # Clean up old entries occasionally if we want, or just rely on maxsize.
+    cached_time = _business_message_dedup_cache.get(dedup_key)
+    if cached_time is not None and now - cached_time < _business_message_dedup_ttl_seconds:
+        logger.info(
+            "Skipping duplicate %s business message: sender_id=%s receiver_id=%s text_len=%s",
+            service_name,
+            sender_id,
+            receiver_id,
+            len(text),
+        )
+        return True
+
+    _business_message_dedup_cache[dedup_key] = now
+    _business_message_dedup_cache.move_to_end(dedup_key)
+    while len(_business_message_dedup_cache) > _business_message_dedup_maxsize:
+        _business_message_dedup_cache.popitem(last=False)
+
+    return False
 
 
 async def react_to_message(
