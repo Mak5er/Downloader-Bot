@@ -147,6 +147,7 @@ async def download_with_ytdlp_metrics(
     source: str,
     *,
     max_filesize: Optional[int] = None,
+    merge_output_format: Optional[str] = "mp4",
 ) -> Optional[DownloadMetrics]:
     return await youtube_media_service.download_with_ytdlp_metrics(
         url,
@@ -154,6 +155,7 @@ async def download_with_ytdlp_metrics(
         format_selector,
         source,
         max_filesize=max_filesize,
+        merge_output_format=merge_output_format,
     )
 
 
@@ -522,6 +524,7 @@ async def download_music(message: types.Message, direct_url: Optional[str] = Non
                 "bestaudio/best",
                 "youtube_audio_ytdlp",
                 max_filesize=MAX_FILE_SIZE - 1,
+                merge_output_format=None,
             ),
             attempts=3,
             delay_seconds=2.0,

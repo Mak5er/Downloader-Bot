@@ -302,14 +302,16 @@ class YouTubeMediaService:
         source: str,
         *,
         max_filesize: Optional[int] = None,
+        merge_output_format: Optional[str] = "mp4",
     ) -> Optional[DownloadMetrics]:
         out_path = self._downloader._resolve_target_path(filename)
         os.makedirs(os.path.dirname(out_path) or self._output_dir, exist_ok=True)
         ydl_opts = build_ytdlp_youtube_options(
             format=format_selector,
             outtmpl=out_path,
-            merge_output_format="mp4",
         )
+        if merge_output_format:
+            ydl_opts["merge_output_format"] = merge_output_format
         if max_filesize is not None:
             ydl_opts["max_filesize"] = int(max_filesize)
         start = time.monotonic()
