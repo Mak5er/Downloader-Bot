@@ -12,7 +12,7 @@ from aiogram import Router, F, types
 
 import keyboards as kb
 import messages as bm
-from config import OUTPUT_DIR, CHANNEL_ID
+from config import OUTPUT_DIR, CHANNEL_ID, MAX_FILE_SIZE
 from handlers.deps import build_handler_dependencies
 from services.media.orchestration import handle_download_backpressure, run_media_collection_flow
 from services.media.delivery import send_cached_media_entries
@@ -62,7 +62,6 @@ from utils.http_client import get_http_session
 
 logging = logging.bind(service="twitter")
 
-MAX_FILE_SIZE = int(1.5 * 1024 * 1024 * 1024)  # 1.5 GB
 _TWITTER_HTTP_TIMEOUT = aiohttp.ClientTimeout(total=6, connect=3, sock_read=6)
 _TWITTER_SHORT_TIMEOUT = aiohttp.ClientTimeout(total=4, connect=2, sock_read=4)
 _TWITTER_LINK_REGEX = r"(https?://(www\.)?(twitter|x)\.com/\S+|https?://t\.co/\S+)"

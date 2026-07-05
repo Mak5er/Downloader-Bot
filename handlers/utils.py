@@ -38,6 +38,7 @@ from handlers.telegram_ui_utils import (
     build_rate_limit_text,
     get_message_text,
     handle_download_error,
+    handle_download_backpressure_error,
     handle_video_too_large,
     should_skip_duplicate_business_message,
     load_user_settings,
@@ -53,7 +54,6 @@ from handlers.telegram_ui_utils import (
     safe_edit_inline_text,
     safe_edit_text,
     send_chat_action_if_needed,
-    should_skip_duplicate_business_message,
 )
 
 __all__ = [
@@ -81,6 +81,7 @@ __all__ = [
     "get_bot_url",
     "get_message_text",
     "handle_download_error",
+    "handle_download_backpressure_error",
     "handle_video_too_large",
     "should_skip_duplicate_business_message",
     "load_user_settings",

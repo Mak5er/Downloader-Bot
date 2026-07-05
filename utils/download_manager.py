@@ -1,4 +1,5 @@
 import asyncio
+from contextlib import suppress
 import json
 import math
 import os
@@ -9,7 +10,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Awaitable, Callable, Mapping, MutableMapping, Optional
 
-import requests
+import httpx
 
 from config import DOWNLOAD_MAX_WORKERS_CAP
 from services.logger import logger as logging
@@ -22,6 +23,38 @@ from services.download.queue import (
 from services.runtime.stats import record_download
 
 logging = logging.bind(service="download_manager")
+
+_DEFAULT_SUBPROCESS_TIMEOUT_SECONDS = 30 * 60.0
+_HTTP_CLIENT_REGISTRY_LOCK = threading.Lock()
+_HTTP_CLIENT_REGISTRY: set[httpx.Client] = set()
+
+
+def _read_positive_float_env(name: str, default: float) -> float:
+    value = os.getenv(name)
+    if value is None or not value.strip():
+        return default
+    try:
+        parsed = float(value)
+    except ValueError:
+        logging.warning("Ignoring invalid float env var: %s=%s", name, value)
+        return default
+    return parsed if parsed > 0 else default
+
+
+def _register_http_client(client: httpx.Client) -> None:
+    with _HTTP_CLIENT_REGISTRY_LOCK:
+        _HTTP_CLIENT_REGISTRY.add(client)
+
+
+def close_download_http_clients() -> None:
+    """Close thread-local downloader clients created by worker threads."""
+    with _HTTP_CLIENT_REGISTRY_LOCK:
+        clients = list(_HTTP_CLIENT_REGISTRY)
+        _HTTP_CLIENT_REGISTRY.clear()
+
+    for client in clients:
+        with suppress(Exception):
+            client.close()
 
 
 class DownloadError(Exception):
@@ -88,7 +121,9 @@ ProgressCallback = Callable[[DownloadProgress], Awaitable[None] | None]
 class DownloadConfig:
     """Configuration knobs for the resilient downloader."""
 
-    chunk_size: int = 1024 * 1024  # 1 MiB chunks strike good throughput / memory balance
+    chunk_size: int = (
+        1024 * 1024
+    )  # 1 MiB chunks strike good throughput / memory balance
     multipart_threshold: int = 12 * 1024 * 1024  # Split downloads bigger than 12 MiB
     max_workers: int = 6  # Parallel range requests when supported
     head_timeout: float = 8.0
@@ -143,6 +178,10 @@ class ResilientDownloader:
         except ValueError:
             threshold_mb_value = 0
         self._subprocess_threshold_bytes = max(0, threshold_mb_value) * 1024 * 1024
+        self._subprocess_timeout_seconds = _read_positive_float_env(
+            "DOWNLOAD_SUBPROCESS_TIMEOUT_SECONDS",
+            _DEFAULT_SUBPROCESS_TIMEOUT_SECONDS,
+        )
 
     async def download(
         self,
@@ -185,7 +224,9 @@ class ResilientDownloader:
             if existing is None or existing.done():
                 shared_future = loop.create_future()
                 shared_future.add_done_callback(
-                    lambda fut: fut.exception() if fut.done() and not fut.cancelled() else None
+                    lambda fut: (
+                        fut.exception() if fut.done() and not fut.cancelled() else None
+                    )
                 )
                 self._inflight_downloads[inflight_key] = shared_future
                 should_run = True
@@ -362,7 +403,20 @@ class ResilientDownloader:
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
-        stdout, stderr = await process.communicate(json.dumps(payload).encode("utf-8"))
+        try:
+            stdout, stderr = await asyncio.wait_for(
+                process.communicate(json.dumps(payload).encode("utf-8")),
+                timeout=self._subprocess_timeout_seconds,
+            )
+        except asyncio.TimeoutError as exc:
+            with suppress(ProcessLookupError):
+                process.kill()
+            with suppress(Exception):
+                await asyncio.wait_for(process.communicate(), timeout=5.0)
+            raise DownloadError(
+                f"download worker process timed out after {self._subprocess_timeout_seconds:.0f}s"
+            ) from exc
+
         if process.returncode != 0:
             err = (stderr or b"").decode("utf-8", errors="replace").strip()
             raise DownloadError(err or "download worker process failed")
@@ -437,7 +491,9 @@ class ResilientDownloader:
             )
             if max_size_bytes and total_size > 0 and total_size > max_size_bytes:
                 raise DownloadTooLargeError(total_size, max_size_bytes)
-            use_multipart = supports_range and total_size >= self.config.multipart_threshold
+            use_multipart = (
+                supports_range and total_size >= self.config.multipart_threshold
+            )
 
             if self.config.allow_resume and os.path.exists(temp_path):
                 existing_size = os.path.getsize(temp_path)
@@ -460,7 +516,9 @@ class ResilientDownloader:
                 callback=progress_callback,
             )
             if max_size_bytes and progress_state.downloaded_bytes > max_size_bytes:
-                raise DownloadTooLargeError(progress_state.downloaded_bytes, max_size_bytes)
+                raise DownloadTooLargeError(
+                    progress_state.downloaded_bytes, max_size_bytes
+                )
             self._emit_progress(progress_state, force=False)
 
             if use_multipart and "Range" not in headers:
@@ -540,11 +598,17 @@ class ResilientDownloader:
                 resumed=resumed,
             )
         except DownloadTooLargeError:
-            self._cleanup_partial(temp_path, target_path, remove_target=not had_existing_target)
+            self._cleanup_partial(
+                temp_path, target_path, remove_target=not had_existing_target
+            )
             raise
         except Exception as exc:
-            logging.error("Download failed: url=%s path=%s error=%s", url, target_path, exc)
-            self._cleanup_partial(temp_path, target_path, remove_target=not had_existing_target)
+            logging.error(
+                "Download failed: url=%s path=%s error=%s", url, target_path, exc
+            )
+            self._cleanup_partial(
+                temp_path, target_path, remove_target=not had_existing_target
+            )
             raise DownloadError(str(exc)) from exc
 
     # ----------------------------------------------------------------------------------
@@ -560,7 +624,9 @@ class ResilientDownloader:
         try:
             target_path.relative_to(output_root)
         except ValueError as exc:
-            raise DownloadError(f"Download path escapes output directory: {filename}") from exc
+            raise DownloadError(
+                f"Download path escapes output directory: {filename}"
+            ) from exc
         return str(target_path)
 
     def _probe(self, url: str, headers: Mapping[str, str]) -> tuple[int, bool]:
@@ -568,19 +634,20 @@ class ResilientDownloader:
         attempt = 0
         max_probe_retries = max(0, int(self.config.probe_max_retries))
         while True:
-            session = self._get_session()
+            client = self._get_session()
             try:
-                response = session.head(
+                response = client.head(
                     url,
-                    headers=headers,
-                    allow_redirects=True,
+                    headers=dict(headers),
                     timeout=self.config.head_timeout,
                 )
                 response.raise_for_status()
 
-                raw_size = response.headers.get("Content-Length") or "0"
+                raw_size = response.headers.get("content-length") or "0"
                 total_size = int(raw_size) if raw_size.isdigit() else 0
-                supports_range = "bytes" in (response.headers.get("Accept-Ranges") or "").lower()
+                supports_range = (
+                    "bytes" in (response.headers.get("accept-ranges") or "").lower()
+                )
 
                 logging.debug(
                     "Probe successful: url=%s size=%s supports_range=%s",
@@ -620,35 +687,58 @@ class ResilientDownloader:
         """Stream the full file sequentially."""
         backoff = self.config.retry_backoff
         for attempt in range(1, self.config.max_retries + 2):
-            session = self._get_session()
+            client = self._get_session()
             try:
-                with session.get(
+                with client.stream(
+                    "GET",
                     url,
-                    headers=headers,
-                    stream=True,
-                    allow_redirects=True,
-                    timeout=self.config.stream_timeout,
+                    headers=dict(headers),
                 ) as response:
                     response.raise_for_status()
                     if "Range" in headers:
-                        if response.status_code != 206 or "Content-Range" not in response.headers:
-                            raise _ResumeNotSupportedError("Range request was not honored by the origin")
+                        if (
+                            response.status_code != 206
+                            or "content-range" not in response.headers
+                        ):
+                            raise _ResumeNotSupportedError(
+                                "Range request was not honored by the origin"
+                            )
                     if progress_state and progress_state.total_bytes <= 0:
-                        content_length = response.headers.get("Content-Length") or "0"
+                        content_length = response.headers.get("content-length") or "0"
                         if content_length.isdigit():
-                            base = progress_state.downloaded_bytes if "Range" in headers else 0
+                            base = (
+                                progress_state.downloaded_bytes
+                                if "Range" in headers
+                                else 0
+                            )
                             progress_state.total_bytes = base + int(content_length)
-                    if max_size_bytes and progress_state and progress_state.total_bytes > max_size_bytes > 0:
-                        raise DownloadTooLargeError(progress_state.total_bytes, max_size_bytes)
-                    with open(target_path, "ab" if "Range" in headers else "wb") as outfile:
-                        for chunk in response.iter_content(chunk_size=self.config.chunk_size):
-                            if chunk:
-                                outfile.write(chunk)
-                                if progress_state:
-                                    progress_state.downloaded_bytes += len(chunk)
-                                    if max_size_bytes and progress_state.downloaded_bytes > max_size_bytes > 0:
-                                        raise DownloadTooLargeError(progress_state.downloaded_bytes, max_size_bytes)
-                                    self._emit_progress(progress_state, force=False)
+                    if (
+                        max_size_bytes
+                        and progress_state
+                        and progress_state.total_bytes > max_size_bytes > 0
+                    ):
+                        raise DownloadTooLargeError(
+                            progress_state.total_bytes, max_size_bytes
+                        )
+                    with open(
+                        target_path, "ab" if "Range" in headers else "wb"
+                    ) as outfile:
+                        for chunk in response.iter_bytes(
+                            chunk_size=self.config.chunk_size
+                        ):
+                            outfile.write(chunk)
+                            if progress_state:
+                                progress_state.downloaded_bytes += len(chunk)
+                                if (
+                                    max_size_bytes
+                                    and progress_state.downloaded_bytes
+                                    > max_size_bytes
+                                    > 0
+                                ):
+                                    raise DownloadTooLargeError(
+                                        progress_state.downloaded_bytes, max_size_bytes
+                                    )
+                                self._emit_progress(progress_state, force=False)
                     if progress_state:
                         self._emit_progress(progress_state, force=True)
                 return
@@ -691,25 +781,31 @@ class ResilientDownloader:
             backoff = self.config.retry_backoff
 
             for attempt in range(1, self.config.max_retries + 2):
-                session = self._get_session()
+                client = self._get_session()
                 try:
-                    with session.get(
+                    with client.stream(
+                        "GET",
                         url,
                         headers=range_headers,
-                        stream=True,
-                        allow_redirects=True,
-                        timeout=self.config.stream_timeout,
                     ) as response:
                         response.raise_for_status()
+                        if (
+                            response.status_code != 206
+                            or "content-range" not in response.headers
+                        ):
+                            raise _ResumeNotSupportedError(
+                                f"Range request for {start}-{end} not honored: status={response.status_code}"
+                            )
                         with open(temp_path, "r+b") as part_file:
                             part_file.seek(start)
-                            for chunk in response.iter_content(chunk_size=self.config.chunk_size):
-                                if chunk:
-                                    part_file.write(chunk)
-                                    if progress_state:
-                                        with progress_lock:
-                                            progress_state.downloaded_bytes += len(chunk)
-                                            self._emit_progress(progress_state, force=False)
+                            for chunk in response.iter_bytes(
+                                chunk_size=self.config.chunk_size
+                            ):
+                                part_file.write(chunk)
+                                if progress_state:
+                                    with progress_lock:
+                                        progress_state.downloaded_bytes += len(chunk)
+                                        self._emit_progress(progress_state, force=False)
                     return
                 except Exception as exc:
                     if attempt > self.config.max_retries:
@@ -728,8 +824,12 @@ class ResilientDownloader:
 
         from concurrent.futures import ThreadPoolExecutor, as_completed
 
-        with ThreadPoolExecutor(max_workers=min(self.config.max_workers, len(ranges))) as executor:
-            futures = [executor.submit(fetch_range, start, end) for start, end in ranges]
+        with ThreadPoolExecutor(
+            max_workers=min(self.config.max_workers, len(ranges))
+        ) as executor:
+            futures = [
+                executor.submit(fetch_range, start, end) for start, end in ranges
+            ]
             for future in as_completed(futures):
                 future.result()
 
@@ -754,7 +854,9 @@ class ResilientDownloader:
             start = end + 1
         return ranges
 
-    def _emit_progress(self, state: _ProgressState, *, force: bool, done: bool = False) -> None:
+    def _emit_progress(
+        self, state: _ProgressState, *, force: bool, done: bool = False
+    ) -> None:
         callback = state.callback
         if callback is None:
             return
@@ -766,7 +868,11 @@ class ResilientDownloader:
         elapsed = max(0.001, now - state.started_at)
         speed = state.downloaded_bytes / elapsed
         eta: Optional[float] = None
-        if state.total_bytes > 0 and speed > 0 and state.downloaded_bytes < state.total_bytes:
+        if (
+            state.total_bytes > 0
+            and speed > 0
+            and state.downloaded_bytes < state.total_bytes
+        ):
             eta = (state.total_bytes - state.downloaded_bytes) / speed
 
         callback(
@@ -781,7 +887,9 @@ class ResilientDownloader:
         )
         state.last_emit_at = now
 
-    def _cleanup_partial(self, temp_path: str, target_path: str, *, remove_target: bool = True) -> None:
+    def _cleanup_partial(
+        self, temp_path: str, target_path: str, *, remove_target: bool = True
+    ) -> None:
         """Remove temporary files created by a failed download."""
         paths = [temp_path]
         if remove_target:
@@ -793,22 +901,25 @@ class ResilientDownloader:
                 except OSError:
                     logging.debug("Failed to remove partial file: path=%s", path)
 
-    def _get_session(self) -> requests.Session:
-        """Return a thread-local requests session with sane defaults."""
-        session = getattr(self._thread_local, "session", None)
-        if session is None:
-            session = requests.Session()
-            adapter = requests.adapters.HTTPAdapter(
-                pool_connections=self.config.max_workers * 2,
-                pool_maxsize=self.config.max_workers * 2,
-                max_retries=0,
+    def _get_session(self) -> httpx.Client:
+        """Return a thread-local httpx client with sane defaults."""
+        client = getattr(self._thread_local, "client", None)
+        if client is None or client.is_closed:
+            limits = httpx.Limits(
+                max_connections=self.config.max_workers * 2,
+                max_keepalive_connections=self.config.max_workers,
             )
-            session.mount("http://", adapter)
-            session.mount("https://", adapter)
-            if self._default_headers:
-                session.headers.update(self._default_headers)
-            self._thread_local.session = session
-        return session
+            client = httpx.Client(
+                timeout=httpx.Timeout(
+                    self.config.stream_timeout[1], connect=self.config.stream_timeout[0]
+                ),
+                limits=limits,
+                follow_redirects=True,
+                headers=self._default_headers or None,
+            )
+            self._thread_local.client = client
+            _register_http_client(client)
+        return client
 
 
 def log_download_metrics(source: str, metrics: DownloadMetrics) -> None:

@@ -7,7 +7,7 @@ from aiogram.types import FSInputFile
 
 import messages as bm
 import keyboards as kb
-from config import CHANNEL_ID, COBALT_API_KEY, COBALT_API_URL, OUTPUT_DIR
+from config import CHANNEL_ID, COBALT_API_KEY, COBALT_API_URL, OUTPUT_DIR, MAX_FILE_SIZE
 from handlers.request_dedupe import claim_message_request
 from handlers.user import update_info
 from handlers.utils import (
@@ -16,6 +16,7 @@ from handlers.utils import (
     get_bot_avatar_thumbnail,
     get_bot_url,
     get_message_text,
+    handle_download_backpressure_error,
     handle_download_error,
     load_user_settings,
     make_retry_status_notifier,
@@ -37,7 +38,11 @@ from handlers.utils import (
     with_inline_send_logging,
     with_message_logging,
 )
-from services.logger import logger as logging, summarize_text_for_log, summarize_url_for_log
+from services.logger import (
+    logger as logging,
+    summarize_text_for_log,
+    summarize_url_for_log,
+)
 from app_context import bot, db, send_analytics
 from utils.cobalt_client import fetch_cobalt_data
 from utils.download_manager import (
@@ -64,7 +69,6 @@ logging = logging.bind(service="soundcloud")
 
 router = Router()
 
-MAX_FILE_SIZE = int(1.5 * 1024 * 1024 * 1024)
 SOUNDCLOUD_URL_REGEX = (
     r"(https?://(?:www\.|m\.)?soundcloud\.com/\S+|https?://on\.soundcloud\.com/\S+|"
     r"https?://soundcloud\.app\.goo\.gl/\S+)"
@@ -75,14 +79,19 @@ DownloadError = soundcloud_platform.DownloadError
 strip_soundcloud_url = soundcloud_platform.strip_soundcloud_url
 parse_soundcloud_track = soundcloud_platform.parse_soundcloud_track
 
+
 class SoundCloudService(soundcloud_platform.SoundCloudMediaService):
     def __init__(self, output_dir: str) -> None:
         super().__init__(
             output_dir,
             cobalt_api_url=COBALT_API_URL,
             cobalt_api_key=COBALT_API_KEY,
-            fetch_cobalt_data_func=lambda *args, **kwargs: fetch_cobalt_data(*args, **kwargs),
-            retry_async_operation_func=lambda *args, **kwargs: retry_async_operation(*args, **kwargs),
+            fetch_cobalt_data_func=lambda *args, **kwargs: fetch_cobalt_data(
+                *args, **kwargs
+            ),
+            retry_async_operation_func=lambda *args, **kwargs: retry_async_operation(
+                *args, **kwargs
+            ),
         )
 
 
@@ -90,10 +99,12 @@ soundcloud_service = SoundCloudService(OUTPUT_DIR)
 
 
 @router.message(
-    F.text.regexp(SOUNDCLOUD_URL_REGEX, mode="search") | F.caption.regexp(SOUNDCLOUD_URL_REGEX, mode="search")
+    F.text.regexp(SOUNDCLOUD_URL_REGEX, mode="search")
+    | F.caption.regexp(SOUNDCLOUD_URL_REGEX, mode="search")
 )
 @router.business_message(
-    F.text.regexp(SOUNDCLOUD_URL_REGEX, mode="search") | F.caption.regexp(SOUNDCLOUD_URL_REGEX, mode="search")
+    F.text.regexp(SOUNDCLOUD_URL_REGEX, mode="search")
+    | F.caption.regexp(SOUNDCLOUD_URL_REGEX, mode="search")
 )
 @with_message_logging("soundcloud", "message")
 async def process_soundcloud(message: types.Message, direct_url: Optional[str] = None):
@@ -103,7 +114,9 @@ async def process_soundcloud(message: types.Message, direct_url: Optional[str] =
     try:
         business_id = message.business_connection_id
         show_service_status = business_id is None
-        if await should_skip_duplicate_business_message(message, bot, service_name="SoundCloud", logger=logging):
+        if await should_skip_duplicate_business_message(
+            message, bot, service_name="SoundCloud", logger=logging
+        ):
             return
 
         if direct_url:
@@ -115,13 +128,23 @@ async def process_soundcloud(message: types.Message, direct_url: Optional[str] =
                 return
             source_url = strip_soundcloud_url(match.group(0))
 
-        request_lease = await claim_message_request(message, service="soundcloud", url=source_url)
+        request_lease = await claim_message_request(
+            message, service="soundcloud", url=source_url
+        )
         if request_lease is None:
             return
 
-        logging.info("SoundCloud request: user_id=%s url=%s", message.from_user.id, summarize_url_for_log(source_url))
-        await send_analytics(user_id=message.from_user.id, chat_type=message.chat.type, action_name="soundcloud_audio")
-        await react_to_message(message, "\U0001F47E", business_id=business_id)
+        logging.info(
+            "SoundCloud request: user_id=%s url=%s",
+            message.from_user.id,
+            summarize_url_for_log(source_url),
+        )
+        await send_analytics(
+            user_id=message.from_user.id,
+            chat_type=message.chat.type,
+            action_name="soundcloud_audio",
+        )
+        await react_to_message(message, "\U0001f47e", business_id=business_id)
         user_settings = await load_user_settings(db, message)
         bot_url = await get_bot_url(bot)
         bot_avatar = await get_bot_avatar_thumbnail(bot)
@@ -133,7 +156,9 @@ async def process_soundcloud(message: types.Message, direct_url: Optional[str] =
         track = None
         if db_file_id:
             await safe_edit_text(status_message, bm.uploading_status())
-            await send_chat_action_if_needed(bot, message.chat.id, "upload_audio", business_id)
+            await send_chat_action_if_needed(
+                bot, message.chat.id, "upload_audio", business_id
+            )
             await send_audio_with_thumbnail(
                 message.reply_audio,
                 audio=db_file_id,
@@ -152,13 +177,17 @@ async def process_soundcloud(message: types.Message, direct_url: Optional[str] =
             return
 
         timestamp = datetime.datetime.now().strftime("%Y%m%d%H%M%S")
-        request_id = f"soundcloud_audio:{message.chat.id}:{message.message_id}:{track.id}"
+        request_id = (
+            f"soundcloud_audio:{message.chat.id}:{message.message_id}:{track.id}"
+        )
         audio_name = f"{track.id}_{timestamp}_soundcloud_audio.mp3"
 
         async def _edit_status(text: str) -> None:
             await safe_edit_text(status_message, text)
 
-        on_progress = make_status_text_progress_updater("SoundCloud audio", _edit_status)
+        on_progress = make_status_text_progress_updater(
+            "SoundCloud audio", _edit_status
+        )
         on_retry = make_retry_status_notifier(
             _edit_status,
             enabled=show_service_status,
@@ -184,7 +213,9 @@ async def process_soundcloud(message: types.Message, direct_url: Optional[str] =
             return
 
         await safe_edit_text(status_message, bm.uploading_status())
-        await send_chat_action_if_needed(bot, message.chat.id, "upload_audio", business_id)
+        await send_chat_action_if_needed(
+            bot, message.chat.id, "upload_audio", business_id
+        )
 
         sent = await send_audio_with_thumbnail(
             message.reply_audio,
@@ -203,18 +234,15 @@ async def process_soundcloud(message: types.Message, direct_url: Optional[str] =
         try:
             await db.add_file(cache_key, sent.audio.file_id, "audio")
         except Exception as exc:
-            logging.error("Error caching SoundCloud audio: key=%s error=%s", cache_key, exc)
+            logging.error(
+                "Error caching SoundCloud audio: key=%s error=%s", cache_key, exc
+            )
 
-    except DownloadRateLimitError as exc:
-        if message.business_connection_id is None:
-            await message.reply(build_rate_limit_text(exc.retry_after))
-        else:
-            await handle_download_error(message, business_id=message.business_connection_id)
-    except DownloadQueueBusyError as exc:
-        if message.business_connection_id is None:
-            await message.reply(build_queue_busy_text(exc.position))
-        else:
-            await handle_download_error(message, business_id=message.business_connection_id)
+    except (DownloadRateLimitError, DownloadQueueBusyError) as exc:
+        show_service_status = message.business_connection_id is None
+        await handle_download_backpressure_error(
+            exc, message=message, show_service_status=show_service_status
+        )
     except Exception as exc:
         logging.exception("Error processing SoundCloud request: error=%s", exc)
         await handle_download_error(message, business_id=message.business_connection_id)
@@ -259,13 +287,17 @@ async def inline_soundcloud_query(query: types.InlineQuery):
             await query.answer([], cache_time=1, is_personal=True)
             return
 
-        token = create_inline_video_request("soundcloud", source_url, query.from_user.id, user_settings)
+        token = create_inline_video_request(
+            "soundcloud", source_url, query.from_user.id, user_settings
+        )
         results = [
             types.InlineQueryResultArticle(
                 id=f"soundcloud_inline:{token}",
                 title="SoundCloud Audio",
-                description=track.title or "Press the button to send this audio inline.",
-                thumbnail_url=track.thumbnail_url or get_inline_service_icon("soundcloud"),
+                description=track.title
+                or "Press the button to send this audio inline.",
+                thumbnail_url=track.thumbnail_url
+                or get_inline_service_icon("soundcloud"),
                 input_message_content=types.InputTextMessageContent(
                     message_text=bm.inline_send_audio_prompt("SoundCloud"),
                 ),
@@ -308,13 +340,19 @@ async def _send_inline_soundcloud_audio(
 
     audio_path: Optional[str] = None
 
-    async def _edit_inline_status(text: str, *, with_retry_button: bool = False) -> None:
+    async def _edit_inline_status(
+        text: str, *, with_retry_button: bool = False
+    ) -> None:
         reply_markup = (
-            kb.inline_send_media_keyboard("Send audio inline", f"inline:soundcloud:{token}")
+            kb.inline_send_media_keyboard(
+                "Send audio inline", f"inline:soundcloud:{token}"
+            )
             if with_retry_button
             else None
         )
-        await safe_edit_inline_text(bot, inline_message_id, text, reply_markup=reply_markup)
+        await safe_edit_inline_text(
+            bot, inline_message_id, text, reply_markup=reply_markup
+        )
 
     try:
         source_url = request.source_url
@@ -335,7 +373,9 @@ async def _send_inline_soundcloud_audio(
 
             await _edit_inline_status(bm.downloading_audio_status())
 
-            on_progress = make_status_text_progress_updater("SoundCloud audio", _edit_inline_status)
+            on_progress = make_status_text_progress_updater(
+                "SoundCloud audio", _edit_inline_status
+            )
 
             metrics = await soundcloud_service.download_media(
                 track.audio_url,
@@ -346,7 +386,9 @@ async def _send_inline_soundcloud_audio(
             )
             if not metrics:
                 reset_inline_video_request(token)
-                await _edit_inline_status(bm.something_went_wrong(), with_retry_button=True)
+                await _edit_inline_status(
+                    bm.something_went_wrong(), with_retry_button=True
+                )
                 return
 
             audio_path = metrics.path
@@ -391,10 +433,14 @@ async def _send_inline_soundcloud_audio(
         await _edit_inline_status(bm.something_went_wrong(), with_retry_button=True)
     except DownloadRateLimitError as e:
         reset_inline_video_request(token)
-        await _edit_inline_status(build_rate_limit_text(e.retry_after), with_retry_button=True)
+        await _edit_inline_status(
+            build_rate_limit_text(e.retry_after), with_retry_button=True
+        )
     except DownloadQueueBusyError as e:
         reset_inline_video_request(token)
-        await _edit_inline_status(build_queue_busy_text(e.position), with_retry_button=True)
+        await _edit_inline_status(
+            build_queue_busy_text(e.position), with_retry_button=True
+        )
     except Exception:
         reset_inline_video_request(token)
         await _edit_inline_status(bm.something_went_wrong(), with_retry_button=True)

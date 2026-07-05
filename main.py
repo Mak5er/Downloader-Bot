@@ -29,9 +29,11 @@ from services.logger import logger as logging
 from services.storage.db import AnalyticsEvent, DataBase
 from services.download.queue import shutdown_download_queue
 from services.runtime.analytics_status import record_drop as record_analytics_drop
+from utils.download_manager import close_download_http_clients
 from utils.http_client import close_http_session
 
 logging = logging.bind(service="main")
+
 
 @dataclass(slots=True)
 class _AnalyticsPayload:
@@ -129,14 +131,16 @@ async def _send_to_google_analytics(payload: _AnalyticsPayload) -> None:
     params = {
         "client_id": client_id,
         "user_id": user_identifier,
-        "events": [{
-            "name": payload.action_name,
-            "params": {
-                "chat_type": payload.chat_type,
-                "session_id": session_id,
-                "engagement_time_msec": "1000",
-            },
-        }],
+        "events": [
+            {
+                "name": payload.action_name,
+                "params": {
+                    "chat_type": payload.chat_type,
+                    "session_id": session_id,
+                    "engagement_time_msec": "1000",
+                },
+            }
+        ],
     }
 
     client = await _get_analytics_http_client()
@@ -196,7 +200,9 @@ async def _analytics_worker(worker_id: int) -> None:
     if queue is None:
         return
 
-    with logging.context(flow="analytics_worker", request_id=f"analytics-worker-{worker_id}"):
+    with logging.context(
+        flow="analytics_worker", request_id=f"analytics-worker-{worker_id}"
+    ):
         loop = asyncio.get_running_loop()
         while True:
             item = await queue.get()
@@ -227,7 +233,9 @@ async def _analytics_worker(worker_id: int) -> None:
             try:
                 await _flush_analytics_batch(batch)
             except Exception as error:
-                logging.error("Analytics worker failed: worker=%s error=%s", worker_id, error)
+                logging.error(
+                    "Analytics worker failed: worker=%s error=%s", worker_id, error
+                )
             finally:
                 for _ in batch:
                     queue.task_done()
@@ -268,7 +276,9 @@ async def send_analytics(user_id, chat_type, action_name):
     try:
         payload = _AnalyticsPayload(
             user_id=user_id,
-            chat_type=chat_type.value if hasattr(chat_type, "value") else str(chat_type),
+            chat_type=chat_type.value
+            if hasattr(chat_type, "value")
+            else str(chat_type),
             action_name=action_name,
         )
 
@@ -336,14 +346,17 @@ async def main():
 
             logging.perf(
                 "bot_startup_duration",
-                duration_ms=(asyncio.get_running_loop().time() - startup_started_at) * 1000.0,
+                duration_ms=(asyncio.get_running_loop().time() - startup_started_at)
+                * 1000.0,
                 bot_username=bot_me.username,
             )
             logging.event("polling_started")
             await dp.start_polling(
                 bot,
                 allowed_updates=dp.resolve_used_update_types(),
-                tasks_concurrency_limit=max(1, int(BOT_POLLING_TASKS_CONCURRENCY_LIMIT)),
+                tasks_concurrency_limit=max(
+                    1, int(BOT_POLLING_TASKS_CONCURRENCY_LIMIT)
+                ),
             )
         finally:
             logging.event("polling_stopping")
@@ -352,6 +365,8 @@ async def main():
                     await stop_analytics_workers()
             with suppress(Exception):
                 await shutdown_download_queue()
+            with suppress(Exception):
+                close_download_http_clients()
             with suppress(Exception):
                 await close_http_session()
             with suppress(Exception):

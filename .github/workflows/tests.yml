@@ -48,6 +48,9 @@ jobs:
       - name: Run ruff
         run: ruff check --select=E,F,W --ignore=E501 .
 
+      - name: Compile check
+        run: python -m compileall -q .
+
   pytest:
     runs-on: ubuntu-latest
     timeout-minutes: 15

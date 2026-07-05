@@ -9,7 +9,7 @@ from yt_dlp import YoutubeDL
 
 import keyboards as kb
 import messages as bm
-from config import OUTPUT_DIR, CHANNEL_ID
+from config import OUTPUT_DIR, CHANNEL_ID, MAX_FILE_SIZE
 from handlers.deps import build_handler_dependencies
 from handlers.request_dedupe import claim_message_request
 from handlers.youtube_inline import (
@@ -18,16 +18,15 @@ from handlers.youtube_inline import (
     send_inline_youtube_music,
     send_inline_youtube_video,
 )
-from services.media.orchestration import handle_download_backpressure, run_single_media_flow
+from services.media.orchestration import run_single_media_flow
 from services.media.delivery import AUDIO_CACHE_VARIANT, send_audio_with_thumbnail
 from services.media.video_metadata import build_video_send_kwargs
 from handlers.user import update_info
 from handlers.utils import (
-    build_queue_busy_text,
-    build_rate_limit_text,
     get_bot_url,
     get_bot_avatar_thumbnail,
     get_message_text,
+    handle_download_backpressure_error,
     handle_download_error,
     handle_video_too_large,
     load_user_settings,
@@ -63,9 +62,12 @@ from services.platforms import youtube_media as youtube_platform
 
 logging = logging.bind(service="youtube")
 
-MAX_FILE_SIZE = int(1.5 * 1024 * 1024 * 1024)  # 1.5 GB Telegram-safe limit
-YOUTUBE_VIDEO_URL_REGEX = r"(https?://(www\.)?(youtube|youtu|youtube-nocookie)\.(com|be)/(?!@)\S+)"
-YOUTUBE_MUSIC_URL_REGEX = r"(https?://)?music\.(youtube|youtu|youtube-nocookie)\.(com|be)/\S+"
+YOUTUBE_VIDEO_URL_REGEX = (
+    r"(https?://(www\.)?(youtube|youtu|youtube-nocookie)\.(com|be)/(?!@)\S+)"
+)
+YOUTUBE_MUSIC_URL_REGEX = (
+    r"(https?://)?music\.(youtube|youtu|youtube-nocookie)\.(com|be)/\S+"
+)
 YOUTUBE_INFO_TIMEOUT_SECONDS = youtube_platform.YOUTUBE_INFO_TIMEOUT_SECONDS
 
 router = Router()
@@ -100,7 +102,9 @@ class YouTubeMediaService(youtube_platform.YouTubeMediaService):
     def __init__(self, output_dir: str) -> None:
         super().__init__(
             output_dir,
-            retry_async_operation_func=lambda *args, **kwargs: retry_async_operation(*args, **kwargs),
+            retry_async_operation_func=lambda *args, **kwargs: retry_async_operation(
+                *args, **kwargs
+            ),
             youtube_dl_factory=lambda options: YoutubeDL(options),
         )
 
@@ -274,11 +278,15 @@ async def _download_youtube_media(
     | F.caption.regexp(YOUTUBE_VIDEO_URL_REGEX, mode="search")
 )
 async def download_video(message: types.Message, direct_url: Optional[str] = None):
-    url = direct_url or _extract_youtube_url(get_message_text(message), YOUTUBE_VIDEO_URL_REGEX)
+    url = direct_url or _extract_youtube_url(
+        get_message_text(message), YOUTUBE_VIDEO_URL_REGEX
+    )
     if not url:
         return
     business_id = message.business_connection_id
-    if await should_skip_duplicate_business_message(message, bot, service_name="YouTube video", logger=logging):
+    if await should_skip_duplicate_business_message(
+        message, bot, service_name="YouTube video", logger=logging
+    ):
         await update_info(message)
         return
 
@@ -288,7 +296,11 @@ async def download_video(message: types.Message, direct_url: Optional[str] = Non
         message.from_user.username,
         summarize_url_for_log(url),
     )
-    await send_analytics(user_id=message.from_user.id, chat_type=message.chat.type, action_name="youtube_video")
+    await send_analytics(
+        user_id=message.from_user.id,
+        chat_type=message.chat.type,
+        action_name="youtube_video",
+    )
     status_message: Optional[types.Message] = None
     request_lease = None
     show_service_status = business_id is None
@@ -311,14 +323,18 @@ async def download_video(message: types.Message, direct_url: Optional[str] = Non
             return
         video = await asyncio.to_thread(get_video_stream, yt)
 
-        audio_callback_data = f"audio:youtube:{yt['id']}" if yt and yt.get("id") else None
+        audio_callback_data = (
+            f"audio:youtube:{yt['id']}" if yt and yt.get("id") else None
+        )
 
-        views = safe_int(yt.get('view_count'), None)
-        likes = safe_int(yt.get('like_count'), None)
+        views = safe_int(yt.get("view_count"), None)
+        likes = safe_int(yt.get("like_count"), None)
 
         name = f"{yt['id']}_youtube_video.mp4"
         await safe_edit_text(status_message, bm.downloading_video_status())
-        size_hint_raw = (video or {}).get("filesize") or (video or {}).get("filesize_approx")
+        size_hint_raw = (video or {}).get("filesize") or (video or {}).get(
+            "filesize_approx"
+        )
         size_hint = safe_int(size_hint_raw, 0) or None
         if size_hint and size_hint >= MAX_FILE_SIZE:
             await handle_video_too_large(message, business_id=business_id)
@@ -337,28 +353,33 @@ async def download_video(message: types.Message, direct_url: Optional[str] = Non
                 comments=None,
                 shares=None,
                 music_play_url=None,
-                video_url=yt['webpage_url'],
+                video_url=yt["webpage_url"],
                 user_settings=user_settings,
                 audio_callback_data=audio_callback_data,
             )
 
         async def _download_media():
             return await _download_youtube_media(
-                video, yt, name, size_hint,
-                message.from_user.id, message.chat.id,
-                on_progress, on_retry_download,
+                video,
+                yt,
+                name,
+                size_hint,
+                message.from_user.id,
+                message.chat.id,
+                on_progress,
+                on_retry_download,
             )
 
         async def _send_cached(file_id: str):
             logging.info(
                 "Serving cached YouTube video: url=%s file_id=%s",
-                summarize_url_for_log(yt['webpage_url']),
+                summarize_url_for_log(yt["webpage_url"]),
                 file_id,
             )
             try:
                 return await message.reply_video(
                     video=file_id,
-                    caption=bm.captions(user_captions, yt['title'], bot_url),
+                    caption=bm.captions(user_captions, yt["title"], bot_url),
                     reply_markup=_reply_markup(),
                     parse_mode="HTML",
                 )
@@ -368,14 +389,16 @@ async def download_video(message: types.Message, direct_url: Optional[str] = Non
         async def _send_downloaded(path: str):
             return await message.reply_video(
                 video=FSInputFile(path),
-                caption=bm.captions(user_captions, yt['title'], bot_url),
+                caption=bm.captions(user_captions, yt["title"], bot_url),
                 reply_markup=_reply_markup(),
                 parse_mode="HTML",
                 **(await build_video_send_kwargs(path)),
             )
 
         async def _after_send():
-            await maybe_delete_user_message(message, user_settings.get("delete_message"))
+            await maybe_delete_user_message(
+                message, user_settings.get("delete_message")
+            )
 
         async def _inspect_metrics(metrics):
             if metrics.size >= MAX_FILE_SIZE:
@@ -384,29 +407,33 @@ async def download_video(message: types.Message, direct_url: Optional[str] = Non
             return True
 
         async def _handle_backpressure(exc: Exception) -> None:
-            await handle_download_backpressure(
+            await handle_download_backpressure_error(
                 exc,
-                business_id=business_id,
-                on_rate_limit_reply=lambda retry_after: message.reply(build_rate_limit_text(retry_after)),
-                on_queue_busy_reply=lambda position: message.reply(build_queue_busy_text(position)),
-                on_business_error=lambda: handle_download_error(message, business_id=business_id),
+                message=message,
+                show_service_status=business_id is None,
             )
 
         sent_message = await run_single_media_flow(
-            cache_key=yt['webpage_url'],
+            cache_key=yt["webpage_url"],
             cache_file_type="video",
             db_service=db,
             upload_status_text=bm.uploading_status(),
             upload_action="upload_video",
             update_status=_edit_status,
-            send_chat_action=lambda action: send_chat_action_if_needed(bot, message.chat.id, action, business_id),
+            send_chat_action=lambda action: send_chat_action_if_needed(
+                bot, message.chat.id, action, business_id
+            ),
             send_cached=_send_cached,
             download_media=_download_media,
             send_downloaded=_send_downloaded,
-            extract_file_id=lambda sent: sent.video.file_id if getattr(sent, "video", None) else None,
+            extract_file_id=lambda sent: (
+                sent.video.file_id if getattr(sent, "video", None) else None
+            ),
             cleanup_path=remove_file,
             delete_status_message=lambda: safe_delete_message(status_message),
-            on_missing_media=lambda: handle_download_error(message, business_id=business_id),
+            on_missing_media=lambda: handle_download_error(
+                message, business_id=business_id
+            ),
             on_after_send=_after_send,
             inspect_metrics=_inspect_metrics,
             on_rate_limit=_handle_backpressure,
@@ -416,7 +443,7 @@ async def download_video(message: types.Message, direct_url: Optional[str] = Non
             request_lease.mark_success()
             logging.info(
                 "YouTube video cached: url=%s file_id=%s",
-                summarize_url_for_log(yt['webpage_url']),
+                summarize_url_for_log(yt["webpage_url"]),
                 sent_message.video.file_id,
             )
     except DownloadTooLargeError:
@@ -424,7 +451,9 @@ async def download_video(message: types.Message, direct_url: Optional[str] = Non
     except asyncio.TimeoutError:
         if show_service_status:
             await safe_edit_text(status_message, bm.timeout_error())
-            await handle_download_error(message, business_id=business_id, text=bm.timeout_error())
+            await handle_download_error(
+                message, business_id=business_id, text=bm.timeout_error()
+            )
         else:
             await handle_download_error(message, business_id=business_id)
     except Exception as e:
@@ -447,11 +476,15 @@ async def download_video(message: types.Message, direct_url: Optional[str] = Non
 )
 @with_message_logging("youtube", "music_message")
 async def download_music(message: types.Message, direct_url: Optional[str] = None):
-    url = direct_url or _extract_youtube_url(get_message_text(message), YOUTUBE_MUSIC_URL_REGEX)
+    url = direct_url or _extract_youtube_url(
+        get_message_text(message), YOUTUBE_MUSIC_URL_REGEX
+    )
     if not url:
         return
     business_id = message.business_connection_id
-    if await should_skip_duplicate_business_message(message, bot, service_name="YouTube audio", logger=logging):
+    if await should_skip_duplicate_business_message(
+        message, bot, service_name="YouTube audio", logger=logging
+    ):
         await update_info(message)
         return
 
@@ -483,11 +516,15 @@ async def download_music(message: types.Message, direct_url: Optional[str] = Non
         audio = await asyncio.to_thread(get_audio_stream, yt)
 
         audio_duration = yt.get("duration")
-        cache_key = build_media_cache_key(yt["webpage_url"], variant=AUDIO_CACHE_VARIANT)
+        cache_key = build_media_cache_key(
+            yt["webpage_url"], variant=AUDIO_CACHE_VARIANT
+        )
         db_file_id = await db.get_file_id(cache_key)
         if db_file_id:
             await safe_edit_text(status_message, bm.uploading_status())
-            await send_chat_action_if_needed(bot, message.chat.id, "upload_audio", business_id)
+            await send_chat_action_if_needed(
+                bot, message.chat.id, "upload_audio", business_id
+            )
             await send_audio_with_thumbnail(
                 message.reply_audio,
                 audio=db_file_id,
@@ -498,13 +535,17 @@ async def download_music(message: types.Message, direct_url: Optional[str] = Non
                 duration=audio_duration,
                 parse_mode="HTML",
             )
-            await maybe_delete_user_message(message, user_settings.get("delete_message"))
+            await maybe_delete_user_message(
+                message, user_settings.get("delete_message")
+            )
             request_lease.mark_success()
             return
 
         audio_ext = (audio or {}).get("ext") or "m4a"
         name = f"{yt['id']}_youtube_audio.{audio_ext}"
-        size_hint_raw = (audio or {}).get("filesize") or (audio or {}).get("filesize_approx")
+        size_hint_raw = (audio or {}).get("filesize") or (audio or {}).get(
+            "filesize_approx"
+        )
         size_hint = safe_int(size_hint_raw, 0) or None
         if size_hint and size_hint >= MAX_FILE_SIZE:
             await message.reply(bm.audio_too_large())
@@ -519,7 +560,7 @@ async def download_music(message: types.Message, direct_url: Optional[str] = Non
 
         metrics = await retry_async_operation(
             lambda: download_with_ytdlp_metrics(
-                yt['webpage_url'],
+                yt["webpage_url"],
                 name,
                 "bestaudio/best",
                 "youtube_audio_ytdlp",
@@ -547,40 +588,39 @@ async def download_music(message: types.Message, direct_url: Optional[str] = Non
             return
 
         await safe_edit_text(status_message, bm.uploading_status())
-        await send_chat_action_if_needed(bot, message.chat.id, "upload_voice", business_id)
+        await send_chat_action_if_needed(
+            bot, message.chat.id, "upload_voice", business_id
+        )
 
         sent_message = await send_audio_with_thumbnail(
             message.reply_audio,
             audio=FSInputFile(metrics.path),
-            title=yt['title'],
+            title=yt["title"],
             caption=bm.captions(None, None, bot_url),
             audio_path=metrics.path,
             bot_avatar=bot_avatar,
             bot_url=bot_url,
             duration=audio_duration,
-            parse_mode="HTML"
+            parse_mode="HTML",
         )
         await maybe_delete_user_message(message, user_settings.get("delete_message"))
         await db.add_file(cache_key, sent_message.audio.file_id, "audio")
         request_lease.mark_success()
 
         await remove_file(metrics.path)
-    except DownloadRateLimitError as e:
-        if show_service_status:
-            await message.reply(build_rate_limit_text(e.retry_after))
-        else:
-            await handle_download_error(message, business_id=business_id)
-    except DownloadQueueBusyError as e:
-        if show_service_status:
-            await message.reply(build_queue_busy_text(e.position))
-        else:
-            await handle_download_error(message, business_id=business_id)
-    except DownloadTooLargeError:
-        await message.reply(bm.audio_too_large())
+    except (DownloadRateLimitError, DownloadQueueBusyError, DownloadTooLargeError) as e:
+        await handle_download_backpressure_error(
+            e,
+            message=message,
+            show_service_status=show_service_status,
+            too_large_text=bm.audio_too_large(),
+        )
     except asyncio.TimeoutError:
         if show_service_status:
             await safe_edit_text(status_message, bm.timeout_error())
-            await handle_download_error(message, business_id=business_id, text=bm.timeout_error())
+            await handle_download_error(
+                message, business_id=business_id, text=bm.timeout_error()
+            )
         else:
             await handle_download_error(message, business_id=business_id)
     except Exception as e:
@@ -623,11 +663,15 @@ async def download_youtube_mp3_callback(call: types.CallbackQuery):
             return
 
         audio_duration = yt.get("duration")
-        cache_key = build_media_cache_key(yt["webpage_url"], variant=AUDIO_CACHE_VARIANT)
+        cache_key = build_media_cache_key(
+            yt["webpage_url"], variant=AUDIO_CACHE_VARIANT
+        )
         db_file_id = await db.get_file_id(cache_key)
         if db_file_id:
             await safe_edit_text(status_message, bm.uploading_status())
-            await send_chat_action_if_needed(bot, call.message.chat.id, "upload_audio", business_id)
+            await send_chat_action_if_needed(
+                bot, call.message.chat.id, "upload_audio", business_id
+            )
             await send_audio_with_thumbnail(
                 call.message.reply_audio,
                 audio=db_file_id,
@@ -641,6 +685,7 @@ async def download_youtube_mp3_callback(call: types.CallbackQuery):
             return
 
         base_name = f"{yt['id']}_youtube_audio"
+
         async def on_retry_download(failed_attempt: int, total_attempts: int, _error):
             if show_service_status and failed_attempt >= 2:
                 await safe_edit_text(
@@ -650,7 +695,7 @@ async def download_youtube_mp3_callback(call: types.CallbackQuery):
 
         metrics = await retry_async_operation(
             lambda: download_mp3_with_ytdlp_metrics(
-                yt['webpage_url'],
+                yt["webpage_url"],
                 base_name,
                 "youtube_audio_mp3",
                 max_filesize=MAX_FILE_SIZE - 1,
@@ -669,7 +714,9 @@ async def download_youtube_mp3_callback(call: types.CallbackQuery):
             await remove_file(metrics.path)
             return
 
-        await send_chat_action_if_needed(bot, call.message.chat.id, "upload_audio", business_id)
+        await send_chat_action_if_needed(
+            bot, call.message.chat.id, "upload_audio", business_id
+        )
         await safe_edit_text(status_message, bm.uploading_status())
         sent_message = await send_audio_with_thumbnail(
             call.message.reply_audio,
@@ -688,7 +735,9 @@ async def download_youtube_mp3_callback(call: types.CallbackQuery):
     except asyncio.TimeoutError:
         if show_service_status:
             await safe_edit_text(status_message, bm.timeout_error())
-        await handle_download_error(call.message, business_id=business_id, text=bm.timeout_error())
+        await handle_download_error(
+            call.message, business_id=business_id, text=bm.timeout_error()
+        )
     finally:
         await safe_delete_message(status_message)
 
@@ -794,7 +843,9 @@ async def _send_inline_youtube_video(
 @with_chosen_inline_logging("youtube", "music_chosen_inline")
 async def chosen_inline_youtube_music_result(result: types.ChosenInlineResult):
     if not result.inline_message_id:
-        logging.warning("Chosen inline YouTube Music result is missing inline_message_id")
+        logging.warning(
+            "Chosen inline YouTube Music result is missing inline_message_id"
+        )
         return
 
     token = result.result_id.removeprefix("ytmusic_inline:")

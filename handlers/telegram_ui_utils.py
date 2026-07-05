@@ -11,7 +11,12 @@ from aiogram.exceptions import TelegramAPIError, TelegramBadRequest
 import messages as bm
 from services.logger import logger as logging
 from services.download.queue import QueueTicket
-from utils.download_manager import DownloadProgress
+from utils.download_manager import (
+    DownloadProgress,
+    DownloadRateLimitError,
+    DownloadQueueBusyError,
+    DownloadTooLargeError,
+)
 
 T = TypeVar("T")
 
@@ -22,7 +27,9 @@ _message_edit_cache: "OrderedDict[tuple[Any, ...], tuple[str, tuple[tuple[str, s
 _message_edit_cache_maxsize = 4096
 _business_owner_user_cache: dict[str, tuple[float, int]] = {}
 _business_owner_cache_ttl_seconds = 300.0
-_business_message_dedup_cache: "OrderedDict[tuple[int, int, int, str], float]" = OrderedDict()
+_business_message_dedup_cache: "OrderedDict[tuple[int, int, int, str], float]" = (
+    OrderedDict()
+)
 _business_message_dedup_ttl_seconds = 60.0
 _business_message_dedup_maxsize = 4096
 
@@ -41,7 +48,11 @@ async def get_business_owner_user_id(bot: Bot, business_id: str) -> int | None:
     try:
         connection = await bot.get_business_connection(business_id)
     except Exception as exc:
-        logging.warning("Failed to resolve business owner: business_id=%s error=%s", business_id, exc)
+        logging.warning(
+            "Failed to resolve business owner: business_id=%s error=%s",
+            business_id,
+            exc,
+        )
         return None
 
     owner_id = getattr(getattr(connection, "user", None), "id", None)
@@ -79,7 +90,7 @@ async def should_skip_duplicate_business_message(
     chat_id = getattr(getattr(message, "chat", None), "id", None)
     if chat_id is None:
         return False
-        
+
     chat_id = int(chat_id)
 
     if sender_id == owner_id:
@@ -93,12 +104,15 @@ async def should_skip_duplicate_business_message(
     timestamp = int(msg_date.timestamp()) if msg_date else 0
 
     dedup_key = (sender_id, receiver_id, timestamp, text)
-    
+
     now = time.monotonic()
-    
+
     # Clean up old entries occasionally if we want, or just rely on maxsize.
     cached_time = _business_message_dedup_cache.get(dedup_key)
-    if cached_time is not None and now - cached_time < _business_message_dedup_ttl_seconds:
+    if (
+        cached_time is not None
+        and now - cached_time < _business_message_dedup_ttl_seconds
+    ):
         logger.info(
             "Skipping duplicate %s business message: sender_id=%s receiver_id=%s text_len=%s",
             service_name,
@@ -212,6 +226,44 @@ async def handle_video_too_large(
     )
 
 
+async def handle_download_backpressure_error(
+    exc: Exception,
+    *,
+    message: types.Message,
+    show_service_status: bool,
+    too_large_text: Optional[str] = None,
+    too_large_handler: Optional[Callable[[], Awaitable[None]]] = None,
+) -> None:
+    """Handle download queue/rate-limit errors with consistent UX."""
+    if isinstance(exc, DownloadRateLimitError):
+        if show_service_status:
+            await message.reply(build_rate_limit_text(exc.retry_after))
+        else:
+            await handle_download_error(
+                message, business_id=message.business_connection_id
+            )
+        return
+    if isinstance(exc, DownloadQueueBusyError):
+        if show_service_status:
+            await message.reply(build_queue_busy_text(exc.position))
+        else:
+            await handle_download_error(
+                message, business_id=message.business_connection_id
+            )
+        return
+    if isinstance(exc, DownloadTooLargeError):
+        if too_large_handler is not None:
+            await too_large_handler()
+        elif too_large_text is not None:
+            await message.reply(too_large_text)
+        else:
+            await handle_video_too_large(
+                message, business_id=message.business_connection_id
+            )
+        return
+    raise exc
+
+
 async def maybe_delete_user_message(message: types.Message, delete_flag: Any) -> bool:
     if str(delete_flag).lower() != "on":
         return False
@@ -303,7 +355,9 @@ def make_retry_status_notifier(
     return _on_retry
 
 
-async def safe_edit_text(message: Optional[types.Message], text: str, **kwargs: Any) -> None:
+async def safe_edit_text(
+    message: Optional[types.Message], text: str, **kwargs: Any
+) -> None:
     """Best-effort edit of a bot message (status/progress)."""
     if not message:
         return
@@ -337,7 +391,9 @@ async def safe_edit_inline_text(
     if cached == payload:
         return True
     try:
-        await bot.edit_message_text(text=text, inline_message_id=inline_message_id, **kwargs)
+        await bot.edit_message_text(
+            text=text, inline_message_id=inline_message_id, **kwargs
+        )
         _message_edit_cache[cache_key] = payload
         _message_edit_cache.move_to_end(cache_key)
         while len(_message_edit_cache) > _message_edit_cache_maxsize:
@@ -357,7 +413,9 @@ async def safe_edit_inline_media(
     if not inline_message_id:
         return False
     try:
-        await bot.edit_message_media(inline_message_id=inline_message_id, media=media, **kwargs)
+        await bot.edit_message_media(
+            inline_message_id=inline_message_id, media=media, **kwargs
+        )
         return True
     except Exception:
         return False
@@ -450,8 +508,7 @@ def build_progress_status(label: str, progress: DownloadProgress) -> str:
             f"{downloaded} / {total} • {speed} • {_format_eta_short(progress.eta_seconds)}"
         )
     return (
-        f"⬇️ {label}\n"
-        f"{downloaded} • {speed} • {_format_eta_short(progress.eta_seconds)}"
+        f"⬇️ {label}\n{downloaded} • {speed} • {_format_eta_short(progress.eta_seconds)}"
     )
 
 
@@ -477,7 +534,9 @@ async def retry_async_operation(
     delay_seconds: float = 1.0,
     should_retry_result: Optional[Callable[[T], bool]] = None,
     retry_on_exception: Optional[Callable[[BaseException], bool]] = None,
-    on_retry: Optional[Callable[[int, int, Optional[BaseException]], Awaitable[Any] | Any]] = None,
+    on_retry: Optional[
+        Callable[[int, int, Optional[BaseException]], Awaitable[Any] | Any]
+    ] = None,
 ) -> Optional[T]:
     """
     Retry an async operation with exponential backoff and jitter.

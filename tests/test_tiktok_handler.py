@@ -6,13 +6,16 @@ import pytest
 
 from handlers import telegram_ui_utils, tiktok
 from services.inline.album_links import get_inline_album_request
-from services.inline.video_requests import create_inline_video_request, get_inline_video_request
+from services.inline.video_requests import (
+    create_inline_video_request,
+    get_inline_video_request,
+)
 
 
 @pytest.fixture(autouse=True)
 def stub_user_agent(monkeypatch):
     monkeypatch.setattr(tiktok, "UserAgent", lambda: SimpleNamespace(random="Agent"))
-    tiktok._expanded_tiktok_url_cache.clear()
+    tiktok.tiktok_service._expanded_tiktok_url_cache.clear()
 
 
 class DummyResponse:
@@ -44,7 +47,11 @@ async def test_process_tiktok_url_expands_short_links(monkeypatch):
         assert "User-Agent" in headers
         return DummyResponse(url=expected_url)
 
-    monkeypatch.setattr(tiktok, "get_http_session", AsyncMock(return_value=DummySession(head_handler=fake_head)))
+    monkeypatch.setattr(
+        tiktok,
+        "get_http_session",
+        AsyncMock(return_value=DummySession(head_handler=fake_head)),
+    )
     result = await tiktok.process_tiktok_url_async("https://vm.tiktok.com/ABC123/")
     assert result == expected_url
 
@@ -56,7 +63,11 @@ async def test_process_tiktok_url_returns_original_on_error(monkeypatch):
     def boom(*_a, **_k):
         raise tiktok.aiohttp.ClientError("fail")
 
-    monkeypatch.setattr(tiktok, "get_http_session", AsyncMock(return_value=DummySession(head_handler=boom)))
+    monkeypatch.setattr(
+        tiktok,
+        "get_http_session",
+        AsyncMock(return_value=DummySession(head_handler=boom)),
+    )
     result = await tiktok.process_tiktok_url_async(original_url)
     assert result == original_url
 
@@ -68,8 +79,14 @@ async def test_process_tiktok_url_strips_query(monkeypatch):
     def fake_head(url, allow_redirects, headers, timeout=None):
         return DummyResponse(url=f"{expanded_url}?is_from_webapp=1&sender_device=pc")
 
-    monkeypatch.setattr(tiktok, "get_http_session", AsyncMock(return_value=DummySession(head_handler=fake_head)))
-    result = await tiktok.process_tiktok_url_async(f"{expanded_url}?is_from_webapp=1&sender_device=pc")
+    monkeypatch.setattr(
+        tiktok,
+        "get_http_session",
+        AsyncMock(return_value=DummySession(head_handler=fake_head)),
+    )
+    result = await tiktok.process_tiktok_url_async(
+        f"{expanded_url}?is_from_webapp=1&sender_device=pc"
+    )
     assert result == expanded_url
 
 
@@ -122,7 +139,9 @@ async def test_process_tiktok_skips_outgoing_business_owner_message(monkeypatch)
         caption=None,
     )
 
-    monkeypatch.setattr(tiktok, "get_bot_url", AsyncMock(return_value="https://t.me/maxloadbot"))
+    monkeypatch.setattr(
+        tiktok, "get_bot_url", AsyncMock(return_value="https://t.me/maxloadbot")
+    )
     monkeypatch.setattr(
         tiktok.bot,
         "get_business_connection",
@@ -130,11 +149,15 @@ async def test_process_tiktok_skips_outgoing_business_owner_message(monkeypatch)
     )
     monkeypatch.setattr(tiktok, "fetch_tiktok_data_with_retry", AsyncMock())
     monkeypatch.setattr(tiktok, "claim_message_request", AsyncMock())
-    monkeypatch.setattr(tiktok, "should_skip_duplicate_business_message", AsyncMock(return_value=True))
+    monkeypatch.setattr(
+        tiktok, "should_skip_duplicate_business_message", AsyncMock(return_value=True)
+    )
+    monkeypatch.setattr(tiktok, "react_to_message", AsyncMock())
+    monkeypatch.setattr(tiktok, "update_info", AsyncMock())
 
     await tiktok.process_tiktok(message)
 
-    tiktok.bot.get_business_connection.assert_awaited_once_with("business-1")
+    tiktok.should_skip_duplicate_business_message.assert_awaited_once()
     tiktok.fetch_tiktok_data_with_retry.assert_not_awaited()
     tiktok.claim_message_request.assert_not_awaited()
     tiktok.react_to_message.assert_not_awaited()
@@ -142,7 +165,9 @@ async def test_process_tiktok_skips_outgoing_business_owner_message(monkeypatch)
 
 
 @pytest.mark.asyncio
-async def test_process_tiktok_video_reuses_inflight_download_across_business_chats(monkeypatch):
+async def test_process_tiktok_video_reuses_inflight_download_across_business_chats(
+    monkeypatch,
+):
     from services.media import orchestration
 
     orchestration.reset_single_media_flow_tracking()
@@ -184,7 +209,9 @@ async def test_process_tiktok_video_reuses_inflight_download_across_business_cha
             nonlocal downloaded_sends, cached_sends
             if video == "telegram-file-id-1":
                 cached_sends += 1
-                return SimpleNamespace(video=SimpleNamespace(file_id="cached-reply-file-id"))
+                return SimpleNamespace(
+                    video=SimpleNamespace(file_id="cached-reply-file-id")
+                )
             downloaded_sends += 1
             return SimpleNamespace(video=SimpleNamespace(file_id="telegram-file-id-1"))
 
@@ -196,9 +223,15 @@ async def test_process_tiktok_video_reuses_inflight_download_across_business_cha
         )
 
     monkeypatch.setattr(tiktok, "send_analytics", AsyncMock())
-    monkeypatch.setattr(tiktok.db, "get_file_id", AsyncMock(side_effect=fake_get_file_id))
+    monkeypatch.setattr(
+        tiktok.db, "get_file_id", AsyncMock(side_effect=fake_get_file_id)
+    )
     monkeypatch.setattr(tiktok.db, "add_file", AsyncMock(side_effect=fake_add_file))
-    monkeypatch.setattr(tiktok.tiktok_service, "download_video", AsyncMock(side_effect=fake_download_video))
+    monkeypatch.setattr(
+        tiktok.tiktok_service,
+        "download_video",
+        AsyncMock(side_effect=fake_download_video),
+    )
     monkeypatch.setattr(tiktok, "build_video_send_kwargs", AsyncMock(return_value={}))
     monkeypatch.setattr(tiktok, "send_chat_action_if_needed", AsyncMock())
     monkeypatch.setattr(tiktok, "safe_delete_message", AsyncMock())
@@ -216,19 +249,28 @@ async def test_process_tiktok_video_reuses_inflight_download_across_business_cha
     second = make_message(1002, 22)
 
     first_task = asyncio.create_task(
-        tiktok.process_tiktok_video(first, info_payload, "https://t.me/maxloadbot", settings, "business-1")
+        tiktok.process_tiktok_video(
+            first, info_payload, "https://t.me/maxloadbot", settings, "business-1"
+        )
     )
     await download_started.wait()
     second_task = asyncio.create_task(
-        tiktok.process_tiktok_video(second, info_payload, "https://t.me/maxloadbot", settings, "business-2")
+        tiktok.process_tiktok_video(
+            second, info_payload, "https://t.me/maxloadbot", settings, "business-2"
+        )
     )
     await asyncio.sleep(0)
     allow_download_finish.set()
 
     assert await asyncio.gather(first_task, second_task) == [True, True]
     assert tiktok.tiktok_service.download_video.await_count == 1
-    assert tiktok.tiktok_service.download_video.await_args.kwargs["request_id"] == "tiktok_video:123"
-    tiktok.db.add_file.assert_awaited_once_with("tiktok#video:123", "telegram-file-id-1", "video")
+    assert (
+        tiktok.tiktok_service.download_video.await_args.kwargs["request_id"]
+        == "tiktok_video:123"
+    )
+    tiktok.db.add_file.assert_awaited_once_with(
+        "tiktok#video:123", "telegram-file-id-1", "video"
+    )
     assert downloaded_sends == 1
     assert cached_sends == 1
 
@@ -241,8 +283,16 @@ async def test_process_tiktok_photos_replies_only_on_first_sent_message(monkeypa
         chat=SimpleNamespace(id=99, type="private"),
         message_id=7,
         answer=AsyncMock(return_value=status_message),
-        answer_media_group=AsyncMock(return_value=[SimpleNamespace(photo=[SimpleNamespace(file_id="sent-photo-id")])]),
-        answer_photo=AsyncMock(return_value=SimpleNamespace(photo=[SimpleNamespace(file_id="sent-last-photo-id")])),
+        answer_media_group=AsyncMock(
+            return_value=[
+                SimpleNamespace(photo=[SimpleNamespace(file_id="sent-photo-id")])
+            ]
+        ),
+        answer_photo=AsyncMock(
+            return_value=SimpleNamespace(
+                photo=[SimpleNamespace(file_id="sent-last-photo-id")]
+            )
+        ),
         reply_photo=AsyncMock(),
     )
     info = tiktok.TikTokVideo(
@@ -269,13 +319,22 @@ async def test_process_tiktok_photos_replies_only_on_first_sent_message(monkeypa
         message,
         {"data": {"id": "123"}},
         "https://t.me/maxloadbot",
-        {"captions": "on", "delete_message": "off", "info_buttons": "off", "url_button": "off", "audio_button": "off"},
+        {
+            "captions": "on",
+            "delete_message": "off",
+            "info_buttons": "off",
+            "url_button": "off",
+            "audio_button": "off",
+        },
         None,
         ["https://cdn.example.com/1.jpg", "https://cdn.example.com/2.jpg"],
     )
 
     assert message.answer_media_group.await_args.kwargs["reply_to_message_id"] == 7
-    assert message.answer_photo.await_args.kwargs["photo"] == "https://cdn.example.com/2.jpg"
+    assert (
+        message.answer_photo.await_args.kwargs["photo"]
+        == "https://cdn.example.com/2.jpg"
+    )
     assert message.reply_photo.await_count == 0
     assert tiktok.db.add_file.await_count == 2
 
@@ -299,8 +358,12 @@ async def test_inline_tiktok_query_returns_send_button(monkeypatch):
     monkeypatch.setattr(tiktok, "CHANNEL_ID", None)
     monkeypatch.setattr(tiktok, "send_analytics", AsyncMock())
     monkeypatch.setattr(tiktok.db, "user_settings", AsyncMock(return_value=settings))
-    monkeypatch.setattr(tiktok.db, "get_file_id", AsyncMock(return_value="cached-file-id"))
-    monkeypatch.setattr(tiktok, "get_bot_url", AsyncMock(return_value="https://t.me/maxloadbot"))
+    monkeypatch.setattr(
+        tiktok.db, "get_file_id", AsyncMock(return_value="cached-file-id")
+    )
+    monkeypatch.setattr(
+        tiktok, "get_bot_url", AsyncMock(return_value="https://t.me/maxloadbot")
+    )
     monkeypatch.setattr(
         tiktok,
         "fetch_tiktok_data_with_retry",
@@ -330,7 +393,10 @@ async def test_inline_tiktok_query_returns_send_button(monkeypatch):
     result = results[0]
     assert result.title == "TikTok Video"
     assert result.reply_markup.inline_keyboard[0][0].text == "Send video inline"
-    assert result.reply_markup.inline_keyboard[0][0].callback_data == f"inline:tiktok:{result.id.removeprefix('tiktok_inline:')}"
+    assert (
+        result.reply_markup.inline_keyboard[0][0].callback_data
+        == f"inline:tiktok:{result.id.removeprefix('tiktok_inline:')}"
+    )
     assert result.thumbnail_url == "https://example.com/cover.jpg"
     token = result.id.removeprefix("tiktok_inline:")
     request = get_inline_video_request(token)
@@ -358,8 +424,12 @@ async def test_inline_tiktok_query_sanitizes_invalid_preview_url(monkeypatch):
     monkeypatch.setattr(tiktok, "CHANNEL_ID", 12345)
     monkeypatch.setattr(tiktok, "send_analytics", AsyncMock())
     monkeypatch.setattr(tiktok.db, "user_settings", AsyncMock(return_value=settings))
-    monkeypatch.setattr(tiktok.db, "get_file_id", AsyncMock(return_value="cached-file-id"))
-    monkeypatch.setattr(tiktok, "get_bot_url", AsyncMock(return_value="https://t.me/maxloadbot"))
+    monkeypatch.setattr(
+        tiktok.db, "get_file_id", AsyncMock(return_value="cached-file-id")
+    )
+    monkeypatch.setattr(
+        tiktok, "get_bot_url", AsyncMock(return_value="https://t.me/maxloadbot")
+    )
     monkeypatch.setattr(
         tiktok,
         "fetch_tiktok_data_with_retry",
@@ -409,7 +479,9 @@ async def test_inline_tiktok_query_returns_send_button_for_single_photo(monkeypa
     monkeypatch.setattr(tiktok, "send_analytics", AsyncMock())
     monkeypatch.setattr(tiktok.db, "user_settings", AsyncMock(return_value=settings))
     monkeypatch.setattr(tiktok.db, "get_file_id", AsyncMock(return_value=None))
-    monkeypatch.setattr(tiktok, "get_bot_url", AsyncMock(return_value="https://t.me/maxloadbot"))
+    monkeypatch.setattr(
+        tiktok, "get_bot_url", AsyncMock(return_value="https://t.me/maxloadbot")
+    )
     monkeypatch.setattr(
         tiktok,
         "fetch_tiktok_data_with_retry",
@@ -448,7 +520,9 @@ async def test_inline_tiktok_query_returns_send_button_for_single_photo(monkeypa
 
 
 @pytest.mark.asyncio
-async def test_inline_tiktok_query_returns_album_deeplink_for_multi_photo_post(monkeypatch):
+async def test_inline_tiktok_query_returns_album_deeplink_for_multi_photo_post(
+    monkeypatch,
+):
     settings = {
         "captions": "on",
         "delete_message": "off",
@@ -466,7 +540,9 @@ async def test_inline_tiktok_query_returns_album_deeplink_for_multi_photo_post(m
     monkeypatch.setattr(tiktok, "send_analytics", AsyncMock())
     monkeypatch.setattr(tiktok, "CHANNEL_ID", None)
     monkeypatch.setattr(tiktok.db, "user_settings", AsyncMock(return_value=settings))
-    monkeypatch.setattr(tiktok, "get_bot_url", AsyncMock(return_value="https://t.me/maxloadbot"))
+    monkeypatch.setattr(
+        tiktok, "get_bot_url", AsyncMock(return_value="https://t.me/maxloadbot")
+    )
     monkeypatch.setattr(
         tiktok,
         "fetch_tiktok_data_with_retry",
@@ -514,7 +590,9 @@ async def test_inline_tiktok_query_returns_album_deeplink_for_multi_photo_post(m
 
 
 @pytest.mark.asyncio
-async def test_inline_tiktok_query_uses_cached_preview_photo_file_id_for_album(monkeypatch):
+async def test_inline_tiktok_query_uses_cached_preview_photo_file_id_for_album(
+    monkeypatch,
+):
     settings = {
         "captions": "on",
         "delete_message": "off",
@@ -532,8 +610,12 @@ async def test_inline_tiktok_query_uses_cached_preview_photo_file_id_for_album(m
     monkeypatch.setattr(tiktok, "send_analytics", AsyncMock())
     monkeypatch.setattr(tiktok, "CHANNEL_ID", 12345)
     monkeypatch.setattr(tiktok.db, "user_settings", AsyncMock(return_value=settings))
-    monkeypatch.setattr(tiktok.db, "get_file_id", AsyncMock(return_value="cached-preview-file-id"))
-    monkeypatch.setattr(tiktok, "get_bot_url", AsyncMock(return_value="https://t.me/maxloadbot"))
+    monkeypatch.setattr(
+        tiktok.db, "get_file_id", AsyncMock(return_value="cached-preview-file-id")
+    )
+    monkeypatch.setattr(
+        tiktok, "get_bot_url", AsyncMock(return_value="https://t.me/maxloadbot")
+    )
     monkeypatch.setattr(
         tiktok,
         "fetch_tiktok_data_with_retry",
@@ -616,15 +698,22 @@ async def test_chosen_inline_tiktok_result_edits_inline_message(monkeypatch):
             }
         ),
     )
-    monkeypatch.setattr(tiktok.db, "get_file_id", AsyncMock(return_value="cached-file-id"))
-    monkeypatch.setattr(tiktok, "get_bot_url", AsyncMock(return_value="https://t.me/maxloadbot"))
+    monkeypatch.setattr(
+        tiktok.db, "get_file_id", AsyncMock(return_value="cached-file-id")
+    )
+    monkeypatch.setattr(
+        tiktok, "get_bot_url", AsyncMock(return_value="https://t.me/maxloadbot")
+    )
     monkeypatch.setattr(tiktok, "safe_edit_inline_text", AsyncMock(return_value=True))
     monkeypatch.setattr(tiktok, "safe_edit_inline_media", AsyncMock(return_value=True))
 
     await tiktok.chosen_inline_tiktok_result(result)
 
     assert tiktok.safe_edit_inline_text.await_count == 1
-    assert tiktok.safe_edit_inline_text.await_args_list[0].args[2] == tiktok.bm.uploading_status()
+    assert (
+        tiktok.safe_edit_inline_text.await_args_list[0].args[2]
+        == tiktok.bm.uploading_status()
+    )
     media = tiktok.safe_edit_inline_media.await_args.args[2]
     assert media.media == "cached-file-id"
     assert media.caption is not None
@@ -676,8 +765,12 @@ async def test_chosen_inline_tiktok_result_edits_inline_photo(monkeypatch):
             }
         ),
     )
-    monkeypatch.setattr(tiktok.db, "get_file_id", AsyncMock(return_value="cached-photo-id"))
-    monkeypatch.setattr(tiktok, "get_bot_url", AsyncMock(return_value="https://t.me/maxloadbot"))
+    monkeypatch.setattr(
+        tiktok.db, "get_file_id", AsyncMock(return_value="cached-photo-id")
+    )
+    monkeypatch.setattr(
+        tiktok, "get_bot_url", AsyncMock(return_value="https://t.me/maxloadbot")
+    )
     monkeypatch.setattr(tiktok, "safe_edit_inline_text", AsyncMock(return_value=True))
     monkeypatch.setattr(tiktok, "safe_edit_inline_media", AsyncMock(return_value=True))
 

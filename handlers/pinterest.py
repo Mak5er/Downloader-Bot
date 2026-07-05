@@ -9,7 +9,7 @@ from aiogram.exceptions import TelegramBadRequest
 
 import keyboards as kb
 import messages as bm
-from config import CHANNEL_ID, COBALT_API_KEY, COBALT_API_URL, OUTPUT_DIR
+from config import CHANNEL_ID, COBALT_API_KEY, COBALT_API_URL, OUTPUT_DIR, MAX_FILE_SIZE
 from handlers.deps import build_handler_dependencies
 from handlers.pinterest_inline import handle_pinterest_inline_query, send_inline_pinterest_media
 from handlers.request_dedupe import claim_message_request
@@ -66,7 +66,6 @@ logging = logging.bind(service="pinterest")
 
 router = Router()
 
-MAX_FILE_SIZE = int(1.5 * 1024 * 1024 * 1024)
 PINTEREST_URL_REGEX = r"(https?://(?:[\w-]+\.)?pinterest\.[\w.]+/\S+|https?://pin\.it/\S+)"
 
 __all__ = [

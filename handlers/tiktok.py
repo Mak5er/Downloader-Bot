@@ -13,20 +13,23 @@ from yt_dlp import YoutubeDL
 
 import keyboards as kb
 import messages as bm
-from config import OUTPUT_DIR, CHANNEL_ID
+from config import OUTPUT_DIR, CHANNEL_ID, MAX_FILE_SIZE
 from handlers.deps import build_handler_dependencies
 from handlers.request_dedupe import claim_message_request
 from handlers.tiktok_inline import handle_tiktok_inline_query, send_inline_tiktok_media
-from services.media.delivery import build_audio_cache_key, send_audio_with_thumbnail, send_cached_media_entries
+from services.media.delivery import (
+    build_audio_cache_key,
+    send_audio_with_thumbnail,
+    send_cached_media_entries,
+)
 from services.media.video_metadata import build_video_send_kwargs
-from services.media.orchestration import handle_download_backpressure, run_single_media_flow
+from services.media.orchestration import run_single_media_flow
 from handlers.user import update_info
 from handlers.utils import (
-    build_queue_busy_text,
-    build_rate_limit_text,
     get_bot_url,
     get_bot_avatar_thumbnail,
     get_message_text,
+    handle_download_backpressure_error,
     handle_download_error,
     handle_video_too_large,
     should_skip_duplicate_business_message,
@@ -49,7 +52,11 @@ from handlers.utils import (
     with_inline_send_logging,
     with_message_logging,
 )
-from services.logger import logger as logging, summarize_text_for_log, summarize_url_for_log
+from services.logger import (
+    logger as logging,
+    summarize_text_for_log,
+    summarize_url_for_log,
+)
 from app_context import bot, db, send_analytics
 from utils.download_manager import (
     DownloadQueueBusyError,
@@ -62,7 +69,6 @@ from services.platforms import tiktok_media as tiktok_platform
 
 logging = logging.bind(service="tiktok")
 
-MAX_FILE_SIZE = int(1.5 * 1024 * 1024 * 1024)  # 1.5 GB
 router = Router()
 
 __all__ = [
@@ -84,14 +90,15 @@ class TikTokService(tiktok_platform.TikTokMediaService):
         super().__init__(
             output_dir,
             get_http_session_func=lambda: get_http_session(),
-            retry_async_operation_func=lambda *args, **kwargs: retry_async_operation(*args, **kwargs),
+            retry_async_operation_func=lambda *args, **kwargs: retry_async_operation(
+                *args, **kwargs
+            ),
             user_agent_factory=lambda: UserAgent(),
             youtube_dl_factory=lambda options: YoutubeDL(options),
         )
 
 
 tiktok_service = TikTokService(OUTPUT_DIR)
-_expanded_tiktok_url_cache = tiktok_service._expanded_tiktok_url_cache
 
 
 async def process_tiktok_url_async(text: str) -> str:
@@ -107,16 +114,22 @@ async def video_info(data: dict) -> Optional[TikTokVideo]:
 
 
 async def fetch_tiktok_data_with_retry(video_url: str, *, on_retry=None) -> dict:
-    return await tiktok_service.fetch_tiktok_data_with_retry(video_url, on_retry=on_retry)
+    return await tiktok_service.fetch_tiktok_data_with_retry(
+        video_url, on_retry=on_retry
+    )
 
 
 @router.message(
     F.text.regexp(r"(https?://(www\.|vm\.|vt\.|vn\.)?tiktok\.com/\S+)", mode="search")
-    | F.caption.regexp(r"(https?://(www\.|vm\.|vt\.|vn\.)?tiktok\.com/\S+)", mode="search")
+    | F.caption.regexp(
+        r"(https?://(www\.|vm\.|vt\.|vn\.)?tiktok\.com/\S+)", mode="search"
+    )
 )
 @router.business_message(
     F.text.regexp(r"(https?://(www\.|vm\.|vt\.|vn\.)?tiktok\.com/\S+)", mode="search")
-    | F.caption.regexp(r"(https?://(www\.|vm\.|vt\.|vn\.)?tiktok\.com/\S+)", mode="search")
+    | F.caption.regexp(
+        r"(https?://(www\.|vm\.|vt\.|vn\.)?tiktok\.com/\S+)", mode="search"
+    )
 )
 @with_message_logging("tiktok", "message")
 async def process_tiktok(message: types.Message, direct_url: Optional[str] = None):
@@ -135,7 +148,9 @@ async def process_tiktok(message: types.Message, direct_url: Optional[str] = Non
             summarize_text_for_log(text),
         )
 
-        if await should_skip_duplicate_business_message(message, bot, service_name="TikTok", logger=logging):
+        if await should_skip_duplicate_business_message(
+            message, bot, service_name="TikTok", logger=logging
+        ):
             logging.info(
                 "Skipping outgoing TikTok business message: user_id=%s business_id=%s chat_id=%s",
                 message.from_user.id,
@@ -150,10 +165,14 @@ async def process_tiktok(message: types.Message, direct_url: Optional[str] = Non
         if direct_url is None and re.fullmatch(r"@[\w.]{1,32}", stripped):
             await react_to_message(message, "рџ‘ѕ", business_id=business_id)
             settings = await load_user_settings(db, message)
-            await process_tiktok_profile(message, stripped, bot_url, settings["captions"])
+            await process_tiktok_profile(
+                message, stripped, bot_url, settings["captions"]
+            )
             return
 
-        url_match = re.search(r"(https?://(www\.|vm\.|vt\.|vn\.)?tiktok\.com/\S+)", stripped)
+        url_match = re.search(
+            r"(https?://(www\.|vm\.|vt\.|vn\.)?tiktok\.com/\S+)", stripped
+        )
         if url_match:
             url = strip_tiktok_tracking(url_match.group(0))
         else:
@@ -173,9 +192,15 @@ async def process_tiktok(message: types.Message, direct_url: Optional[str] = Non
         retry_notice_sent = {"value": False}
 
         async def _on_retry_fetch(failed_attempt: int, total_attempts: int, _error):
-            if show_service_status and failed_attempt >= 2 and not retry_notice_sent["value"]:
+            if (
+                show_service_status
+                and failed_attempt >= 2
+                and not retry_notice_sent["value"]
+            ):
                 retry_notice_sent["value"] = True
-                await message.reply(bm.retrying_again_status(failed_attempt + 1, total_attempts))
+                await message.reply(
+                    bm.retrying_again_status(failed_attempt + 1, total_attempts)
+                )
 
         data = await fetch_tiktok_data_with_retry(url, on_retry=_on_retry_fetch)
         images = data.get("data", {}).get("images", [])
@@ -189,11 +214,15 @@ async def process_tiktok(message: types.Message, direct_url: Optional[str] = Non
         )
 
         if images:
-            if await process_tiktok_photos(message, data, bot_url, user_settings, business_id, images):
+            if await process_tiktok_photos(
+                message, data, bot_url, user_settings, business_id, images
+            ):
                 request_lease.mark_success()
             return
 
-        if await process_tiktok_video(message, data, bot_url, user_settings, business_id):
+        if await process_tiktok_video(
+            message, data, bot_url, user_settings, business_id
+        ):
             request_lease.mark_success()
 
     except Exception as e:
@@ -210,9 +239,18 @@ async def process_tiktok(message: types.Message, direct_url: Optional[str] = Non
         await update_info(message)
 
 
-async def process_tiktok_video(message: types.Message, data: dict, bot_url: str, user_settings: dict,
-                               business_id: Optional[int]):
-    await send_analytics(user_id=message.from_user.id, chat_type=message.chat.type, action_name="tiktok_video")
+async def process_tiktok_video(
+    message: types.Message,
+    data: dict,
+    bot_url: str,
+    user_settings: dict,
+    business_id: Optional[int],
+):
+    await send_analytics(
+        user_id=message.from_user.id,
+        chat_type=message.chat.type,
+        action_name="tiktok_video",
+    )
     info = await video_info(data)
     if not info:
         logging.warning(
@@ -256,8 +294,13 @@ async def process_tiktok_video(message: types.Message, data: dict, bot_url: str,
 
     def _reply_markup():
         return kb.return_video_info_keyboard(
-            info.views, info.likes, info.comments,
-            info.shares, info.music_play_url, db_video_url, user_settings,
+            info.views,
+            info.likes,
+            info.comments,
+            info.shares,
+            info.music_play_url,
+            db_video_url,
+            user_settings,
             audio_callback_data=audio_callback_data,
         )
 
@@ -286,7 +329,9 @@ async def process_tiktok_video(message: types.Message, data: dict, bot_url: str,
         try:
             return await message.reply_video(
                 video=file_id,
-                caption=bm.captions(user_settings["captions"], info.description, bot_url),
+                caption=bm.captions(
+                    user_settings["captions"], info.description, bot_url
+                ),
                 reply_markup=_reply_markup(),
                 parse_mode="HTML",
             )
@@ -308,29 +353,37 @@ async def process_tiktok_video(message: types.Message, data: dict, bot_url: str,
     async def _inspect_metrics(metrics) -> bool:
         log_download_metrics("tiktok_video", metrics)
         if metrics.size >= MAX_FILE_SIZE:
-            logging.warning("TikTok video too large: url=%s size=%s", summarize_url_for_log(db_video_url), metrics.size)
+            logging.warning(
+                "TikTok video too large: url=%s size=%s",
+                summarize_url_for_log(db_video_url),
+                metrics.size,
+            )
             await handle_large_file(message, business_id)
             return False
         return True
 
     async def _handle_backpressure(exc: Exception) -> None:
-        await handle_download_backpressure(
+        await handle_download_backpressure_error(
             exc,
-            business_id=business_id,
-            on_rate_limit_reply=lambda retry_after: message.reply(build_rate_limit_text(retry_after)),
-            on_queue_busy_reply=lambda position: message.reply(build_queue_busy_text(position)),
-            on_business_error=lambda: handle_download_error(message, business_id=business_id),
+            message=message,
+            show_service_status=business_id is None,
         )
 
     async def _handle_unexpected_error(exc: Exception) -> None:
         if isinstance(exc, asyncio.TimeoutError):
             if show_service_status:
                 await safe_edit_text(status_message, bm.timeout_error())
-                await handle_download_error(message, business_id=business_id, text=bm.timeout_error())
+                await handle_download_error(
+                    message, business_id=business_id, text=bm.timeout_error()
+                )
             else:
                 await handle_download_error(message, business_id=business_id)
             return
-        logging.exception("Error processing TikTok video: url=%s error=%s", summarize_url_for_log(db_video_url), exc)
+        logging.exception(
+            "Error processing TikTok video: url=%s error=%s",
+            summarize_url_for_log(db_video_url),
+            exc,
+        )
         await handle_download_error(message, business_id=business_id)
 
     sent_message = await run_single_media_flow(
@@ -340,14 +393,20 @@ async def process_tiktok_video(message: types.Message, data: dict, bot_url: str,
         upload_status_text=bm.uploading_status(),
         upload_action="upload_video",
         update_status=_edit_status,
-        send_chat_action=lambda action: send_chat_action_if_needed(bot, message.chat.id, action, business_id),
+        send_chat_action=lambda action: send_chat_action_if_needed(
+            bot, message.chat.id, action, business_id
+        ),
         send_cached=_send_cached,
         download_media=_download_media,
         send_downloaded=_send_downloaded,
-        extract_file_id=lambda sent: sent.video.file_id if getattr(sent, "video", None) else None,
+        extract_file_id=lambda sent: (
+            sent.video.file_id if getattr(sent, "video", None) else None
+        ),
         cleanup_path=remove_file,
         delete_status_message=lambda: safe_delete_message(status_message),
-        on_missing_media=lambda: handle_download_error(message, business_id=business_id),
+        on_missing_media=lambda: handle_download_error(
+            message, business_id=business_id
+        ),
         on_after_send=_after_send,
         inspect_metrics=_inspect_metrics,
         on_rate_limit=_handle_backpressure,
@@ -357,9 +416,19 @@ async def process_tiktok_video(message: types.Message, data: dict, bot_url: str,
     return sent_message is not None
 
 
-async def process_tiktok_photos(message: types.Message, data: dict, bot_url: str, user_settings: list,
-                                business_id: Optional[int], images: list):
-    await send_analytics(user_id=message.from_user.id, chat_type=message.chat.type, action_name="tiktok_photos")
+async def process_tiktok_photos(
+    message: types.Message,
+    data: dict,
+    bot_url: str,
+    user_settings: list,
+    business_id: Optional[int],
+    images: list,
+):
+    await send_analytics(
+        user_id=message.from_user.id,
+        chat_type=message.chat.type,
+        action_name="tiktok_photos",
+    )
     info = await video_info(data)
     audio_callback_data = get_tiktok_audio_callback_data(info) if info else None
     video_url = build_tiktok_video_url(info) if info else ""
@@ -382,10 +451,14 @@ async def process_tiktok_photos(message: types.Message, data: dict, bot_url: str
         status_message = await message.answer(bm.uploading_status())
 
     try:
-        await send_chat_action_if_needed(bot, message.chat.id, "upload_photo", business_id)
+        await send_chat_action_if_needed(
+            bot, message.chat.id, "upload_photo", business_id
+        )
         media_items = []
         for index, image_url in enumerate(images):
-            cache_key = build_media_cache_key(video_url or image_url, item_index=index, item_kind="photo")
+            cache_key = build_media_cache_key(
+                video_url or image_url, item_index=index, item_kind="photo"
+            )
             cached_file_id = await db.get_file_id(cache_key)
             media_items.append(
                 {
@@ -402,7 +475,9 @@ async def process_tiktok_photos(message: types.Message, data: dict, bot_url: str
             message,
             media_items,
             db_service=db,
-            caption=bm.captions(user_settings['captions'], info.description if info else None, bot_url),
+            caption=bm.captions(
+                user_settings["captions"], info.description if info else None, bot_url
+            ),
             reply_markup=kb.return_video_info_keyboard(
                 info.views if info else None,
                 info.likes if info else None,
@@ -420,9 +495,15 @@ async def process_tiktok_photos(message: types.Message, data: dict, bot_url: str
         await safe_delete_message(status_message)
 
 
-async def process_tiktok_profile(message: types.Message, full_url: str, bot_url: str, user_captions: list):
-    await send_analytics(user_id=message.from_user.id, chat_type=message.chat.type, action_name="tiktok_profile")
-    username = full_url.split('@')[1].split('?')[0]
+async def process_tiktok_profile(
+    message: types.Message, full_url: str, bot_url: str, user_captions: list
+):
+    await send_analytics(
+        user_id=message.from_user.id,
+        chat_type=message.chat.type,
+        action_name="tiktok_profile",
+    )
+    username = full_url.split("@")[1].split("?")[0]
     logging.info(
         "Fetching TikTok profile: user_id=%s target=%s",
         message.from_user.id,
@@ -441,21 +522,31 @@ async def process_tiktok_profile(message: types.Message, full_url: str, bot_url:
         sent_message = await message.reply_photo(
             photo=cached_file_id or pic,
             caption=bm.captions(user_captions, user.description, bot_url),
-            reply_markup=kb.return_user_info_keyboard(display, user.followers, user.videos, user.likes, full_url)
+            reply_markup=kb.return_user_info_keyboard(
+                display, user.followers, user.videos, user.likes, full_url
+            ),
         )
         if not cached_file_id and sent_message.photo:
-            await db.add_file(profile_cache_key, sent_message.photo[-1].file_id, "photo")
+            await db.add_file(
+                profile_cache_key, sent_message.photo[-1].file_id, "photo"
+            )
     except Exception:
-        logo = 'https://freepnglogo.com/images/all_img/tik-tok-logo-transparent-031f.png'
+        logo = (
+            "https://freepnglogo.com/images/all_img/tik-tok-logo-transparent-031f.png"
+        )
         fallback_cache_key = build_media_cache_key(logo, variant="profile")
         cached_logo_id = await db.get_file_id(fallback_cache_key)
         sent_message = await message.reply_photo(
             photo=cached_logo_id or logo,
             caption=bm.captions(user_captions, user.description, bot_url),
-            reply_markup=kb.return_user_info_keyboard(display, user.followers, user.videos, user.likes, full_url)
+            reply_markup=kb.return_user_info_keyboard(
+                display, user.followers, user.videos, user.likes, full_url
+            ),
         )
         if not cached_logo_id and sent_message.photo:
-            await db.add_file(fallback_cache_key, sent_message.photo[-1].file_id, "photo")
+            await db.add_file(
+                fallback_cache_key, sent_message.photo[-1].file_id, "photo"
+            )
 
 
 async def handle_large_file(message, business_id):
@@ -496,7 +587,9 @@ async def download_tiktok_mp3_callback(call: types.CallbackQuery):
         bot_url = await get_bot_url(bot)
         bot_avatar = await get_bot_avatar_thumbnail(bot)
         cache_key = build_audio_cache_key(video_url)
-        request_id = f"tiktok_audio:{call.message.chat.id}:{call.message.message_id}:{video_id}"
+        request_id = (
+            f"tiktok_audio:{call.message.chat.id}:{call.message.message_id}:{video_id}"
+        )
         audio_duration = None
         db_file_id = await db.get_file_id(cache_key)
         if db_file_id:
@@ -584,21 +677,17 @@ async def download_tiktok_mp3_callback(call: types.CallbackQuery):
         await db.add_file(cache_key, sent_message.audio.file_id, "audio")
 
         await remove_file(metrics.path)
-    except DownloadRateLimitError as e:
-        if show_service_status:
-            await call.message.reply(build_rate_limit_text(e.retry_after))
-        else:
-            await handle_download_error(call.message, business_id=business_id)
-    except DownloadQueueBusyError as e:
-        if show_service_status:
-            await call.message.reply(build_queue_busy_text(e.position))
-        else:
-            await handle_download_error(call.message, business_id=business_id)
+    except (DownloadRateLimitError, DownloadQueueBusyError) as e:
+        await handle_download_backpressure_error(
+            e, message=call.message, show_service_status=show_service_status
+        )
     finally:
         await safe_delete_message(status_message)
 
 
-@router.inline_query(F.query.regexp(r"(https?://(www\.|vm\.|vt\.|vn\.)?tiktok\.com/\S+)", mode="search"))
+@router.inline_query(
+    F.query.regexp(r"(https?://(www\.|vm\.|vt\.|vn\.)?tiktok\.com/\S+)", mode="search")
+)
 @with_inline_query_logging("tiktok", "inline_query")
 async def inline_tiktok_query(query: types.InlineQuery):
     deps = build_handler_dependencies(bot=bot, db=db, send_analytics=send_analytics)
@@ -701,8 +790,19 @@ async def send_inline_tiktok_video_callback(call: types.CallbackQuery):
         await call.answer(bm.something_went_wrong(), show_alert=True)
 
 
-@router.callback_query(lambda call: any(call.data.startswith(prefix) for prefix in
-                                        ["followers_", "videos_", "likes_", "views_", "comments_", "shares_"]))
+@router.callback_query(
+    lambda call: any(
+        call.data.startswith(prefix)
+        for prefix in [
+            "followers_",
+            "videos_",
+            "likes_",
+            "views_",
+            "comments_",
+            "shares_",
+        ]
+    )
+)
 async def handle_stats_callback(call: types.CallbackQuery):
     try:
         prefix, value = call.data.split("_", 1)
@@ -712,7 +812,7 @@ async def handle_stats_callback(call: types.CallbackQuery):
             "likes": ("Likes", "❤️"),
             "views": ("Views", "👁️"),
             "comments": ("Comments", "💬"),
-            "shares": ("Shares", "🔄")
+            "shares": ("Shares", "🔄"),
         }
         if prefix in mapping:
             label, emoji = mapping[prefix]

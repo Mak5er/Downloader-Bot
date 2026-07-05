@@ -14,17 +14,20 @@ from config import (
     OUTPUT_DIR,
     COBALT_API_URL,
     COBALT_API_KEY,
+    MAX_FILE_SIZE,
 )
 from handlers.deps import build_handler_dependencies
-from handlers.instagram_inline import handle_instagram_inline_query, send_inline_instagram_media
+from handlers.instagram_inline import (
+    handle_instagram_inline_query,
+    send_inline_instagram_media,
+)
 from handlers.request_dedupe import claim_message_request
 from handlers.user import update_info
 from handlers.utils import (
-    build_queue_busy_text,
-    build_rate_limit_text,
     get_bot_avatar_thumbnail,
     get_bot_url,
     get_message_text,
+    handle_download_backpressure_error,
     handle_download_error,
     load_user_settings,
     make_retry_status_notifier,
@@ -46,11 +49,19 @@ from handlers.utils import (
     with_inline_send_logging,
     with_message_logging,
 )
-from services.logger import logger as logging, summarize_text_for_log, summarize_url_for_log
+from services.logger import (
+    logger as logging,
+    summarize_text_for_log,
+    summarize_url_for_log,
+)
 from app_context import bot, db, send_analytics
-from services.media.delivery import build_audio_cache_key, send_audio_with_thumbnail, send_cached_media_entries
+from services.media.delivery import (
+    build_audio_cache_key,
+    send_audio_with_thumbnail,
+    send_cached_media_entries,
+)
 from services.media.video_metadata import build_video_send_kwargs
-from services.media.orchestration import handle_download_backpressure, run_single_media_flow
+from services.media.orchestration import run_single_media_flow
 from services.media.resolver import resolve_cached_media_items
 from services.platforms.instagram_media import (
     InstagramMedia,
@@ -73,12 +84,11 @@ logging = logging.bind(service="instagram")
 
 router = Router()
 
-MAX_FILE_SIZE = int(1.5 * 1024 * 1024 * 1024)
-
 __all__ = [
     "DownloadError",
     "get_inline_service_icon",
 ]
+
 
 class InstagramService(InstagramMediaService):
     def __init__(self, output_dir: str) -> None:
@@ -93,8 +103,17 @@ class InstagramService(InstagramMediaService):
 
 inst_service = InstagramService(OUTPUT_DIR)
 
-@router.message(F.text.regexp(r"(https?://(www\.)?instagram\.com/(p|reels|reel)/[^/?#&]+)", mode="search"))
-@router.business_message(F.text.regexp(r"(https?://(www\.)?instagram\.com/(p|reels|reel)/[^/?#&]+)", mode="search"))
+
+@router.message(
+    F.text.regexp(
+        r"(https?://(www\.)?instagram\.com/(p|reels|reel)/[^/?#&]+)", mode="search"
+    )
+)
+@router.business_message(
+    F.text.regexp(
+        r"(https?://(www\.)?instagram\.com/(p|reels|reel)/[^/?#&]+)", mode="search"
+    )
+)
 @with_message_logging("instagram", "message")
 async def process_instagram(message: types.Message, direct_url: Optional[str] = None):
     request_lease = None
@@ -103,22 +122,32 @@ async def process_instagram(message: types.Message, direct_url: Optional[str] = 
         business_id = message.business_connection_id
         text = get_message_text(message)
 
-        if await should_skip_duplicate_business_message(message, bot, service_name="Instagram", logger=logging):
+        if await should_skip_duplicate_business_message(
+            message, bot, service_name="Instagram", logger=logging
+        ):
             return
 
         if direct_url:
             url = strip_instagram_url(direct_url)
         else:
-            url_match = re.search(r"(https?://(www\.)?instagram\.com/(p|reels|reel)/[^/?#&]+)", text)
+            url_match = re.search(
+                r"(https?://(www\.)?instagram\.com/(p|reels|reel)/[^/?#&]+)", text
+            )
             if not url_match:
                 return
             url = strip_instagram_url(url_match.group(0))
 
-        request_lease = await claim_message_request(message, service="instagram", url=url)
+        request_lease = await claim_message_request(
+            message, service="instagram", url=url
+        )
         if request_lease is None:
             return
 
-        logging.info("Instagram request: user_id=%s url=%s", message.from_user.id, summarize_url_for_log(url))
+        logging.info(
+            "Instagram request: user_id=%s url=%s",
+            message.from_user.id,
+            summarize_url_for_log(url),
+        )
         user_settings = await load_user_settings(db, message)
         await react_to_message(message, "👾", business_id=business_id)
 
@@ -138,10 +167,14 @@ async def process_instagram(message: types.Message, direct_url: Optional[str] = 
         )
 
         if has_videos and len(data.media_list) == 1:
-            if await process_instagram_video(message, data, url, bot_url, user_settings, business_id):
+            if await process_instagram_video(
+                message, data, url, bot_url, user_settings, business_id
+            ):
                 request_lease.mark_success()
         elif has_photos or len(data.media_list) > 1:
-            if await process_instagram_media_group(message, data, url, bot_url, user_settings, business_id):
+            if await process_instagram_media_group(
+                message, data, url, bot_url, user_settings, business_id
+            ):
                 request_lease.mark_success()
         else:
             await handle_download_error(message, business_id=business_id)
@@ -165,9 +198,19 @@ async def process_instagram_url(message: types.Message, url: Optional[str] = Non
     await process_instagram(message, direct_url=url)
 
 
-async def process_instagram_video(message: types.Message, data: InstagramVideo, original_url: str, bot_url: str,
-                                  user_settings: dict, business_id: Optional[int]):
-    await send_analytics(user_id=message.from_user.id, chat_type=message.chat.type, action_name="instagram_video")
+async def process_instagram_video(
+    message: types.Message,
+    data: InstagramVideo,
+    original_url: str,
+    bot_url: str,
+    user_settings: dict,
+    business_id: Optional[int],
+):
+    await send_analytics(
+        user_id=message.from_user.id,
+        chat_type=message.chat.type,
+        action_name="instagram_video",
+    )
 
     if not data.media_list or data.media_list[0].type != "video":
         await handle_download_error(message, business_id=business_id)
@@ -195,7 +238,13 @@ async def process_instagram_video(message: types.Message, data: InstagramVideo, 
 
     def _reply_markup():
         return kb.return_video_info_keyboard(
-            None, None, None, None, "", db_video_url, user_settings,
+            None,
+            None,
+            None,
+            None,
+            "",
+            db_video_url,
+            user_settings,
             audio_callback_data=audio_callback_data,
         )
 
@@ -208,7 +257,9 @@ async def process_instagram_video(message: types.Message, data: InstagramVideo, 
         try:
             return await message.reply_video(
                 video=file_id,
-                caption=bm.captions(user_settings["captions"], data.description, bot_url),
+                caption=bm.captions(
+                    user_settings["captions"], data.description, bot_url
+                ),
                 reply_markup=_reply_markup(),
                 parse_mode="HTML",
             )
@@ -253,16 +304,18 @@ async def process_instagram_video(message: types.Message, data: InstagramVideo, 
         return True
 
     async def _handle_backpressure(exc: Exception) -> None:
-        await handle_download_backpressure(
+        await handle_download_backpressure_error(
             exc,
-            business_id=business_id,
-            on_rate_limit_reply=lambda retry_after: message.reply(build_rate_limit_text(retry_after)),
-            on_queue_busy_reply=lambda position: message.reply(build_queue_busy_text(position)),
-            on_business_error=lambda: handle_download_error(message, business_id=business_id),
+            message=message,
+            show_service_status=business_id is None,
         )
 
     async def _handle_cache_store_error(exc: Exception) -> None:
-        logging.error("Error caching Instagram video: url=%s error=%s", summarize_url_for_log(db_video_url), exc)
+        logging.error(
+            "Error caching Instagram video: url=%s error=%s",
+            summarize_url_for_log(db_video_url),
+            exc,
+        )
 
     async def _handle_unexpected_error(exc: Exception) -> None:
         logging.exception(
@@ -279,14 +332,20 @@ async def process_instagram_video(message: types.Message, data: InstagramVideo, 
         upload_status_text=bm.uploading_status(),
         upload_action="upload_video",
         update_status=_edit_status,
-        send_chat_action=lambda action: send_chat_action_if_needed(bot, message.chat.id, action, business_id),
+        send_chat_action=lambda action: send_chat_action_if_needed(
+            bot, message.chat.id, action, business_id
+        ),
         send_cached=_send_cached,
         download_media=_download_media,
         send_downloaded=_send_downloaded,
-        extract_file_id=lambda sent: sent.video.file_id if getattr(sent, "video", None) else None,
+        extract_file_id=lambda sent: (
+            sent.video.file_id if getattr(sent, "video", None) else None
+        ),
         cleanup_path=remove_file,
         delete_status_message=lambda: safe_delete_message(status_message),
-        on_missing_media=lambda: handle_download_error(message, business_id=business_id),
+        on_missing_media=lambda: handle_download_error(
+            message, business_id=business_id
+        ),
         on_after_send=_after_send,
         inspect_metrics=_inspect_metrics,
         on_cache_store_error=_handle_cache_store_error,
@@ -297,9 +356,19 @@ async def process_instagram_video(message: types.Message, data: InstagramVideo, 
     return sent_message is not None
 
 
-async def process_instagram_media_group(message: types.Message, data: InstagramVideo, original_url: str, bot_url: str,
-                                        user_settings: dict, business_id: Optional[int]):
-    await send_analytics(user_id=message.from_user.id, chat_type=message.chat.type, action_name="instagram_media_group")
+async def process_instagram_media_group(
+    message: types.Message,
+    data: InstagramVideo,
+    original_url: str,
+    bot_url: str,
+    user_settings: dict,
+    business_id: Optional[int],
+):
+    await send_analytics(
+        user_id=message.from_user.id,
+        chat_type=message.chat.type,
+        action_name="instagram_media_group",
+    )
 
     logging.info(
         "Sending Instagram media group: user_id=%s media_count=%s url=%s",
@@ -352,7 +421,13 @@ async def process_instagram_media_group(message: types.Message, data: InstagramV
             db_service=db,
             caption=bm.captions(user_settings["captions"], data.description, bot_url),
             reply_markup=kb.return_video_info_keyboard(
-                None, None, None, None, "", original_url, user_settings,
+                None,
+                None,
+                None,
+                None,
+                "",
+                original_url,
+                user_settings,
                 audio_callback_data=None,
             ),
             parse_mode="HTML",
@@ -423,7 +498,10 @@ async def download_instagram_audio_callback(call: types.CallbackQuery):
                 await safe_edit_text(status_message, bm.audio_fetch_failed())
             else:
                 await handle_download_error(call.message, business_id=business_id)
-            logging.error("Failed to fetch Instagram audio: url=%s", summarize_url_for_log(original_url))
+            logging.error(
+                "Failed to fetch Instagram audio: url=%s",
+                summarize_url_for_log(original_url),
+            )
             return
 
         audio_item = data.media_list[0]
@@ -488,21 +566,19 @@ async def download_instagram_audio_callback(call: types.CallbackQuery):
                 sent_message.audio.file_id,
             )
         except Exception as e:
-            logging.error("Error caching Instagram audio: url=%s error=%s", summarize_url_for_log(original_url), e)
+            logging.error(
+                "Error caching Instagram audio: url=%s error=%s",
+                summarize_url_for_log(original_url),
+                e,
+            )
 
         await remove_file(metrics.path)
         logging.debug("Removed temporary Instagram audio file: path=%s", metrics.path)
 
-    except DownloadRateLimitError as e:
-        if show_service_status:
-            await call.message.reply(build_rate_limit_text(e.retry_after))
-        else:
-            await handle_download_error(call.message, business_id=business_id)
-    except DownloadQueueBusyError as e:
-        if show_service_status:
-            await call.message.reply(build_queue_busy_text(e.position))
-        else:
-            await handle_download_error(call.message, business_id=business_id)
+    except (DownloadRateLimitError, DownloadQueueBusyError) as e:
+        await handle_download_backpressure_error(
+            e, message=call.message, show_service_status=show_service_status
+        )
     except Exception as e:
         logging.exception(
             "Error downloading Instagram audio: url=%s error=%s",
@@ -517,7 +593,11 @@ async def download_instagram_audio_callback(call: types.CallbackQuery):
         await safe_delete_message(status_message)
 
 
-@router.inline_query(F.query.regexp(r"(https?://(www\.)?instagram\.com/(p|reels|reel)/[^/?#&]+)", mode="search"))
+@router.inline_query(
+    F.query.regexp(
+        r"(https?://(www\.)?instagram\.com/(p|reels|reel)/[^/?#&]+)", mode="search"
+    )
+)
 @with_inline_query_logging("instagram", "inline_query")
 async def inline_instagram_query(query: types.InlineQuery):
     deps = build_handler_dependencies(bot=bot, db=db, send_analytics=send_analytics)
