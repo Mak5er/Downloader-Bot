@@ -305,7 +305,15 @@ async def send_chat_action_if_needed(
         _chat_action_cache.move_to_end(cache_key)
         return
 
-    await bot.send_chat_action(chat_id, action)
+    try:
+        await bot.send_chat_action(chat_id, action)
+    except Exception as exc:
+        logging.warning(
+            "Failed to send chat action: chat_id=%s action=%s error=%s",
+            chat_id,
+            action,
+            exc,
+        )
     _chat_action_cache[cache_key] = now
     _chat_action_cache.move_to_end(cache_key)
     while len(_chat_action_cache) > _chat_action_cache_maxsize:

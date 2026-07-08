@@ -322,6 +322,19 @@ async def test_send_chat_action_if_needed_throttles_duplicates():
 
 
 @pytest.mark.asyncio
+async def test_send_chat_action_if_needed_handles_errors():
+    telegram_ui_utils._chat_action_cache.clear()
+    bot = SimpleNamespace(send_chat_action=AsyncMock(side_effect=RuntimeError("fail")))
+
+    # This should not raise an exception
+    await utils.send_chat_action_if_needed(
+        bot, chat_id=1, action="typing", business_id=None
+    )
+
+    bot.send_chat_action.assert_awaited_once_with(1, "typing")
+
+
+@pytest.mark.asyncio
 async def test_react_to_message_skips_for_business(monkeypatch):
     message = SimpleNamespace(
         business_connection_id=42,

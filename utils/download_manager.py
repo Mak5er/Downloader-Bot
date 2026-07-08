@@ -152,11 +152,9 @@ class ResilientDownloader:
     """
     High-throughput downloader that supports HTTP range requests, retries and resume.
 
-    The implementation keeps per-thread requests sessions so Range downloads can happen
-    in parallel without recreating TCP connections on every chunk.
+    The implementation keeps a shared, thread-safe requests session so Range downloads
+    can happen in parallel and reuse TCP connections efficiently.
     """
-
-    _thread_local: threading.local = threading.local()
 
     def __init__(
         self,
@@ -170,6 +168,7 @@ class ResilientDownloader:
         self.config = config or DownloadConfig()
         self._default_headers: MutableMapping[str, str] = dict(default_headers or {})
         self.source = source
+        self._client: Optional[httpx.Client] = None
         self._inflight_downloads: dict[str, asyncio.Future[DownloadMetrics]] = {}
         self._inflight_lock: asyncio.Lock = asyncio.Lock()
         threshold_mb = os.getenv("DOWNLOAD_SUBPROCESS_THRESHOLD_MB", "0")
@@ -902,14 +901,13 @@ class ResilientDownloader:
                     logging.debug("Failed to remove partial file: path=%s", path)
 
     def _get_session(self) -> httpx.Client:
-        """Return a thread-local httpx client with sane defaults."""
-        client = getattr(self._thread_local, "client", None)
-        if client is None or client.is_closed:
+        """Return a shared httpx client with sane defaults."""
+        if self._client is None or self._client.is_closed:
             limits = httpx.Limits(
-                max_connections=self.config.max_workers * 2,
-                max_keepalive_connections=self.config.max_workers,
+                max_connections=max(100, self.config.max_workers * 4),
+                max_keepalive_connections=max(20, self.config.max_workers),
             )
-            client = httpx.Client(
+            self._client = httpx.Client(
                 timeout=httpx.Timeout(
                     self.config.stream_timeout[1], connect=self.config.stream_timeout[0]
                 ),
@@ -917,9 +915,8 @@ class ResilientDownloader:
                 follow_redirects=True,
                 headers=self._default_headers or None,
             )
-            self._thread_local.client = client
-            _register_http_client(client)
-        return client
+            _register_http_client(self._client)
+        return self._client
 
 
 def log_download_metrics(source: str, metrics: DownloadMetrics) -> None:
