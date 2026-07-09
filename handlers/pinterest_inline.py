@@ -50,6 +50,11 @@ async def handle_pinterest_inline_query(
     pinterest_url_regex: str,
     strip_pinterest_url,
     channel_id: Optional[int],
+    service_key: str = "pinterest",
+    service_name: str = "Pinterest",
+    analytics_action: str = "inline_pinterest_video",
+    get_preview_url=_get_pinterest_preview_url,
+    allow_text_only: bool = False,
     get_bot_url_fn=get_bot_url,
     safe_answer_inline_query_fn=safe_answer_inline_query,
 ) -> None:
@@ -57,30 +62,51 @@ async def handle_pinterest_inline_query(
         await deps.send_analytics(
             user_id=query.from_user.id,
             chat_type=query.chat_type,
-            action_name="inline_pinterest_video",
+            action_name=analytics_action,
         )
         match = re.search(pinterest_url_regex, query.query or "")
         if not match:
             await query.answer([], cache_time=1, is_personal=True)
             return
-        if not channel_id:
-            logging.error("CHANNEL_ID is not configured; Pinterest inline is disabled")
-            await query.answer([], cache_time=1, is_personal=True)
-            return
-
         source_url = strip_pinterest_url(match.group(0))
         user_settings = await deps.db.user_settings(query.from_user.id)
         bot_url = await get_bot_url_fn(deps.bot)
 
         post = await pinterest_service.fetch_post(source_url)
-        if not post or not post.media_list:
+        if not post:
+            await query.answer([], cache_time=1, is_personal=True)
+            return
+        if not post.media_list:
+            if not allow_text_only:
+                await query.answer([], cache_time=1, is_personal=True)
+                return
+            results = [
+                types.InlineQueryResultArticle(
+                    id=f"{service_key}_text_{post.id}",
+                    title=f"{service_name} Post",
+                    description=post.description or f"Text post from {service_name}.",
+                    thumbnail_url=get_inline_service_icon(service_key),
+                    input_message_content=types.InputTextMessageContent(
+                        message_text=bm.captions("on", post.description, bot_url, limit=4096),
+                        parse_mode="HTML",
+                    ),
+                    reply_markup=kb.return_video_info_keyboard(
+                        None, None, None, None, None, source_url, user_settings,
+                        audio_callback_data=None,
+                    ),
+                )
+            ]
+            await safe_answer_inline_query_fn(query, results, cache_time=10, is_personal=True)
+            return
+        if not channel_id:
+            logging.error("CHANNEL_ID is not configured; %s inline media is disabled", service_name)
             await query.answer([], cache_time=1, is_personal=True)
             return
         first = post.media_list[0]
         photo_items = [item for item in post.media_list if item.type == "photo"]
         first_photo = photo_items[0] if photo_items else None
-        first_preview = _get_pinterest_preview_url(first) or next(
-            (_get_pinterest_preview_url(item) for item in post.media_list if _get_pinterest_preview_url(item)),
+        first_preview = get_preview_url(first) or next(
+            (get_preview_url(item) for item in post.media_list if get_preview_url(item)),
             None,
         )
 
@@ -88,23 +114,23 @@ async def handle_pinterest_inline_query(
             cache_key = f"{source_url}#photo"
             db_id = await deps.db.get_file_id(cache_key)
             if not db_id and not channel_id:
-                logging.error("CHANNEL_ID is not configured; Pinterest inline photo send is disabled")
+                logging.error("CHANNEL_ID is not configured; %s inline photo send is disabled", service_name)
                 await query.answer([], cache_time=1, is_personal=True)
                 return
 
-            token = create_inline_video_request("pinterest", source_url, query.from_user.id, user_settings)
+            token = create_inline_video_request(service_key, source_url, query.from_user.id, user_settings)
             results = [
                 types.InlineQueryResultArticle(
-                    id=f"pinterest_inline:{token}",
-                    title="Pinterest Photo",
+                    id=f"{service_key}_inline:{token}",
+                    title=f"{service_name} Photo",
                     description=post.description or "Press the button to send this photo inline.",
                     thumbnail_url=first_preview,
                     input_message_content=types.InputTextMessageContent(
-                        message_text="Pinterest photo is being prepared...\nIf it does not start automatically, tap the button below.",
+                        message_text=f"{service_name} photo is being prepared...\nIf it does not start automatically, tap the button below.",
                     ),
                     reply_markup=kb.inline_send_media_keyboard(
                         "Send photo inline",
-                        f"inline:pinterest:{token}",
+                        f"inline:{service_key}:{token}",
                     ),
                 )
             ]
@@ -121,28 +147,29 @@ async def handle_pinterest_inline_query(
                         sent = await deps.bot.send_photo(
                             chat_id=channel_id,
                             photo=first.url,
-                            caption="Pinterest Album Preview",
+                            caption=f"{service_name} Album Preview",
                         )
                         if sent.photo:
                             preview_file_id = sent.photo[-1].file_id
                             await deps.db.add_file(cache_key, preview_file_id, "photo")
                     except Exception as exc:
                         logging.warning(
-                            "Failed to cache Pinterest album preview photo: url=%s error=%s",
+                            "Failed to cache %s album preview photo: url=%s error=%s",
+                            service_name,
                             summarize_url_for_log(source_url),
                             exc,
                         )
-            token = create_inline_album_request(query.from_user.id, "pinterest", source_url)
+            token = create_inline_album_request(query.from_user.id, service_key, source_url)
             deep_link = build_start_deeplink_url(bot_url, f"album_{token}")
             results = [
                 build_inline_album_result(
-                    result_id=f"pinterest_album_{post.id}",
-                    service_name="Pinterest",
+                    result_id=f"{service_key}_album_{post.id}",
+                    service_name=service_name,
                     deep_link=deep_link,
                     message_text=bm.captions(user_settings["captions"], post.description, bot_url),
                     preview_file_id=preview_file_id,
                     preview_url=first_preview,
-                    thumbnail_url=first_preview or get_inline_service_icon("pinterest"),
+                    thumbnail_url=first_preview or get_inline_service_icon(service_key),
                 )
             ]
             await safe_answer_inline_query_fn(query, results, cache_time=10, is_personal=True)
@@ -150,13 +177,13 @@ async def handle_pinterest_inline_query(
 
         if first.type != "video":
             if first_photo:
-                preview_url = _get_pinterest_preview_url(first_photo)
+                preview_url = get_preview_url(first_photo)
                 results = [
                     types.InlineQueryResultPhoto(
-                        id=f"pinterest_photo_{post.id}",
+                    id=f"{service_key}_photo_{post.id}",
                         photo_url=first_photo.url,
                         thumbnail_url=preview_url,
-                        title=bm.inline_photo_title("Pinterest"),
+                        title=bm.inline_photo_title(service_name),
                         description=post.description or bm.inline_photo_description(),
                         caption=bm.captions(user_settings["captions"], post.description, bot_url),
                         reply_markup=kb.return_video_info_keyboard(
@@ -171,38 +198,39 @@ async def handle_pinterest_inline_query(
 
             results = [
                 types.InlineQueryResultArticle(
-                    id="unsupported_pinterest_content",
-                    title="Pinterest Content",
+                    id=f"unsupported_{service_key}_content",
+                    title=f"{service_name} Content",
                     description="Only single videos are supported inline.",
                     input_message_content=types.InputTextMessageContent(
-                        message_text="Only single Pinterest videos are supported inline.",
+                        message_text=f"Only single {service_name} videos are supported inline.",
                     ),
                 )
             ]
             await safe_answer_inline_query_fn(query, results, cache_time=10, is_personal=True)
             return
 
-        token = create_inline_video_request("pinterest", source_url, query.from_user.id, user_settings)
-        preview_url = _get_pinterest_preview_url(first) or get_inline_service_icon("pinterest")
+        token = create_inline_video_request(service_key, source_url, query.from_user.id, user_settings)
+        preview_url = get_preview_url(first) or get_inline_service_icon(service_key)
         results = [
             types.InlineQueryResultArticle(
-                id=f"pinterest_inline:{token}",
-                title="Pinterest Video",
+                id=f"{service_key}_inline:{token}",
+                title=f"{service_name} Video",
                 description=post.description or "Press the button to send this video inline.",
                 thumbnail_url=preview_url,
                 input_message_content=types.InputTextMessageContent(
-                    message_text=bm.inline_send_video_prompt("Pinterest"),
+                    message_text=bm.inline_send_video_prompt(service_name),
                 ),
                 reply_markup=kb.inline_send_media_keyboard(
                     "Send video inline",
-                    f"inline:pinterest:{token}",
+                    f"inline:{service_key}:{token}",
                 ),
             )
         ]
         await safe_answer_inline_query_fn(query, results, cache_time=10, is_personal=True)
     except Exception as exc:
         logging.exception(
-            "Error processing Pinterest inline query: user_id=%s query=%s error=%s",
+            "Error processing %s inline query: user_id=%s query=%s error=%s",
+            service_name,
             query.from_user.id,
             summarize_text_for_log(query.query),
             exc,
@@ -222,6 +250,8 @@ async def send_inline_pinterest_media(
     pinterest_service,
     channel_id: Optional[int],
     max_file_size: int,
+    service_key: str = "pinterest",
+    service_name: str = "Pinterest",
     get_bot_url_fn=get_bot_url,
     safe_edit_inline_media_fn=safe_edit_inline_media,
     safe_edit_inline_text_fn=safe_edit_inline_text,
@@ -239,7 +269,7 @@ async def send_inline_pinterest_media(
     _edit_inline_status = build_inline_status_editor(
         bot=deps.bot,
         inline_message_id=inline_message_id,
-        callback_data_factory=lambda _media_kind: f"inline:pinterest:{token}",
+        callback_data_factory=lambda _media_kind: f"inline:{service_key}:{token}",
         safe_edit_inline_text_fn=safe_edit_inline_text_fn,
     )
 
@@ -247,7 +277,7 @@ async def send_inline_pinterest_media(
         post = await pinterest_service.fetch_post(request.source_url)
         if not post or len(post.media_list) != 1:
             complete_inline_video_request(token)
-            await _edit_inline_status(bm.inline_photos_not_supported("Pinterest"))
+            await _edit_inline_status(bm.inline_photos_not_supported(service_name))
             return
 
         first_item = post.media_list[0]
@@ -264,7 +294,7 @@ async def send_inline_pinterest_media(
                 sent = await deps.bot.send_photo(
                     chat_id=channel_id,
                     photo=first_item.url,
-                    caption=f"Pinterest Photo from {actor_name}",
+                    caption=f"{service_name} Photo from {actor_name}",
                 )
                 if not sent.photo:
                     reset_inline_video_request(token)
@@ -305,7 +335,7 @@ async def send_inline_pinterest_media(
 
         if first_item.type != "video":
             complete_inline_video_request(token)
-            await _edit_inline_status(bm.inline_photos_not_supported("Pinterest"))
+            await _edit_inline_status(bm.inline_photos_not_supported(service_name))
             return
 
         db_id = await deps.db.get_file_id(request.source_url)
@@ -316,16 +346,16 @@ async def send_inline_pinterest_media(
                 return
 
             timestamp = datetime.datetime.now().strftime("%Y%m%d%H%M%S")
-            filename = f"{post.id}_{timestamp}_pinterest_inline.mp4"
+            filename = f"{post.id}_{timestamp}_{service_key}_inline.mp4"
             await _edit_inline_status(bm.downloading_video_status())
 
-            on_progress = make_status_text_progress_updater("Pinterest video", _edit_inline_status)
+            on_progress = make_status_text_progress_updater(f"{service_name} video", _edit_inline_status)
 
             metrics = await pinterest_service.download_media(
                 first_item.url,
                 filename,
                 user_id=request.owner_user_id,
-                request_id=f"pinterest_inline:{request.owner_user_id}:{request_event_id}:{post.id}",
+                request_id=f"{service_key}_inline:{request.owner_user_id}:{request_event_id}:{post.id}",
                 on_progress=on_progress,
             )
             if not metrics:
@@ -333,7 +363,7 @@ async def send_inline_pinterest_media(
                 await _edit_inline_status(bm.something_went_wrong(), with_retry_button=True)
                 return
 
-            log_download_metrics("pinterest_inline", metrics)
+            log_download_metrics(f"{service_key}_inline", metrics)
             download_path = metrics.path
             if metrics.size >= max_file_size:
                 complete_inline_video_request(token)
@@ -344,7 +374,7 @@ async def send_inline_pinterest_media(
             sent = await deps.bot.send_video(
                 chat_id=channel_id,
                 video=FSInputFile(download_path),
-                caption=f"Pinterest Video from {actor_name}",
+                caption=f"{service_name} Video from {actor_name}",
                 **(await build_video_send_kwargs(download_path)),
             )
             db_id = sent.video.file_id

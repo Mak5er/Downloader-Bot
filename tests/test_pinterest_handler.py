@@ -25,6 +25,7 @@ def test_parse_pinterest_post_tunnel():
     assert post.media_list[0].type == "video"
     assert post.media_list[0].url == "https://cdn.example.com/video.mp4"
     assert post.description == ""
+    assert pinterest.parse_pinterest_post(payload).id == post.id
 
 
 def test_parse_pinterest_post_picker():

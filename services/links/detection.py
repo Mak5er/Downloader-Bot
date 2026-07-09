@@ -16,6 +16,13 @@ _SERVICE_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
         re.compile(r"(https?://(www\.)?instagram\.com/\S+)", re.IGNORECASE),
     ),
     (
+        "threads",
+        re.compile(
+            r"(https?://(?:www\.)?threads\.(?:com|net)/@[A-Za-z0-9._-]+/post/[A-Za-z0-9_-]+)",
+            re.IGNORECASE,
+        ),
+    ),
+    (
         "soundcloud",
         re.compile(
             r"(https?://(?:www\.|m\.)?soundcloud\.com/\S+|https?://on\.soundcloud\.com/\S+|https?://soundcloud\.app\.goo\.gl/\S+)",

@@ -247,6 +247,24 @@ def test_request_dedupe_releases_failed_requests_immediately(monkeypatch):
     assert request_dedupe.claim_request(3, -2001, "tiktok", "https://www.tiktok.com/@demo/video/1?share=1") == "accepted"
 
 
+def test_request_dedupe_prunes_expired_entries_after_recent_entries(monkeypatch):
+    request_dedupe.reset_request_tracking()
+    now = 0.0
+    monkeypatch.setattr(request_dedupe.time, "monotonic", lambda: now)
+
+    assert request_dedupe.claim_request(1, None, "youtube", "https://youtu.be/old") == "accepted"
+    now = 1.0
+    assert request_dedupe.claim_request(2, None, "youtube", "https://youtu.be/fresh") == "accepted"
+    now = request_dedupe._ACTIVE_TTL_SECONDS - 0.1
+    assert request_dedupe.claim_request(1, None, "youtube", "https://youtu.be/old") == "active"
+
+    now = request_dedupe._ACTIVE_TTL_SECONDS + 0.1
+    request_dedupe.claim_request(3, None, "youtube", "https://youtu.be/new")
+
+    old = request_dedupe.build_request_fingerprint(1, None, "youtube", "https://youtu.be/old")
+    assert old not in request_dedupe._active_requests
+
+
 def test_request_dedupe_isolated_per_chat(monkeypatch):
     request_dedupe.reset_request_tracking()
     now = 300.0

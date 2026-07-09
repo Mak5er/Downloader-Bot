@@ -101,15 +101,23 @@ class FileCacheRepositoryMixin:
         while True:
             async with self.SessionLocal() as session:
                 async with session.begin():
-                    result = await session.execute(
-                        delete(DownloadedFile)
+                    expired_ids = await session.execute(
+                        select(DownloadedFile.id)
                         .where(DownloadedFile.date_added < cutoff)
+                        .order_by(DownloadedFile.date_added, DownloadedFile.id)
                         .limit(batch_size)
                     )
-                    deleted = result.rowcount
-                    total_deleted += deleted
+                    ids = expired_ids.scalars().all()
+                    if not ids:
+                        deleted = 0
+                    else:
+                        result = await session.execute(
+                            delete(DownloadedFile).where(DownloadedFile.id.in_(ids))
+                        )
+                        deleted = int(result.rowcount or 0)
+            total_deleted += deleted
 
-            if deleted < batch_size:
+            if not ids or deleted < batch_size:
                 break
 
         if total_deleted > 0:

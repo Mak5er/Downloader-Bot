@@ -8,6 +8,7 @@ def welcome_message():
         "Send one link, or paste several links in one message, and I'll download what I can.\n\n"
         "<b>Supported sites</b>\n"
         '<tg-emoji emoji-id="5233671414023753035">📷</tg-emoji> Instagram\n'
+        '🧵 Threads\n'
         '<tg-emoji emoji-id="5233597424622144804">🎵</tg-emoji> TikTok\n'
         '<tg-emoji emoji-id="5233311027612913110">▶️</tg-emoji> YouTube\n'
         '<tg-emoji emoji-id="5231309843435919433">🐦</tg-emoji> X / Twitter\n'
@@ -231,6 +232,7 @@ def supported_sites_message():
     return (
         "<b>Supported sites</b>\n\n"
         "Instagram posts, reels, and albums\n"
+        "Threads posts and albums\n"
         "TikTok videos, photo posts, and profiles\n"
         "YouTube videos and YouTube Music links\n"
         "X / Twitter posts\n"

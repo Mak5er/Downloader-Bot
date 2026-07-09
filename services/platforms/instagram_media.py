@@ -1,4 +1,4 @@
-import datetime
+import hashlib
 from dataclasses import dataclass
 from typing import Awaitable, Callable, Optional
 from urllib.parse import urlparse, urlunparse
@@ -238,7 +238,9 @@ class InstagramMediaService:
             logging.error("Cobalt response has no media items: status=%s payload=%s", status, data)
             return None
 
-        post_id = _extract_instagram_post_id(url) or str(int(datetime.datetime.now().timestamp()))
+        post_id = _extract_instagram_post_id(url) or hashlib.blake2s(
+            url.encode("utf-8"), digest_size=8
+        ).hexdigest()
         return InstagramVideo(
             id=post_id,
             description=description,

@@ -169,6 +169,7 @@ class ResilientDownloader:
         self._default_headers: MutableMapping[str, str] = dict(default_headers or {})
         self.source = source
         self._client: Optional[httpx.Client] = None
+        self._client_lock = threading.Lock()
         self._inflight_downloads: dict[str, asyncio.Future[DownloadMetrics]] = {}
         self._inflight_lock: asyncio.Lock = asyncio.Lock()
         threshold_mb = os.getenv("DOWNLOAD_SUBPROCESS_THRESHOLD_MB", "0")
@@ -454,6 +455,8 @@ class ResilientDownloader:
 
         if skip_if_exists and os.path.exists(target_path):
             size = os.path.getsize(target_path)
+            if max_size_bytes and size > max_size_bytes > 0:
+                raise DownloadTooLargeError(size, max_size_bytes)
             logging.debug(
                 "Download skipped because file already exists: url=%s path=%s size=%s",
                 url,
@@ -521,14 +524,39 @@ class ResilientDownloader:
             self._emit_progress(progress_state, force=False)
 
             if use_multipart and "Range" not in headers:
-                self._download_multipart(
-                    url,
-                    temp_path,
-                    target_path,
-                    total_size,
-                    headers,
-                    progress_state=progress_state,
-                )
+                try:
+                    self._download_multipart(
+                        url,
+                        temp_path,
+                        target_path,
+                        total_size,
+                        headers,
+                        progress_state=progress_state,
+                    )
+                except _ResumeNotSupportedError:
+                    # Some CDNs advertise byte ranges in HEAD but ignore them on
+                    # GET. Retry the same download sequentially instead of
+                    # returning a false download failure to the user.
+                    logging.warning(
+                        "Multipart download not supported by origin, falling back to sequential mode: url=%s path=%s",
+                        url,
+                        target_path,
+                    )
+                    self._cleanup_partial(
+                        temp_path,
+                        target_path,
+                        remove_target=not had_existing_target,
+                    )
+                    use_multipart = False
+                    if progress_state:
+                        progress_state.downloaded_bytes = 0
+                    self._download_single(
+                        url,
+                        target_path,
+                        headers,
+                        progress_state=progress_state,
+                        max_size_bytes=max_size_bytes,
+                    )
             else:
                 try:
                     self._download_single(
@@ -804,8 +832,10 @@ class ResilientDownloader:
                                 if progress_state:
                                     with progress_lock:
                                         progress_state.downloaded_bytes += len(chunk)
-                                        self._emit_progress(progress_state, force=False)
+                                self._emit_progress(progress_state, force=False)
                     return
+                except _ResumeNotSupportedError:
+                    raise
                 except Exception as exc:
                     if attempt > self.config.max_retries:
                         raise
@@ -902,21 +932,22 @@ class ResilientDownloader:
 
     def _get_session(self) -> httpx.Client:
         """Return a shared httpx client with sane defaults."""
-        if self._client is None or self._client.is_closed:
-            limits = httpx.Limits(
-                max_connections=max(100, self.config.max_workers * 4),
-                max_keepalive_connections=max(20, self.config.max_workers),
-            )
-            self._client = httpx.Client(
-                timeout=httpx.Timeout(
-                    self.config.stream_timeout[1], connect=self.config.stream_timeout[0]
-                ),
-                limits=limits,
-                follow_redirects=True,
-                headers=self._default_headers or None,
-            )
-            _register_http_client(self._client)
-        return self._client
+        with self._client_lock:
+            if self._client is None or self._client.is_closed:
+                limits = httpx.Limits(
+                    max_connections=max(100, self.config.max_workers * 4),
+                    max_keepalive_connections=max(20, self.config.max_workers),
+                )
+                self._client = httpx.Client(
+                    timeout=httpx.Timeout(
+                        self.config.stream_timeout[1], connect=self.config.stream_timeout[0]
+                    ),
+                    limits=limits,
+                    follow_redirects=True,
+                    headers=self._default_headers or None,
+                )
+                _register_http_client(self._client)
+            return self._client
 
 
 def log_download_metrics(source: str, metrics: DownloadMetrics) -> None:

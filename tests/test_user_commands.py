@@ -369,6 +369,17 @@ async def test_process_pending_message_dispatches_pinterest(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_process_pending_message_dispatches_threads(monkeypatch):
+    message = SimpleNamespace(text="https://www.threads.com/@demo/post/Abc_123", caption=None)
+    process_threads_url = AsyncMock()
+    monkeypatch.setattr(handlers.threads, "process_threads_url", process_threads_url)
+
+    await user._process_pending_message(message)
+
+    process_threads_url.assert_awaited_once_with(message, url="https://www.threads.com/@demo/post/Abc_123")
+
+
+@pytest.mark.asyncio
 async def test_process_pending_message_dispatches_youtube_music(monkeypatch):
     message = DummyMessage()
     message.text = "https://music.youtube.com/watch?v=abc123"

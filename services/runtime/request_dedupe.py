@@ -95,16 +95,13 @@ def claim_request(
         _cleanup_locked(now)
         active_at = _active_requests.get(fingerprint)
         if active_at is not None and now - active_at <= _ACTIVE_TTL_SECONDS:
-            _active_requests.move_to_end(fingerprint)
             return "active"
 
         completed_at = _completed_requests.get(fingerprint)
         if completed_at is not None and now - completed_at <= _COMPLETED_TTL_SECONDS:
-            _completed_requests.move_to_end(fingerprint)
             return "recent"
 
         _active_requests[fingerprint] = now
-        _active_requests.move_to_end(fingerprint)
         _trim_locked()
         return "accepted"
 
@@ -124,7 +121,6 @@ def finish_request(
         _active_requests.pop(fingerprint, None)
         if success and fingerprint[4]:
             _completed_requests[fingerprint] = now
-            _completed_requests.move_to_end(fingerprint)
         _cleanup_locked(now)
 
 

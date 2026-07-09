@@ -433,6 +433,48 @@ def test_prune_local_caches_removes_expired_and_overflow_entries():
 
 
 @pytest.mark.asyncio
+async def test_cleanup_expired_files_deletes_ids_in_batches(monkeypatch):
+    database = db_module.DataBase("postgresql://user:pass@localhost/testdb")
+    select_result = SimpleNamespace(
+        scalars=lambda: SimpleNamespace(all=lambda: [11, 12])
+    )
+    delete_result = SimpleNamespace(rowcount=2)
+    session = SimpleNamespace(
+        execute=AsyncMock(side_effect=[select_result, delete_result])
+    )
+
+    class _Transaction:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+    class _Session:
+        execute = session.execute
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        def begin(self):
+            return _Transaction()
+
+    monkeypatch.setattr(database, "SessionLocal", lambda: _Session())
+    database._file_cache["stale"] = (0.0, "file-id")
+
+    deleted = await database.cleanup_expired_files()
+
+    assert deleted == 2
+    assert database._file_cache == {}
+    assert session.execute.await_count == 2
+    delete_statement = session.execute.await_args_list[1].args[0]
+    assert "DELETE FROM downloaded_files" in str(delete_statement)
+
+
+@pytest.mark.asyncio
 async def test_downloaded_files_count(database):
     today = datetime.now()
     older = today - timedelta(days=10)
