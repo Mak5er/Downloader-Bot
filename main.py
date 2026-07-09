@@ -92,16 +92,21 @@ _ANALYTICS_SEND_CONCURRENCY = 8
 _analytics_queue: Optional[asyncio.Queue[Optional[_AnalyticsPayload]]] = None
 _analytics_worker_tasks: list[asyncio.Task] = []
 _analytics_http_client: Optional[httpx.AsyncClient] = None
+_analytics_http_client_lock = asyncio.Lock()
 
 
 async def _get_analytics_http_client() -> httpx.AsyncClient:
     global _analytics_http_client
-    if _analytics_http_client is None:
-        _analytics_http_client = httpx.AsyncClient(
-            timeout=httpx.Timeout(10.0, connect=5.0),
-            limits=httpx.Limits(max_connections=40, max_keepalive_connections=20),
-        )
-    return _analytics_http_client
+    if _analytics_http_client is not None:
+        return _analytics_http_client
+
+    async with _analytics_http_client_lock:
+        if _analytics_http_client is None:
+            _analytics_http_client = httpx.AsyncClient(
+                timeout=httpx.Timeout(10.0, connect=5.0),
+                limits=httpx.Limits(max_connections=40, max_keepalive_connections=20),
+            )
+        return _analytics_http_client
 
 
 async def _close_analytics_http_client() -> None:

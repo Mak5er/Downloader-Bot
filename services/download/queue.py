@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from inspect import isawaitable
 import time
 from collections import defaultdict, deque
 from dataclasses import dataclass, field
@@ -35,6 +36,10 @@ class QueueBackpressureError(Exception):
     def __init__(self, position: int):
         self.position = max(1, int(position))
         super().__init__(f"Queue is full. Position: {self.position}.")
+
+
+class QueueShutdownError(Exception):
+    """Raised when a job is submitted while the queue is stopping."""
 
 
 @dataclass(slots=True)
@@ -109,6 +114,12 @@ class AdaptiveDownloadQueue:
             raise ValueError("min_workers must be >= 1")
         if max_workers < min_workers:
             raise ValueError("max_workers must be >= min_workers")
+        if max_queue_size < 1:
+            raise ValueError("max_queue_size must be >= 1")
+        if per_user_rate_limit < 1:
+            raise ValueError("per_user_rate_limit must be >= 1")
+        if per_user_window_seconds <= 0:
+            raise ValueError("per_user_window_seconds must be > 0")
         if per_user_max_pending < 1:
             raise ValueError("per_user_max_pending must be >= 1")
         if per_user_pending_timeout_seconds < 0:
@@ -128,6 +139,7 @@ class AdaptiveDownloadQueue:
         self._workers: dict[int, asyncio.Task] = {}
         self._lock = asyncio.Lock()
         self._started = False
+        self._stopping = False
 
         self._user_recent: dict[_QueueScopeKey, deque[float]] = defaultdict(deque)
         self._user_pending: dict[_QueueScopeKey, int] = defaultdict(int)
@@ -195,23 +207,25 @@ class AdaptiveDownloadQueue:
         loop = asyncio.get_running_loop()
         future: asyncio.Future[T] = loop.create_future()
         try:
-            if self._queue.qsize() >= self.max_queue_size:
-                raise QueueBackpressureError(position=self._queue.qsize() + 1)
+            async with self._lock:
+                if self._stopping or not self._started:
+                    raise QueueShutdownError("Download queue is shutting down")
+                if self._queue.qsize() >= self.max_queue_size:
+                    raise QueueBackpressureError(position=self._queue.qsize() + 1)
 
-            job = _QueuedJob(
-                priority=int(priority),
-                order=next(self._sequence),
-                created_at=time.monotonic(),
-                source=source or "generic",
-                user_id=user_id,
-                chat_id=chat_id,
-                scope_key=scope_key,
-                request_key=request_key,
-                runner=runner,
-                future=future,
-            )
-
-            self._queue.put_nowait(job)
+                job = _QueuedJob(
+                    priority=int(priority),
+                    order=next(self._sequence),
+                    created_at=time.monotonic(),
+                    source=source or "generic",
+                    user_id=user_id,
+                    chat_id=chat_id,
+                    scope_key=scope_key,
+                    request_key=request_key,
+                    runner=runner,
+                    future=future,
+                )
+                self._queue.put_nowait(job)
             queued = True
             self._last_non_empty_queue = time.monotonic()
             logging.event(
@@ -233,7 +247,7 @@ class AdaptiveDownloadQueue:
                 )
                 try:
                     maybe = on_queued(ticket)
-                    if asyncio.iscoroutine(maybe):
+                    if isawaitable(maybe):
                         await maybe
                 except Exception as exc:
                     logging.debug(
@@ -283,29 +297,37 @@ class AdaptiveDownloadQueue:
 
     async def shutdown(self) -> None:
         async with self._lock:
-            worker_count = len(self._workers)
-            for _ in range(worker_count):
-                self._queue.put_nowait(
-                    _QueuedJob(
-                        priority=10**9,
-                        order=next(self._sequence),
-                        created_at=time.monotonic(),
-                        source="system",
-                        user_id=None,
-                        stop_worker=True,
+            if not self._started and not self._workers:
+                return
+            if not self._stopping:
+                self._stopping = True
+                for _ in range(len(self._workers)):
+                    self._queue.put_nowait(
+                        _QueuedJob(
+                            priority=10**9,
+                            order=next(self._sequence),
+                            created_at=time.monotonic(),
+                            source="system",
+                            user_id=None,
+                            stop_worker=True,
+                        )
                     )
-                )
+            workers = tuple(self._workers.values())
 
-        if self._workers:
-            await asyncio.gather(*self._workers.values(), return_exceptions=True)
-        self._workers.clear()
-        self._started = False
+        if workers:
+            await asyncio.gather(*workers, return_exceptions=True)
+        async with self._lock:
+            self._workers.clear()
+            self._started = False
+            self._stopping = False
 
     async def _ensure_started(self) -> None:
-        if self._started:
+        if self._started and not self._stopping:
             return
 
         async with self._lock:
+            if self._stopping:
+                raise QueueShutdownError("Download queue is shutting down")
             if self._started:
                 return
             for _ in range(self.min_workers):
@@ -442,11 +464,15 @@ class AdaptiveDownloadQueue:
             )
 
     async def _maybe_autotune(self) -> None:
+        if self._stopping:
+            return
         now = time.monotonic()
         if now - self._last_scale_action < self._scale_cooldown_seconds:
             return
 
         async with self._lock:
+            if self._stopping:
+                return
             now = time.monotonic()
             if now - self._last_scale_action < self._scale_cooldown_seconds:
                 return

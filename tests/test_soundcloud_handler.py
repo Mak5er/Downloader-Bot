@@ -22,6 +22,10 @@ def test_parse_soundcloud_track_tunnel():
     assert track is not None
     assert track.audio_url == "https://cdn.example.com/audio.mp3"
     assert track.title != ""
+    same_track = soundcloud.parse_soundcloud_track(payload, "https://soundcloud.com/artist/track")
+    other_track = soundcloud.parse_soundcloud_track(payload, "https://soundcloud.com/artist/other")
+    assert same_track is not None and same_track.id == track.id
+    assert other_track is not None and other_track.id != track.id
 
 
 def test_parse_soundcloud_track_local_processing_with_cover():

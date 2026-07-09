@@ -1,3 +1,5 @@
+import hashlib
+import json
 from dataclasses import dataclass
 from typing import Awaitable, Callable, Optional
 from urllib.parse import urlparse, urlunparse
@@ -147,7 +149,10 @@ def parse_pinterest_post(data: dict) -> Optional[PinterestPost]:
         return None
 
     return PinterestPost(
-        id=str(hash(str(sorted(data.items())))),
+        id=hashlib.blake2s(
+            json.dumps(data, sort_keys=True, separators=(",", ":"), default=str).encode("utf-8"),
+            digest_size=8,
+        ).hexdigest(),
         description=_derive_description(data),
         media_list=media_list,
     )

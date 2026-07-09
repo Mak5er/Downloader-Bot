@@ -1,4 +1,4 @@
-import datetime
+import hashlib
 from dataclasses import dataclass
 from typing import Awaitable, Callable, Optional
 from urllib.parse import urlparse, urlunparse
@@ -137,7 +137,9 @@ def parse_soundcloud_track(data: dict, source_url: str) -> Optional[SoundCloudTr
         return None
 
     return SoundCloudTrack(
-        id=str(int(datetime.datetime.now().timestamp())),
+        # A deterministic ID prevents concurrent tracks fetched in the same
+        # second from writing to the same output filename.
+        id=hashlib.blake2s(source_url.encode("utf-8"), digest_size=8).hexdigest(),
         source_url=source_url,
         audio_url=audio_url,
         title=title,

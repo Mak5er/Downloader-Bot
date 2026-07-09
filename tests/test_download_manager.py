@@ -167,6 +167,54 @@ def test_download_sync_preserves_too_large_error_and_keeps_existing_target(
     assert target.read_bytes() == b"existing"
 
 
+def test_download_sync_falls_back_when_multipart_range_is_not_supported(
+    monkeypatch, tmp_path
+):
+    downloader = ResilientDownloader(
+        str(tmp_path),
+        config=DownloadConfig(multipart_threshold=1, max_workers=2),
+    )
+    target = tmp_path / "video.mp4"
+
+    monkeypatch.setattr(downloader, "_probe", lambda url, headers: (4, True))
+
+    def fail_multipart(*_args, **_kwargs):
+        raise download_manager._ResumeNotSupportedError("range ignored")
+
+    def download_sequential(_url, target_path, _headers, *, progress_state=None, max_size_bytes=None):
+        Path(target_path).write_bytes(b"data")
+
+    monkeypatch.setattr(downloader, "_download_multipart", fail_multipart)
+    monkeypatch.setattr(downloader, "_download_single", download_sequential)
+
+    metrics = downloader._download_sync(
+        "https://cdn.example.com/video.mp4",
+        "video.mp4",
+        {},
+        False,
+        None,
+        None,
+    )
+
+    assert target.read_bytes() == b"data"
+    assert metrics.used_multipart is False
+
+
+def test_download_skip_if_exists_enforces_max_size(tmp_path):
+    downloader = ResilientDownloader(str(tmp_path))
+    (tmp_path / "video.mp4").write_bytes(b"123456")
+
+    with pytest.raises(download_manager.DownloadTooLargeError):
+        downloader._download_sync(
+            "https://cdn.example.com/video.mp4",
+            "video.mp4",
+            {},
+            True,
+            None,
+            5,
+        )
+
+
 @pytest.mark.asyncio
 async def test_download_rejects_parent_path_traversal(tmp_path):
     downloader = ResilientDownloader(str(tmp_path))
