@@ -3,6 +3,7 @@ from services.links.detection import detect_supported_service, extract_supported
 
 def test_detect_supported_service_covers_all_supported_group_guard_links():
     assert detect_supported_service("https://www.instagram.com/p/demo") == "instagram"
+    assert detect_supported_service("https://www.threads.com/@demo/post/Abc_123") == "threads"
     assert detect_supported_service("https://www.tiktok.com/@demo/video/1") == "tiktok"
     assert detect_supported_service("https://soundcloud.com/artist/track") == "soundcloud"
     assert detect_supported_service("https://pin.it/demo123") == "pinterest"
@@ -22,6 +23,13 @@ def test_extract_supported_links_preserves_order_and_deduplicates():
         ("youtube", "https://youtu.be/demo"),
         ("instagram", "https://www.instagram.com/reel/abc/"),
     ]
+
+
+def test_extract_supported_links_canonicalizes_threads_domain_and_tracking():
+    assert extract_supported_link("https://threads.net/@demo/post/Abc_123?utm_source=share") == (
+        "threads",
+        "https://threads.net/@demo/post/Abc_123",
+    )
 
 
 def test_extract_supported_link_strips_trailing_sentence_punctuation():

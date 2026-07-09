@@ -214,6 +214,10 @@ async def _process_inline_album_deeplink(message: types.Message, payload: str) -
             from handlers import instagram
             await instagram.process_instagram(message, direct_url=request.url)
             return True
+        if request.service == "threads":
+            from handlers import threads
+            await threads.process_threads(message, direct_url=request.url)
+            return True
         if request.service == "tiktok":
             from handlers import tiktok
             await tiktok.process_tiktok(message, direct_url=request.url)
@@ -308,6 +312,11 @@ async def _process_supported_link(message: types.Message, service: str, url: str
     if service == "instagram":
         from handlers import instagram
         await instagram.process_instagram_url(message, url=url)
+        return
+
+    if service == "threads":
+        from handlers import threads
+        await threads.process_threads_url(message, url=url)
         return
 
     if service == "soundcloud":

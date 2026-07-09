@@ -69,6 +69,8 @@ class AnalyticsRepositoryMixin:
             return "TikTok"
         if "instagram" in lower:
             return "Instagram"
+        if "threads" in lower:
+            return "Threads"
         if "youtube" in lower:
             return "YouTube"
         if "soundcloud" in lower:

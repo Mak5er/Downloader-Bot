@@ -8,7 +8,8 @@ The project is built on `aiogram 3`, uses `SQLAlchemy + Alembic` for persistence
 
 ## Features
 
-- Download media from TikTok, Instagram, YouTube, SoundCloud, Pinterest, and X/Twitter
+- Download media from TikTok, Instagram, Threads, YouTube, SoundCloud, Pinterest, and X/Twitter
+- Download public Threads post photos, videos, and carousels directly from their page metadata
 - Support direct bot usage and Telegram inline mode flows
 - Per-user settings for captions, info buttons, URL buttons, MP3 buttons, and auto-delete
 - Shared download queue with backpressure, retries, and large-download worker handoff
