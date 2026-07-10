@@ -57,6 +57,20 @@ async def test_send_audio_with_thumbnail_adds_duration_from_metadata():
 
 
 @pytest.mark.asyncio
+async def test_send_audio_with_thumbnail_deduplicates_final_performer():
+    send_audio = AsyncMock(return_value=SimpleNamespace(audio=SimpleNamespace(file_id="audio-id")))
+
+    await send_audio_with_thumbnail(
+        send_audio,
+        audio="file-id",
+        performer="SUDNO, sudno, SUDNO, Sudno, SUDNO",
+        bot_url="https://t.me/maxloadbot",
+    )
+
+    assert send_audio.await_args.kwargs["performer"] == "SUDNO"
+
+
+@pytest.mark.asyncio
 async def test_send_audio_with_thumbnail_probes_duration_from_path(monkeypatch):
     send_audio = AsyncMock(return_value=SimpleNamespace(audio=SimpleNamespace(file_id="audio-id")))
     monkeypatch.setattr(delivery, "probe_audio_duration_seconds", AsyncMock(return_value=57))
@@ -92,6 +106,28 @@ async def test_send_audio_with_thumbnail_embeds_cover_for_local_audio(monkeypatc
 
     assert send_audio.await_args.kwargs["audio"].path == str(embedded_path)
     assert not embedded_path.exists()
+
+
+@pytest.mark.asyncio
+async def test_send_audio_with_thumbnail_can_keep_existing_high_quality_id3_cover(monkeypatch, tmp_path):
+    audio_path = tmp_path / "audio.mp3"
+    cover_path = tmp_path / "cover.jpg"
+    audio_path.write_bytes(b"audio")
+    cover_path.write_bytes(b"cover")
+    send_audio = AsyncMock(return_value=SimpleNamespace(audio=SimpleNamespace(file_id="audio-id")))
+    monkeypatch.setattr(delivery, "embed_audio_cover", AsyncMock())
+
+    await send_audio_with_thumbnail(
+        send_audio,
+        audio=FSInputFile(str(audio_path)),
+        audio_path=str(audio_path),
+        bot_avatar=FSInputFile(str(cover_path)),
+        bot_url="https://t.me/maxloadbot",
+        embed_thumbnail=False,
+    )
+
+    delivery.embed_audio_cover.assert_not_awaited()
+    assert "embed_thumbnail" not in send_audio.await_args.kwargs
 
 
 @pytest.mark.asyncio

@@ -4,6 +4,7 @@ from typing import Awaitable, Callable, Optional
 from urllib.parse import urlparse, urlunparse
 
 from services.logger import logger as logging
+from services.media.artist_names import normalize_artist_names
 from utils.download_manager import (
     DownloadConfig,
     DownloadError,
@@ -108,7 +109,7 @@ def parse_soundcloud_track(data: dict, source_url: str) -> Optional[SoundCloudTr
         metadata = output.get("metadata") if isinstance(output, dict) else {}
         if isinstance(metadata, dict):
             title = metadata.get("title") or title
-            artist = metadata.get("artist") or ""
+            artist = normalize_artist_names(metadata.get("artist")) or ""
             duration_seconds = (
                 _coerce_duration_seconds(metadata.get("duration"))
                 or _coerce_duration_seconds(metadata.get("length"))
@@ -116,6 +117,7 @@ def parse_soundcloud_track(data: dict, source_url: str) -> Optional[SoundCloudTr
                 or _coerce_duration_milliseconds(metadata.get("durationMs"))
             )
 
+        unknown_tunnels: list[str] = []
         for tunnel_url in data.get("tunnel") or []:
             if not isinstance(tunnel_url, str) or not tunnel_url:
                 continue
@@ -126,8 +128,18 @@ def parse_soundcloud_track(data: dict, source_url: str) -> Optional[SoundCloudTr
             if _looks_like_audio_url(tunnel_url) and not audio_url:
                 audio_url = tunnel_url
                 continue
-            if not audio_url:
-                audio_url = tunnel_url
+            unknown_tunnels.append(tunnel_url)
+
+        if not audio_url and unknown_tunnels:
+            audio_url = unknown_tunnels.pop(0)
+        audio_descriptor = data.get("audio") or {}
+        if (
+            not thumb_url
+            and isinstance(audio_descriptor, dict)
+            and audio_descriptor.get("cover") is True
+            and unknown_tunnels
+        ):
+            thumb_url = unknown_tunnels[-1]
     else:
         logging.error("Unsupported Cobalt SoundCloud response status: status=%s payload=%s", status, data)
         return None

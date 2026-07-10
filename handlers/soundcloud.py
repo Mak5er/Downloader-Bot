@@ -63,6 +63,7 @@ from services.media.delivery import (
     coerce_audio_duration_seconds,
     send_audio_with_thumbnail,
 )
+from services.media.audio_metadata import build_audio_filename, prepare_mp3_metadata
 from services.platforms import soundcloud_media as soundcloud_platform
 
 logging = logging.bind(service="soundcloud")
@@ -110,6 +111,7 @@ soundcloud_service = SoundCloudService(OUTPUT_DIR)
 async def process_soundcloud(message: types.Message, direct_url: Optional[str] = None):
     status_message: Optional[types.Message] = None
     audio_path: Optional[str] = None
+    prepared_metadata = None
     request_lease = None
     try:
         business_id = message.business_connection_id
@@ -163,7 +165,6 @@ async def process_soundcloud(message: types.Message, direct_url: Optional[str] =
                 message.reply_audio,
                 audio=db_file_id,
                 caption=bm.captions(user_settings["captions"], None, bot_url),
-                bot_avatar=bot_avatar,
                 bot_url=bot_url,
                 parse_mode="HTML",
             )
@@ -212,20 +213,40 @@ async def process_soundcloud(message: types.Message, direct_url: Optional[str] =
             await message.reply(bm.audio_too_large())
             return
 
+        prepared_metadata = await prepare_mp3_metadata(
+            audio_path,
+            {
+                "title": track.title,
+                "artists": track.artist,
+                "thumbnail": track.thumbnail_url,
+                "source_url": source_url,
+            },
+        )
+
         await safe_edit_text(status_message, bm.uploading_status())
         await send_chat_action_if_needed(
             bot, message.chat.id, "upload_audio", business_id
         )
 
+        audio_thumbnail = (
+            FSInputFile(str(prepared_metadata.thumbnail_path), filename="cover.jpg")
+            if prepared_metadata.thumbnail_path
+            else bot_avatar
+        )
         sent = await send_audio_with_thumbnail(
             message.reply_audio,
-            audio=FSInputFile(audio_path),
+            audio=FSInputFile(
+                audio_path,
+                filename=build_audio_filename(track.title),
+            ),
             title=track.title,
+            performer=track.artist or None,
             caption=bm.captions(user_settings["captions"], None, bot_url),
             audio_path=audio_path,
-            bot_avatar=bot_avatar,
+            bot_avatar=audio_thumbnail,
             bot_url=bot_url,
             duration=track.duration_seconds,
+            embed_thumbnail=False,
             parse_mode="HTML",
         )
 
@@ -252,6 +273,8 @@ async def process_soundcloud(message: types.Message, direct_url: Optional[str] =
         await safe_delete_message(status_message)
         if audio_path:
             await remove_file(audio_path)
+        if prepared_metadata:
+            prepared_metadata.cleanup()
         await update_info(message)
 
 
@@ -339,6 +362,7 @@ async def _send_inline_soundcloud_audio(
         return
 
     audio_path: Optional[str] = None
+    prepared_metadata = None
 
     async def _edit_inline_status(
         text: str, *, with_retry_button: bool = False
@@ -397,16 +421,36 @@ async def _send_inline_soundcloud_audio(
                 await _edit_inline_status(bm.audio_too_large())
                 return
 
+            prepared_metadata = await prepare_mp3_metadata(
+                audio_path,
+                {
+                    "title": track.title,
+                    "artists": track.artist,
+                    "thumbnail": track.thumbnail_url,
+                    "source_url": source_url,
+                },
+            )
+
             await _edit_inline_status(bm.uploading_status())
+            audio_thumbnail = (
+                FSInputFile(str(prepared_metadata.thumbnail_path), filename="cover.jpg")
+                if prepared_metadata.thumbnail_path
+                else bot_avatar
+            )
             sent = await send_audio_with_thumbnail(
                 bot.send_audio,
                 chat_id=CHANNEL_ID,
-                audio=FSInputFile(audio_path),
+                audio=FSInputFile(
+                    audio_path,
+                    filename=build_audio_filename(track.title),
+                ),
                 title=track.title,
+                performer=track.artist or None,
                 audio_path=audio_path,
-                bot_avatar=bot_avatar,
+                bot_avatar=audio_thumbnail,
                 bot_url=bot_url,
                 duration=track.duration_seconds,
+                embed_thumbnail=False,
             )
 
             db_file_id = sent.audio.file_id
@@ -420,7 +464,7 @@ async def _send_inline_soundcloud_audio(
             types.InputMediaAudio(
                 media=db_file_id,
                 caption=bm.captions(request.user_settings["captions"], None, bot_url),
-                performer=build_bot_audio_performer(bot_url),
+                performer=track.artist or build_bot_audio_performer(bot_url),
                 duration=coerce_audio_duration_seconds(track.duration_seconds),
                 parse_mode="HTML",
             ),
@@ -445,6 +489,8 @@ async def _send_inline_soundcloud_audio(
         reset_inline_video_request(token)
         await _edit_inline_status(bm.something_went_wrong(), with_retry_button=True)
     finally:
+        if prepared_metadata:
+            prepared_metadata.cleanup()
         if audio_path:
             await remove_file(audio_path)
 

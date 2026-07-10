@@ -49,6 +49,8 @@ def test_captions_supports_larger_limits_for_plain_messages():
         (bm.open_bot_for_audio, "private chat"),
         (bm.audio_fetch_failed, "audio info"),
         (bm.audio_download_failed, "Audio download failed"),
+        (bm.spotify_metadata_failed, "Spotify"),
+        (bm.spotify_source_not_found, "Spotify"),
         (bm.inline_album_link_invalid, "expired"),
         (bm.inline_photo_description, "Single photo"),
         (bm.inline_album_description, "album"),
@@ -145,4 +147,3 @@ def test_admin_message_formatters_include_dynamic_values():
     known = admin_bm.known_chat_target(88, "Ops Chat", "@ops", "active")
     assert "Ops Chat" in known
     assert "@ops" in known
-

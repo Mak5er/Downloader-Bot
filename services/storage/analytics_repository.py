@@ -75,6 +75,8 @@ class AnalyticsRepositoryMixin:
             return "YouTube"
         if "soundcloud" in lower:
             return "SoundCloud"
+        if "spotify" in lower:
+            return "Spotify"
         if "pinterest" in lower:
             return "Pinterest"
         if "twitter" in lower or "x_" in lower:

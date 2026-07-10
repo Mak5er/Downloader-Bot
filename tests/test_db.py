@@ -21,6 +21,7 @@ from services.storage import file_cache_repository, user_repository
 def test_map_action_to_service_includes_soundcloud():
     assert db_module.DataBase._map_action_to_service("soundcloud_audio") == "SoundCloud"
     assert db_module.DataBase._map_action_to_service("inline_soundcloud_audio") == "SoundCloud"
+    assert db_module.DataBase._map_action_to_service("spotify_audio") == "Spotify"
     assert db_module.DataBase._map_action_to_service("pinterest_media") == "Pinterest"
 
 

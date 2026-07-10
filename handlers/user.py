@@ -324,6 +324,11 @@ async def _process_supported_link(message: types.Message, service: str, url: str
         await soundcloud.process_soundcloud_url(message, url=url)
         return
 
+    if service == "spotify":
+        from handlers import spotify
+        await spotify.process_spotify_url(message, url=url)
+        return
+
     if service == "pinterest":
         from handlers import pinterest
         await pinterest.process_pinterest_url(message, url=url)
