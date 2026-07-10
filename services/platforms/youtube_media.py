@@ -6,6 +6,7 @@ import time
 from typing import Any, Awaitable, Callable, Optional
 
 from services.logger import logger as logging
+from services.media.artist_names import normalize_artist_names
 from utils.download_manager import (
     DownloadError,
     DownloadConfig,
@@ -119,16 +120,26 @@ def build_ytdlp_youtube_options(**overrides: Any) -> dict[str, Any]:
 def get_youtube_thumbnail_url(yt: Optional[dict[str, Any]]) -> Optional[str]:
     if not yt:
         return None
-    thumbnail = yt.get("thumbnail")
-    if isinstance(thumbnail, str) and thumbnail:
-        return thumbnail
+
+    candidates: list[tuple[int, int, int, str]] = []
     thumbnails = yt.get("thumbnails")
     if isinstance(thumbnails, list):
-        for item in reversed(thumbnails):
+        for index, item in enumerate(thumbnails):
             if isinstance(item, dict):
                 url = item.get("url")
                 if isinstance(url, str) and url:
-                    return url
+                    try:
+                        area = int(item.get("width") or 0) * int(item.get("height") or 0)
+                    except (TypeError, ValueError):
+                        area = 0
+                    is_jpeg = int(url.lower().split("?", 1)[0].endswith((".jpg", ".jpeg")))
+                    candidates.append((area, is_jpeg, index, url))
+    if candidates:
+        return max(candidates)[-1]
+
+    thumbnail = yt.get("thumbnail")
+    if isinstance(thumbnail, str) and thumbnail:
+        return thumbnail
     video_id = yt.get("id")
     if isinstance(video_id, str) and video_id:
         return f"https://i.ytimg.com/vi/{video_id}/hqdefault.jpg"
@@ -164,6 +175,17 @@ def get_audio_stream(yt: dict) -> dict | None:
     if best:
         best["webpage_url"] = yt["webpage_url"]
     return best
+
+
+def get_audio_artist(yt: dict[str, Any]) -> str | None:
+    artist = normalize_artist_names(yt.get("artists"))
+    if artist:
+        return artist
+    for key in ("artist", "creator", "uploader"):
+        artist = normalize_artist_names(yt.get(key))
+        if artist:
+            return artist
+    return None
 
 
 def is_manifest_stream(stream: dict) -> bool:
@@ -219,6 +241,33 @@ class YouTubeMediaService:
                 return ydl.extract_info(url, download=False)
         except Exception as exc:
             logging.error("Error fetching YouTube info: %s", exc)
+            return None
+
+    def search_youtube_track(self, query: str) -> Optional[dict[str, Any]]:
+        """Resolve the best YouTube candidate for a track metadata query."""
+        if not query.strip():
+            return None
+        try:
+            ydl_opts = build_ytdlp_youtube_options(
+                skip_download=True,
+                extract_flat="in_playlist",
+                playlistend=1,
+                noplaylist=False,
+            )
+            with self._youtube_dl_factory(ydl_opts) as ydl:
+                search = ydl.extract_info(f"ytsearch1:{query}", download=False)
+            entries = (search or {}).get("entries") or []
+            if not entries:
+                return None
+            candidate = entries[0] or {}
+            candidate_url = candidate.get("webpage_url") or candidate.get("url")
+            if not candidate_url and candidate.get("id"):
+                candidate_url = f"https://www.youtube.com/watch?v={candidate['id']}"
+            if not candidate_url:
+                return None
+            return self.get_youtube_video(str(candidate_url))
+        except Exception as exc:
+            logging.error("YouTube track search failed: query=%s error=%s", query, exc)
             return None
 
     async def download_stream(

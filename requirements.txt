@@ -8,6 +8,8 @@ colorlog==6.10.1
 fake-useragent==2.2.0
 httpx==0.28.1
 matplotlib==3.11.0
+mutagen==1.47.0
+pillow==12.3.0
 psycopg2-binary==2.9.12
 python-dotenv==1.2.2
 yt-dlp==2026.6.9

@@ -396,6 +396,21 @@ async def test_process_pending_message_dispatches_youtube_music(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_process_pending_message_dispatches_spotify(monkeypatch):
+    message = DummyMessage()
+    message.text = "https://open.spotify.com/track/abc123?si=demo"
+    process_spotify_url = AsyncMock()
+
+    monkeypatch.setattr(handlers.spotify, "process_spotify_url", process_spotify_url)
+
+    await user._process_pending_message(message)
+
+    process_spotify_url.assert_awaited_once_with(
+        message, url="https://open.spotify.com/track/abc123"
+    )
+
+
+@pytest.mark.asyncio
 async def test_process_batch_links_dispatches_each_supported_link(monkeypatch):
     message = DummyMessage()
     message.text = "https://youtu.be/demo and https://pin.it/demo123"

@@ -1,5 +1,5 @@
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 
@@ -54,6 +54,49 @@ def test_parse_soundcloud_track_local_processing_with_cover():
     assert track.title == "Track Title"
     assert track.artist == "Artist Name"
     assert track.duration_seconds == 124
+
+
+def test_parse_soundcloud_track_deduplicates_repeated_artist_metadata():
+    payload = {
+        "status": "local-processing",
+        "type": "audio",
+        "tunnel": ["https://cdn.example.com/final.mp3"],
+        "output": {
+            "type": "audio/mpeg",
+            "metadata": {
+                "title": "Тону",
+                "artist": "SUDNO, sudno, SUDNO, Sudno, SUDNO",
+            },
+        },
+        "audio": {"cover": False},
+    }
+
+    track = soundcloud.parse_soundcloud_track(payload, "https://soundcloud.com/sudno_mp3/tonu")
+
+    assert track is not None
+    assert track.artist == "SUDNO"
+
+
+def test_parse_soundcloud_track_recognizes_extensionless_cobalt_cover_tunnel():
+    payload = {
+        "status": "local-processing",
+        "type": "audio",
+        "tunnel": [
+            "https://cobalt.example/tunnel/audio-token",
+            "https://cobalt.example/tunnel/cover-token",
+        ],
+        "output": {
+            "type": "audio/mpeg",
+            "metadata": {"title": "Track", "artist": "Artist"},
+        },
+        "audio": {"cover": True},
+    }
+
+    track = soundcloud.parse_soundcloud_track(payload, "https://soundcloud.com/artist/track")
+
+    assert track is not None
+    assert track.audio_url.endswith("/audio-token")
+    assert track.thumbnail_url.endswith("/cover-token")
 
 
 @pytest.mark.asyncio
@@ -178,6 +221,12 @@ async def test_inline_soundcloud_uses_bot_avatar_thumbnail(monkeypatch, tmp_path
     monkeypatch.setattr(soundcloud.db, "add_file", AsyncMock())
     monkeypatch.setattr(soundcloud, "get_bot_url", AsyncMock(return_value="https://t.me/maxloadbot"))
     monkeypatch.setattr(soundcloud, "get_bot_avatar_thumbnail", AsyncMock(return_value=bot_avatar))
+    prepared_metadata = SimpleNamespace(thumbnail_path=None, cleanup=Mock())
+    monkeypatch.setattr(
+        soundcloud,
+        "prepare_mp3_metadata",
+        AsyncMock(return_value=prepared_metadata),
+    )
     monkeypatch.setattr(soundcloud, "safe_edit_inline_text", AsyncMock(return_value=True))
     monkeypatch.setattr(soundcloud, "safe_edit_inline_media", AsyncMock(return_value=True))
     monkeypatch.setattr(soundcloud, "remove_file", AsyncMock())
@@ -191,9 +240,10 @@ async def test_inline_soundcloud_uses_bot_avatar_thumbnail(monkeypatch, tmp_path
 
     send_kwargs = soundcloud.bot.send_audio.await_args.kwargs
     assert send_kwargs["thumbnail"] is bot_avatar
-    assert send_kwargs["performer"] == "@maxloadbot"
+    assert send_kwargs["performer"] == "Artist Name"
     assert send_kwargs["duration"] == 199
     assert soundcloud.soundcloud_service.download_media.await_count == 1
+    prepared_metadata.cleanup.assert_called_once_with()
 
 
 @pytest.mark.asyncio

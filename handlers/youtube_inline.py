@@ -30,8 +30,13 @@ from services.media.delivery import (
     coerce_audio_duration_seconds,
     send_audio_with_thumbnail,
 )
+from services.media.audio_metadata import build_audio_filename, prepare_mp3_metadata
 from services.media.video_metadata import build_video_send_kwargs
-from services.platforms.youtube_media import YOUTUBE_INFO_TIMEOUT_SECONDS
+from services.platforms.youtube_media import (
+    YOUTUBE_INFO_TIMEOUT_SECONDS,
+    get_audio_artist,
+    get_youtube_thumbnail_url,
+)
 from utils.media_cache import build_media_cache_key
 
 logging = logging.bind(service="youtube_inline")
@@ -183,6 +188,7 @@ async def send_inline_youtube_music(
         return
 
     metrics = None
+    prepared_metadata = None
 
     _edit_inline_status = build_inline_status_editor(
         bot=deps.bot,
@@ -200,6 +206,8 @@ async def send_inline_youtube_music(
             return
 
         audio_duration = coerce_audio_duration_seconds(yt.get("duration"))
+        audio_artist = get_audio_artist(yt)
+        thumbnail_url = get_youtube_thumbnail_url(yt)
         cache_key = build_media_cache_key(request.source_url, variant=AUDIO_CACHE_VARIANT)
         db_file_id = await deps.db.get_file_id(cache_key)
         bot_url = await get_bot_url_fn(deps.bot)
@@ -226,18 +234,39 @@ async def send_inline_youtube_music(
                 await _edit_inline_status(bm.audio_too_large())
                 return
 
+            prepared_metadata = await prepare_mp3_metadata(
+                metrics.path,
+                {
+                    **yt,
+                    "artists": audio_artist,
+                    "thumbnail": thumbnail_url,
+                    "source_url": request.source_url,
+                    "date": yt.get("release_date") or yt.get("upload_date"),
+                },
+            )
+
             await _edit_inline_status(bm.uploading_status())
             bot_avatar = await get_bot_avatar_thumbnail_fn(deps.bot)
+            audio_thumbnail = (
+                FSInputFile(str(prepared_metadata.thumbnail_path), filename="cover.jpg")
+                if prepared_metadata.thumbnail_path
+                else bot_avatar
+            )
             sent = await send_audio_with_thumbnail(
                 deps.bot.send_audio,
                 chat_id=channel_id,
-                audio=FSInputFile(metrics.path),
+                audio=FSInputFile(
+                    metrics.path,
+                    filename=build_audio_filename(yt.get("title")),
+                ),
                 title=yt.get("title"),
+                performer=audio_artist,
                 caption=f"YouTube Music from {actor_name}",
                 audio_path=metrics.path,
-                bot_avatar=bot_avatar,
+                bot_avatar=audio_thumbnail,
                 bot_url=bot_url,
                 duration=audio_duration,
+                embed_thumbnail=False,
             )
             db_file_id = sent.audio.file_id
             await deps.db.add_file(cache_key, db_file_id, "audio")
@@ -250,7 +279,7 @@ async def send_inline_youtube_music(
             types.InputMediaAudio(
                 media=db_file_id,
                 caption=bm.captions(request.user_settings["captions"], None, bot_url),
-                performer=build_bot_audio_performer(bot_url),
+                performer=audio_artist or build_bot_audio_performer(bot_url),
                 duration=audio_duration,
                 parse_mode="HTML",
             ),
@@ -265,6 +294,8 @@ async def send_inline_youtube_music(
         reset_inline_video_request(token)
         await _edit_inline_status(bm.timeout_error(), with_retry_button=True)
     finally:
+        if prepared_metadata:
+            prepared_metadata.cleanup()
         if metrics and metrics.path:
             await remove_file(metrics.path)
 

@@ -9,11 +9,12 @@ from aiogram.types import FSInputFile
 from aiogram.utils.media_group import MediaGroupBuilder
 
 from services.logger import logger as logging
+from services.media.artist_names import normalize_artist_names
 from services.media.video_metadata import build_video_send_kwargs
 
 logging = logging.bind(service="media_delivery")
 
-AUDIO_CACHE_VARIANT = "audio_bot_meta_v2"
+AUDIO_CACHE_VARIANT = "audio_artist_dedupe_v5"
 
 
 def build_audio_cache_key(source_url: str) -> str:
@@ -200,11 +201,12 @@ async def send_audio_with_thumbnail(
     bot_url: str | None = None,
     duration: object = None,
     performer: str | None = None,
+    embed_thumbnail: bool = True,
     **kwargs: Any,
 ) -> types.Message:
     send_kwargs = dict(kwargs)
     embedded_audio_path = None
-    audio_performer = performer or build_bot_audio_performer(bot_url)
+    audio_performer = normalize_artist_names(performer) or build_bot_audio_performer(bot_url)
     if audio_performer:
         send_kwargs["performer"] = audio_performer
     if "duration" not in send_kwargs:
@@ -217,7 +219,7 @@ async def send_audio_with_thumbnail(
         send_kwargs["thumbnail"] = bot_avatar
 
     cover_path = _input_file_path(bot_avatar)
-    if audio_path and cover_path:
+    if embed_thumbnail and audio_path and cover_path:
         embedded_audio_path = await embed_audio_cover(audio_path, cover_path)
         if embedded_audio_path:
             send_kwargs["audio"] = FSInputFile(embedded_audio_path)

@@ -13,6 +13,7 @@ def welcome_message():
         '<tg-emoji emoji-id="5233311027612913110">▶️</tg-emoji> YouTube\n'
         '<tg-emoji emoji-id="5231309843435919433">🐦</tg-emoji> X / Twitter\n'
         '<tg-emoji emoji-id="5233448977667492819">🎧</tg-emoji> SoundCloud\n'
+        '🟢 Spotify\n'
         '<tg-emoji emoji-id="5233210422298974231">📌</tg-emoji> Pinterest\n\n'
         "Use the buttons below to try inline mode, tune settings, or share the bot."
     )
@@ -176,6 +177,14 @@ def audio_download_failed():
     return "Audio download failed. Please try again later."
 
 
+def spotify_metadata_failed():
+    return "Couldn't read this Spotify track. Please check the link and try again."
+
+
+def spotify_source_not_found():
+    return "Couldn't find a matching audio source for this Spotify track."
+
+
 def inline_album_link_invalid():
     return "This album link is expired or invalid."
 
@@ -237,6 +246,7 @@ def supported_sites_message():
         "YouTube videos and YouTube Music links\n"
         "X / Twitter posts\n"
         "SoundCloud tracks\n"
+        "Spotify tracks\n"
         "Pinterest pins\n\n"
         "You can send several supported links in one message. MaxLoad will handle them one by one."
     )

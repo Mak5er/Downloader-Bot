@@ -82,6 +82,38 @@ def test_get_youtube_video_uses_single_video_metadata_options(tmp_path):
     assert captured["options"]["ignore_no_formats_error"] is True
 
 
+def test_search_youtube_track_resolves_first_result(tmp_path):
+    calls = []
+
+    class SearchYoutubeDL:
+        def __init__(self, options):
+            calls.append(options)
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def extract_info(self, url, download):
+            if url.startswith("ytsearch1:"):
+                return {"entries": [{"id": "abcdefghijk"}]}
+            return {
+                "id": "abcdefghijk",
+                "title": "Track Name",
+                "webpage_url": url,
+                "formats": [],
+            }
+
+    service = _make_service(tmp_path, youtube_dl_factory=SearchYoutubeDL)
+
+    result = service.search_youtube_track("Artist - Track Name")
+
+    assert result["webpage_url"] == "https://www.youtube.com/watch?v=abcdefghijk"
+    assert calls[0]["extract_flat"] == "in_playlist"
+    assert calls[0]["playlistend"] == 1
+
+
 def test_build_ytdlp_youtube_options_includes_optional_access_env(monkeypatch):
     monkeypatch.setenv("YTDLP_YOUTUBE_COOKIES_FILE", "cookies.txt")
     monkeypatch.setenv("YTDLP_YOUTUBE_COOKIES_FROM_BROWSER", "firefox:Profile 1")

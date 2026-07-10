@@ -8,7 +8,7 @@ The project is built on `aiogram 3`, uses `SQLAlchemy + Alembic` for persistence
 
 ## Features
 
-- Download media from TikTok, Instagram, Threads, YouTube, SoundCloud, Pinterest, and X/Twitter
+- Download media from TikTok, Instagram, Threads, YouTube, SoundCloud, Spotify, Pinterest, and X/Twitter
 - Download public Threads post photos, videos, and carousels directly from their page metadata
 - Support direct bot usage and Telegram inline mode flows
 - Per-user settings for captions, info buttons, URL buttons, MP3 buttons, and auto-delete
@@ -92,6 +92,10 @@ API_SECRET=
 CHANNEL_ID=
 COBALT_API_URL=
 COBALT_API_KEY=
+# Optional: enables richer Spotify album/track metadata; oEmbed works without credentials.
+SPOTIFY_CLIENT_ID=
+SPOTIFY_CLIENT_SECRET=
+SPOTIFY_MARKET=UA
 
 # Optional YouTube access helpers for yt-dlp
 YTDLP_YOUTUBE_COOKIES_FILE=cookies/youtube.txt

@@ -30,6 +30,13 @@ _SERVICE_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
         ),
     ),
     (
+        "spotify",
+        re.compile(
+            r"(https?://(?:(?:open|www)\.)?spotify\.com/(?:intl-[a-z]{2}/)?track/[A-Za-z0-9]+(?:\?\S*)?)",
+            re.IGNORECASE,
+        ),
+    ),
+    (
         "pinterest",
         re.compile(r"(https?://(?:[\w-]+\.)?pinterest\.[\w.]+/\S+|https?://pin\.it/\S+)", re.IGNORECASE),
     ),
@@ -68,8 +75,8 @@ def canonicalize_supported_url(service: str, url: str) -> str:
             if key in {"v", "list", "t", "start"}:
                 keep.append((key, value))
         query = urlencode(keep)
-    elif service == "soundcloud":
-        # SoundCloud sometimes uses meaningful path slugs; tracking lives in query/fragment.
+    elif service in {"soundcloud", "spotify"}:
+        # Audio links keep meaningful path IDs/slugs; tracking lives in query/fragment.
         query = ""
     else:
         query = ""
