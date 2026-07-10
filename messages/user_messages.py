@@ -8,7 +8,7 @@ def welcome_message():
         "Send one link, or paste several links in one message, and I'll download what I can.\n\n"
         "<b>Supported sites</b>\n"
         '<tg-emoji emoji-id="5233671414023753035">📷</tg-emoji> Instagram\n'
-        '🧵 Threads\n'
+        '<tg-emoji emoji-id="5370693953236539466">🧵</tg-emoji> Threads\n'
         '<tg-emoji emoji-id="5233597424622144804">🎵</tg-emoji> TikTok\n'
         '<tg-emoji emoji-id="5233311027612913110">▶️</tg-emoji> YouTube\n'
         '<tg-emoji emoji-id="5231309843435919433">🐦</tg-emoji> X / Twitter\n'
