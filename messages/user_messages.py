@@ -13,7 +13,7 @@ def welcome_message():
         '<tg-emoji emoji-id="5233311027612913110">▶️</tg-emoji> YouTube\n'
         '<tg-emoji emoji-id="5231309843435919433">🐦</tg-emoji> X / Twitter\n'
         '<tg-emoji emoji-id="5233448977667492819">🎧</tg-emoji> SoundCloud\n'
-        '🟢 Spotify\n'
+        '<tg-emoji emoji-id="5391001065418172193">🟢</tg-emoji> Spotify\n'
         '<tg-emoji emoji-id="5233210422298974231">📌</tg-emoji> Pinterest\n\n'
         "Use the buttons below to try inline mode, tune settings, or share the bot."
     )
