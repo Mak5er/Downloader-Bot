@@ -120,6 +120,9 @@ def test_build_ytdlp_youtube_options_includes_optional_access_env(monkeypatch):
     monkeypatch.setenv("YTDLP_YOUTUBE_PLAYER_CLIENT", "web,android")
     monkeypatch.setenv("YTDLP_YOUTUBE_PO_TOKEN", "web.gvs+token")
     monkeypatch.setenv("YTDLP_YOUTUBE_REMOTE_COMPONENTS", "ejs:github,ejs:npm")
+    monkeypatch.setenv(
+        "YTDLP_YOUTUBE_JS_RUNTIMES", "deno:/opt/deno/bin/deno,node"
+    )
     monkeypatch.setenv("YTDLP_YOUTUBE_SLEEP_REQUESTS_SECONDS", "0.25")
 
     options = build_ytdlp_youtube_options(skip_download=True)
@@ -129,8 +132,20 @@ def test_build_ytdlp_youtube_options_includes_optional_access_env(monkeypatch):
     assert options["extractor_args"]["youtube"]["player_client"] == ["web", "android"]
     assert options["extractor_args"]["youtube"]["po_token"] == ["web.gvs+token"]
     assert options["remote_components"] == {"ejs:github", "ejs:npm"}
+    assert options["js_runtimes"] == {
+        "deno": {"path": "/opt/deno/bin/deno"},
+        "node": {},
+    }
     assert options["sleep_interval_requests"] == 0.25
     assert options["skip_download"] is True
+
+
+def test_build_ytdlp_youtube_options_enables_node_fallback_by_default(monkeypatch):
+    monkeypatch.delenv("YTDLP_YOUTUBE_JS_RUNTIMES", raising=False)
+
+    options = build_ytdlp_youtube_options(skip_download=True)
+
+    assert options["js_runtimes"] == {"deno": {}, "node": {}}
 
 
 def test_build_ytdlp_youtube_options_uses_default_cookies_file(monkeypatch, tmp_path):

@@ -61,6 +61,20 @@ def _split_env_list(value: str) -> list[str]:
     return [item.strip() for item in re.split(r"[,;]", value) if item.strip()]
 
 
+def _parse_js_runtimes(value: str) -> dict[str, dict[str, str]]:
+    runtimes: dict[str, dict[str, str]] = {}
+    for item in _split_env_list(value):
+        name, separator, path = item.partition(":")
+        name = name.strip().lower()
+        if not name:
+            continue
+        runtime_options: dict[str, str] = {}
+        if separator and path.strip():
+            runtime_options["path"] = path.strip()
+        runtimes[name] = runtime_options
+    return runtimes
+
+
 def _parse_cookies_from_browser(value: str) -> tuple[str, Optional[str], Optional[str], Optional[str]]:
     match = re.fullmatch(
         r"(?x)(?P<name>[^+:]+)(?:\s*\+\s*(?P<keyring>[^:]+))?"
@@ -112,6 +126,13 @@ def build_ytdlp_youtube_options(**overrides: Any) -> dict[str, Any]:
     remote_components = os.getenv("YTDLP_YOUTUBE_REMOTE_COMPONENTS")
     if remote_components and remote_components.strip():
         options["remote_components"] = set(_split_env_list(remote_components))
+
+    js_runtimes = os.getenv("YTDLP_YOUTUBE_JS_RUNTIMES")
+    options["js_runtimes"] = (
+        _parse_js_runtimes(js_runtimes)
+        if js_runtimes and js_runtimes.strip()
+        else {"deno": {}, "node": {}}
+    )
 
     options.update({key: value for key, value in overrides.items() if value is not None})
     return options

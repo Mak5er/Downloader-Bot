@@ -101,6 +101,9 @@ SPOTIFY_MARKET=UA
 YTDLP_YOUTUBE_COOKIES_FILE=cookies/youtube.txt
 # Alternative to a cookie file, useful only when running on the same machine as the browser:
 # YTDLP_YOUTUBE_COOKIES_FROM_BROWSER=firefox:Profile 1
+# The Docker image includes Deno; outside Docker the bot also falls back to Node 22+.
+# Override executable discovery only when a runtime is not on PATH:
+# YTDLP_YOUTUBE_JS_RUNTIMES=deno:/path/to/deno,node:/path/to/node
 # YTDLP_YOUTUBE_REMOTE_COMPONENTS=ejs:github
 # YTDLP_YOUTUBE_PLAYER_CLIENT=web,android
 # YTDLP_YOUTUBE_PO_TOKEN=web.gvs+your_token
@@ -167,7 +170,7 @@ Recommended setup:
 3. Export only YouTube cookies for `.youtube.com` / `youtube.com` in Netscape `cookies.txt` format.
 4. Put the exported file at `cookies/youtube.txt`.
 5. Keep `YTDLP_YOUTUBE_COOKIES_FILE=cookies/youtube.txt` in `.env`, or omit it and let the default path be used.
-6. If `yt-dlp` logs `n challenge solving failed` or only shows storyboard/image formats, set `YTDLP_YOUTUBE_REMOTE_COMPONENTS=ejs:github`.
+6. The image includes Deno and installs the matching `yt-dlp-ejs` package, so JS challenges work without extra configuration. If your network or deployment intentionally omits that package, set `YTDLP_YOUTUBE_REMOTE_COMPONENTS=ejs:github` as a fallback.
 7. Restart the bot after replacing cookies or changing YouTube `yt-dlp` options.
 
 The `cookies` directory is kept in git with `cookies/.gitkeep`, but real cookie files are ignored by git and Docker builds. Treat `cookies/youtube.txt` like a password: do not commit it, paste it in chats, or bake it into images.

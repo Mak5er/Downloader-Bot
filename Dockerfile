@@ -1,5 +1,7 @@
 # syntax=docker/dockerfile:1.7
 
+FROM denoland/deno:2.3.0 AS deno
+
 FROM python:3.14-slim AS builder
 
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
@@ -53,6 +55,7 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     && adduser --system --ingroup appgroup --home /app appuser
 
 COPY --from=builder /opt/venv /opt/venv
+COPY --from=deno /usr/bin/deno /usr/local/bin/deno
 COPY . .
 
 RUN mkdir -p /app/downloads /app/logs /app/cookies && \
