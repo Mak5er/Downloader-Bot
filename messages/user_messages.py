@@ -56,6 +56,28 @@ def get_field_text(field: str):
             "<b>🎧 MP3 Button</b>\n"
             "Toggle the Download MP3 button when audio is available."
         ),
+        "file_button": (
+            "<b>📄 File Button</b>\n"
+            "Show or hide the Download File button under videos to get original uncompressed files on demand."
+        ),
+        "video_quality": (
+            "<b>🎬 Video Quality</b>\n"
+            "Select your preferred video download resolution:\n\n"
+            "• <b>Best (1080p+)</b>: Maximum possible resolution.\n"
+            "• <b>Balanced (720p)</b>: Great balance of quality and speed.\n"
+            "• <b>Data Saver (480p)</b>: Faster downloads with minimal data usage."
+        ),
+        "as_document": (
+            "<b>📄 Send as File</b>\n"
+            "When enabled, videos and photos will be sent as uncompressed documents (.mp4 / .jpg) preserving 100% original quality."
+        ),
+        "audio_format": (
+            "<b>🎵 Audio Format</b>\n"
+            "Choose default audio format for music downloads:\n\n"
+            "• <b>MP3</b>: Standard universal audio format.\n"
+            "• <b>M4A (AAC)</b>: High quality compact format for iOS & Mac.\n"
+            "• <b>FLAC / Original</b>: Uncompressed lossless audio where available."
+        ),
     }
     return texts.get(field, "<b>Settings</b>\nThis option doesn't have a description yet.")
 
@@ -237,18 +259,69 @@ def inline_video_already_sent():
     return "This inline video was already sent."
 
 
-def supported_sites_message():
+def supported_sites_message(bot_username: str | None = None):
+    return help_message(bot_username)
+
+
+def category_settings_text(category: str) -> str:
+    if category == "media":
+        return (
+            "<b>🎬 Media & Quality Settings</b>\n\n"
+            "Configure video resolution, file format, and audio options:"
+        )
+    if category == "appearance":
+        return (
+            "<b>🎨 Appearance & Buttons</b>\n\n"
+            "Customize post descriptions, original URL links, and action buttons:"
+        )
+    if category == "chat":
+        return (
+            "<b>💬 Chat & Clean-up</b>\n\n"
+            "Manage group chat behavior and message cleanup settings:"
+        )
+    return settings()
+
+
+def help_message(bot_username: str | None = None) -> str:
+    username = bot_username or "MaxLoadBot"
     return (
-        "<b>Supported sites</b>\n\n"
-        "Instagram posts, reels, and albums\n"
-        "Threads posts and albums\n"
-        "TikTok videos, photo posts, and profiles\n"
-        "YouTube videos and YouTube Music links\n"
-        "X / Twitter posts\n"
-        "SoundCloud tracks\n"
-        "Spotify tracks\n"
-        "Pinterest pins\n\n"
-        "You can send several supported links in one message. MaxLoad will handle them one by one."
+        "<b>📖 MaxLoad Help & Guide</b>\n\n"
+        "Send one link or paste multiple links in one message. The bot will automatically extract and deliver the media.\n\n"
+        "<blockquote expandable><b>📷 Instagram & Threads</b>\n"
+        "• Download Posts, Reels, IGTV & Stories\n"
+        "• Photo carousels & multi-media albums\n"
+        "• Copy link via Share → Copy link</blockquote>\n\n"
+        "<blockquote expandable><b>🎵 TikTok</b>\n"
+        "• Watermark-free video downloads\n"
+        "• Photo carousels & slideshows\n"
+        "• MP3 audio extraction supported</blockquote>\n\n"
+        "<blockquote expandable><b>▶️ YouTube & YouTube Music</b>\n"
+        "• YouTube Shorts & regular Videos\n"
+        "• High quality audio & video streams\n"
+        "• Tap MP3 button to download audio</blockquote>\n\n"
+        "<blockquote expandable><b>🐦 X / Twitter & 📌 Pinterest</b>\n"
+        "• X / Twitter videos, GIFs & images\n"
+        "• Pinterest video and image Pins</blockquote>\n\n"
+        "<blockquote expandable><b>🎧 SoundCloud & 🟢 Spotify</b>\n"
+        "• High quality SoundCloud audio tracks\n"
+        "• Spotify track matching & audio download</blockquote>\n\n"
+        f"<blockquote expandable><b>⚡ Inline Mode</b>\n"
+        f"• Type <code>@{username} [link]</code> in any chat\n"
+        "• Instant preview and direct media sharing</blockquote>\n\n"
+        "<blockquote expandable><b>📦 Batch Downloading</b>\n"
+        "• Paste up to 6 links in a single message\n"
+        "• Delivered one by one to keep chat clean</blockquote>"
+    )
+
+
+def referral_message(bot_username: str, user_id: int, invited_count: int) -> str:
+    username = bot_username or "MaxLoadBot"
+    ref_link = f"https://t.me/{username}?start=ref_{user_id}"
+    return (
+        "<b>👥 Your Referral Program</b>\n\n"
+        "Invite friends to use MaxLoad! Share your personal referral link:\n"
+        f"<code>{ref_link}</code>\n\n"
+        f"Users invited: <b>{invited_count}</b>"
     )
 
 

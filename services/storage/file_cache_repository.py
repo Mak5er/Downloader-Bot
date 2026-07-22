@@ -79,6 +79,10 @@ class FileCacheRepositoryMixin:
                 else self._file_cache_miss_ttl_seconds
             )
             if ttl_seconds is None or now - cached[0] <= ttl_seconds:
+                if cached[1] is not None:
+                    self._file_cache_hits = getattr(self, "_file_cache_hits", 0) + 1
+                else:
+                    self._file_cache_misses = getattr(self, "_file_cache_misses", 0) + 1
                 return cached[1]
 
         async with self.SessionLocal() as session:
@@ -86,10 +90,26 @@ class FileCacheRepositoryMixin:
                 result = await session.execute(select(DownloadedFile.file_id).where(DownloadedFile.url == url))
                 file_id = result.scalar()
                 self._file_cache[url] = (now, file_id)
+                if file_id is not None:
+                    self._file_cache_hits = getattr(self, "_file_cache_hits", 0) + 1
+                else:
+                    self._file_cache_misses = getattr(self, "_file_cache_misses", 0) + 1
                 return file_id
             except Exception as exc:
                 logging.error("Error in get_file_id: %s", exc)
                 return None
+
+    def get_file_cache_stats(self) -> dict[str, float | int]:
+        hits = getattr(self, "_file_cache_hits", 0)
+        misses = getattr(self, "_file_cache_misses", 0)
+        total = hits + misses
+        hit_rate = (hits / total * 100.0) if total > 0 else 0.0
+        return {
+            "hits": hits,
+            "misses": misses,
+            "total": total,
+            "hit_rate_pct": hit_rate,
+        }
 
     async def cleanup_expired_files(self, max_age_days: int = 30) -> int:
         from datetime import datetime, timedelta, timezone

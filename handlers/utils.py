@@ -9,6 +9,7 @@ from handlers.bot_profile_cache import (
     get_bot_avatar_file_id,
     get_bot_avatar_thumbnail,
     get_bot_url,
+    get_bot_username,
 )
 from handlers.inline_utils import (
     RawAnswerInlineQuery,

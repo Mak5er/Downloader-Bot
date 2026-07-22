@@ -27,7 +27,7 @@ class UserRepositoryMixin:
                 session.add(user)
         self._status_cache[int(user_id)] = (time.monotonic(), status)
 
-    async def upsert_chat(self, user_id: int, user_name: str | None, user_username: str | None, chat_type: str | None, language: str | None = None, status: str = "active") -> None:
+    async def upsert_chat(self, user_id: int, user_name: str | None, user_username: str | None, chat_type: str | None, language: str | None = None, status: str = "active", referred_by: int | None = None, source: str | None = None) -> None:
         values = {
             "user_name": user_name,
             "user_username": user_username,
@@ -35,6 +35,10 @@ class UserRepositoryMixin:
             "language": language,
             "status": status,
         }
+        if referred_by is not None:
+            values["referred_by"] = referred_by
+        if source is not None:
+            values["source"] = source
         async with self.SessionLocal() as session:
             async with session.begin():
                 if self._dialect_name == "postgresql":
@@ -150,6 +154,17 @@ class UserRepositoryMixin:
         settings = await self.user_settings(user_id)
         return settings.get(field)
 
+    async def get_referral_stats(self, user_id: int) -> int:
+        async with self.SessionLocal() as session:
+            try:
+                result = await session.execute(
+                    select(func.count(User.user_id)).where(User.referred_by == int(user_id))
+                )
+                return result.scalar() or 0
+            except Exception as exc:
+                logging.error("Error in get_referral_stats: %s", exc)
+                return 0
+
     async def user_settings(self, user_id: int) -> dict[str, str]:
         user_id_int = int(user_id)
         now = time.monotonic()
@@ -171,6 +186,10 @@ class UserRepositoryMixin:
                         "info_buttons": settings.info_buttons or SETTING_DISABLED,
                         "url_button": settings.url_button or SETTING_DISABLED,
                         "audio_button": settings.audio_button or SETTING_DISABLED,
+                        "file_button": getattr(settings, "file_button", None) or SETTING_DISABLED,
+                        "video_quality": getattr(settings, "video_quality", None) or "best",
+                        "as_document": getattr(settings, "as_document", None) or SETTING_DISABLED,
+                        "audio_format": getattr(settings, "audio_format", None) or "mp3",
                     }
                     self._settings_cache[user_id_int] = (now, payload)
                     return dict(payload)

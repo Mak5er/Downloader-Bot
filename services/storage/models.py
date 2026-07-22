@@ -22,6 +22,10 @@ DEFAULT_USER_SETTINGS = {
     "info_buttons": SETTING_DISABLED,
     "url_button": SETTING_DISABLED,
     "audio_button": SETTING_DISABLED,
+    "file_button": SETTING_DISABLED,
+    "video_quality": "best",
+    "as_document": SETTING_DISABLED,
+    "audio_format": "mp3",
 }
 APP_SCHEMA_TABLES = frozenset(
     {
@@ -68,6 +72,8 @@ class User(Base):
     chat_type = Column(Text, nullable=True)
     language = Column(Text, nullable=True)
     status = Column(Text, nullable=True)
+    referred_by = Column(BigInteger, nullable=True)
+    source = Column(Text, nullable=True)
 
     settings = relationship("Settings", back_populates="user", uselist=False)
 
@@ -102,5 +108,9 @@ class Settings(Base):
     info_buttons = Column(Text, default=SETTING_DISABLED, nullable=False)
     url_button = Column(Text, default=SETTING_DISABLED, nullable=False)
     audio_button = Column(Text, default=SETTING_DISABLED, nullable=False)
+    file_button = Column(Text, default=SETTING_DISABLED, nullable=False)
+    video_quality = Column(Text, default="best", nullable=False)
+    as_document = Column(Text, default=SETTING_DISABLED, nullable=False)
+    audio_format = Column(Text, default="mp3", nullable=False)
 
     user = relationship("User", back_populates="settings")

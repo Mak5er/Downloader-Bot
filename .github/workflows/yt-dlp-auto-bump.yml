@@ -1,0 +1,61 @@
+name: Nightly yt-dlp Auto-bump
+
+on:
+  schedule:
+    - cron: '0 3 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  check-yt-dlp:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install pytest pytest-cov yt-dlp -r requirements.txt
+
+      - name: Get latest yt-dlp version
+        id: latest-ytdlp
+        run: |
+          LATEST_VER=$(python -c "import urllib.request, json; data = json.loads(urllib.request.urlopen('https://pypi.org/pypi/yt-dlp/json').read()); print(data['info']['version'])")
+          echo "version=${LATEST_VER}" >> $GITHUB_OUTPUT
+
+      - name: Check current pinned version
+        id: current-ytdlp
+        run: |
+          CURRENT_VER=$(grep -E '^yt-dlp' requirements.txt | sed -E 's/.*==//' | sed -E 's/\[.*\]//')
+          echo "version=${CURRENT_VER}" >> $GITHUB_OUTPUT
+
+      - name: Bump yt-dlp version if outdated
+        if: steps.latest-ytdlp.outputs.version != steps.current-ytdlp.outputs.version
+        run: |
+          sed -i -E "s/yt-dlp\[default\]==[0-9.]+/yt-dlp[default]==${{ steps.latest-ytdlp.outputs.version }}/g" requirements.txt
+          sed -i -E "s/yt-dlp==[0-9.]+/yt-dlp==${{ steps.latest-ytdlp.outputs.version }}/g" requirements.txt
+
+      - name: Run pytest baseline
+        if: steps.latest-ytdlp.outputs.version != steps.current-ytdlp.outputs.version
+        run: pytest
+
+      - name: Create Pull Request on bump
+        if: steps.latest-ytdlp.outputs.version != steps.current-ytdlp.outputs.version
+        uses: peter-evans/create-pull-request@v6
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          commit-message: "chore(deps): bump yt-dlp to ${{ steps.latest-ytdlp.outputs.version }}"
+          title: "chore(deps): bump yt-dlp to ${{ steps.latest-ytdlp.outputs.version }}"
+          body: |
+            Automated nightly bump of `yt-dlp` to version `${{ steps.latest-ytdlp.outputs.version }}`.
+            Tests passed successfully on this version.
+          branch: "auto-bump-yt-dlp-${{ steps.latest-ytdlp.outputs.version }}"
+          delete-branch: true
