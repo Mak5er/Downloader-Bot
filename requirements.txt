@@ -4,7 +4,7 @@ SQLAlchemy[asyncio]==2.0.51
 alembic==1.18.5
 asyncpg==0.31.0
 aiocron==2.1
-colorlog==6.10.1
+colorlog==6.11.0
 fake-useragent==2.2.0
 httpx==0.28.1
 matplotlib==3.11.0
