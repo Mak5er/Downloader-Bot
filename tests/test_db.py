@@ -180,6 +180,10 @@ async def test_add_user_and_settings(database):
         "info_buttons": "off",
         "url_button": "off",
         "audio_button": "off",
+        "video_quality": "best",
+        "as_document": "off",
+        "audio_format": "mp3",
+        "file_button": "off",
     }
 
     await database.set_user_setting(1, "captions", "on")
