@@ -1,5 +1,4 @@
 import sys
-import asyncio
 import logging
 from yt_dlp import YoutubeDL
 

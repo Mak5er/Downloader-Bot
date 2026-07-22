@@ -1,5 +1,4 @@
 import asyncio
-from typing import Optional
 
 from aiogram import types
 
@@ -7,7 +6,6 @@ import keyboards as kb
 import messages as bm
 from config import (
     BATCH_LINKS_MAX_CONCURRENCY,
-    BATCH_LINKS_MAX_ITEMS,
     BATCH_LINKS_MIN_CONCURRENCY,
     BATCH_LINKS_PARALLEL_ACTIVE_JOBS_THRESHOLD,
     BATCH_LINKS_PARALLEL_QUEUE_DEPTH_THRESHOLD,

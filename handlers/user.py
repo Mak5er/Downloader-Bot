@@ -1,18 +1,18 @@
-import asyncio
-from typing import Optional
 
-from aiogram import types, Router, F
-from aiogram.exceptions import TelegramBadRequest
+import asyncio  # noqa: F401
+from aiogram import Router, F
+from aiogram.exceptions import TelegramBadRequest  # noqa: F401
 from aiogram.filters import Command
 
-import keyboards as kb
-import messages as bm
+import keyboards as kb  # noqa: F401
+import messages as bm  # noqa: F401
+from app_context import bot, db, send_analytics  # noqa: F401
+from services.logger import logger as logging  # noqa: F401
+from services.download.queue import get_download_queue  # noqa: F401
+from services.runtime.pending_requests import pop_pending  # noqa: F401
+from services.stats.chart import _render_stats  # noqa: F401
+
 from config import BATCH_LINKS_MAX_ITEMS
-from services.logger import logger as logging
-from app_context import db, send_analytics, bot
-from services.download.queue import get_download_queue
-from services.runtime.pending_requests import pop_pending
-from services.stats.chart import _render_stats
 
 from handlers import commands as cmd_mod
 from handlers import media_download as media_mod

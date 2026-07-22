@@ -1,22 +1,10 @@
 import asyncio
-import time
-from contextlib import suppress
 import hashlib
 import os
+import time
+from contextlib import suppress
 from dataclasses import dataclass
 from typing import Callable, Optional
-
-_HEARTBEAT_PATH = "/tmp/bot_heartbeat"
-
-
-async def _heartbeat_loop():
-    while True:
-        try:
-            with open(_HEARTBEAT_PATH, "w", encoding="utf-8") as f:
-                f.write(str(time.time()))
-        except Exception as exc:
-            logging.debug("Heartbeat write failed: %s", exc)
-        await asyncio.sleep(15)
 
 import httpx
 from aiocron import crontab
@@ -30,22 +18,34 @@ from sqlalchemy import insert as sql_insert
 from app_context import set_app_context
 from config import (
     API_SECRET,
-    BOT_POLLING_TASKS_CONCURRENCY_LIMIT,
     BOT_COMMANDS,
+    BOT_POLLING_TASKS_CONCURRENCY_LIMIT,
     BOT_SESSION_CONNECTION_LIMIT,
     BOT_TOKEN,
     CUSTOM_API_URL,
     MEASUREMENT_ID,
     OUTPUT_DIR,
 )
-from services.logger import logger as logging
-from services.storage.db import AnalyticsEvent, DataBase
 from services.download.queue import shutdown_download_queue
+from services.logger import logger as logging
 from services.runtime.analytics_status import record_drop as record_analytics_drop
+from services.storage.db import AnalyticsEvent, DataBase
 from utils.download_manager import close_download_http_clients
 from utils.http_client import close_http_session
 
 logging = logging.bind(service="main")
+
+_HEARTBEAT_PATH = "/tmp/bot_heartbeat"
+
+
+async def _heartbeat_loop():
+    while True:
+        try:
+            with open(_HEARTBEAT_PATH, "w", encoding="utf-8") as f:
+                f.write(str(time.time()))
+        except Exception as exc:
+            logging.debug("Heartbeat write failed: %s", exc)
+        await asyncio.sleep(15)
 
 
 @dataclass(slots=True)

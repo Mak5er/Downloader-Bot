@@ -1,4 +1,3 @@
-import asyncio
 import time
 from copy import copy
 from typing import Optional
@@ -10,11 +9,8 @@ from aiogram.types import ChatMemberUpdated
 import keyboards as kb
 import messages as bm
 from handlers.utils import get_bot_username, get_message_text
-from services.logger import logger as logging, summarize_url_for_log
-from app_context import db, send_analytics, bot
-from services.runtime.pending_requests import pop_pending
+from services.logger import logger as logging
 from services.stats.chart import (
-    _render_stats,
     _send_stats_photo,
     _handle_stats_update,
 )

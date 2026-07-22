@@ -4,8 +4,8 @@ import re
 from typing import Optional
 
 from aiogram import types, Router, F
-from aiogram.types import FSInputFile
 from aiogram.exceptions import TelegramBadRequest
+from aiogram.types import FSInputFile
 
 import keyboards as kb
 import messages as bm
@@ -60,8 +60,8 @@ from services.media.delivery import (
     send_audio_with_thumbnail,
     send_cached_media_entries,
 )
-from services.media.video_metadata import build_video_send_kwargs
 from services.media.orchestration import run_single_media_flow
+from services.media.video_metadata import build_video_send_kwargs
 from services.media.resolver import resolve_cached_media_items
 from services.platforms.instagram_media import (
     InstagramMedia,
@@ -73,9 +73,9 @@ from services.platforms.instagram_media import (
 from services.inline.service_icons import get_inline_service_icon
 from utils.cobalt_client import fetch_cobalt_data
 from utils.download_manager import (
+    DownloadMetrics,
     DownloadQueueBusyError,
     DownloadRateLimitError,
-    DownloadMetrics,
     log_download_metrics,
 )
 from utils.media_cache import build_media_cache_key
@@ -224,6 +224,127 @@ async def process_instagram_video(
     as_document = user_settings.get("as_document") == "on"
     db_video_url = f"{original_url}#document" if as_document else original_url
     cache_file_type = "document" if as_document else "video"
+
+    show_service_status = business_id is None
+    status_message: Optional[types.Message] = None
+    if show_service_status:
+        status_message = await message.answer(bm.downloading_video_status())
+
+    async def _edit_status(text: str) -> None:
+        await safe_edit_text(status_message, text)
+
+    on_progress = make_status_text_progress_updater("Instagram video", _edit_status)
+    on_retry = make_retry_status_notifier(
+        _edit_status,
+        enabled=show_service_status,
+    )
+
+    def _reply_markup():
+        return kb.return_video_info_keyboard(
+            None,
+            None,
+            None,
+            None,
+            "",
+            db_video_url,
+            user_settings,
+            audio_callback_data=audio_callback_data,
+        )
+
+    async def _send_cached(file_id: str):
+        logging.info(
+            "Serving cached Instagram video: url=%s file_id=%s",
+            summarize_url_for_log(db_video_url),
+            file_id,
+        )
+        try:
+            if as_document:
+                return await message.reply_document(
+                    document=file_id,
+                    caption=bm.captions(
+                        user_settings["captions"], data.description, bot_url
+                    ),
+                    reply_markup=_reply_markup(),
+                    parse_mode="HTML",
+                    disable_content_type_detection=True,
+                )
+            return await message.reply_video(
+                video=file_id,
+                caption=bm.captions(
+                    user_settings["captions"], data.description, bot_url
+                ),
+                reply_markup=_reply_markup(),
+                parse_mode="HTML",
+            )
+        except TelegramBadRequest:
+            return None
+
+    async def _download_media():
+        return await asyncio.wait_for(
+            inst_service.download_media(
+                media.url,
+                download_name,
+                user_id=message.from_user.id,
+                chat_id=message.chat.id,
+                on_progress=on_progress,
+                on_retry=on_retry,
+            ),
+            timeout=420.0,
+        )
+
+    async def _send_downloaded(path: str):
+        if as_document:
+            return await message.reply_document(
+                document=FSInputFile(path),
+                caption=bm.captions(user_settings["captions"], data.description, bot_url),
+                reply_markup=_reply_markup(),
+                parse_mode="HTML",
+                disable_content_type_detection=True,
+            )
+        return await message.reply_video(
+            video=FSInputFile(path),
+            caption=bm.captions(user_settings["captions"], data.description, bot_url),
+            reply_markup=_reply_markup(),
+            parse_mode="HTML",
+            **(await build_video_send_kwargs(path)),
+        )
+
+    async def _after_send():
+        await maybe_delete_user_message(message, user_settings["delete_message"])
+
+    async def _inspect_metrics(metrics: DownloadMetrics) -> bool:
+        log_download_metrics("instagram_video", metrics)
+        if metrics.size >= MAX_FILE_SIZE:
+            logging.warning(
+                "Instagram video too large: url=%s size=%s",
+                summarize_url_for_log(db_video_url),
+                metrics.size,
+            )
+            await handle_download_error(message, business_id=business_id)
+            return False
+        return True
+
+    async def _handle_backpressure(exc: Exception) -> None:
+        await handle_download_backpressure_error(
+            exc,
+            message=message,
+            show_service_status=business_id is None,
+        )
+
+    async def _handle_cache_store_error(exc: Exception) -> None:
+        logging.error(
+            "Error caching Instagram video: url=%s error=%s",
+            summarize_url_for_log(db_video_url),
+            exc,
+        )
+
+    async def _handle_unexpected_error(exc: Exception) -> None:
+        logging.exception(
+            "Error processing Instagram video: url=%s error=%s",
+            summarize_url_for_log(db_video_url),
+            exc,
+        )
+        await handle_download_error(message, business_id=business_id)
 
     sent_message = await run_single_media_flow(
         cache_key=db_video_url,
