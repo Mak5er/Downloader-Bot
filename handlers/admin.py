@@ -360,6 +360,13 @@ async def _render_perf_text(*, include_load: bool = True) -> str:
                 f"Workers: <b>{load.active_workers}</b>",
             ]
         )
+    try:
+        cache_stats = db.get_file_cache_stats()
+        lines.append(
+            f"File Cache: hits=<b>{cache_stats['hits']}</b>, misses=<b>{cache_stats['misses']}</b> (hit rate: <b>{cache_stats['hit_rate_pct']:.1f}%</b>)"
+        )
+    except Exception:
+        pass
     lines.append(f"Tracked sources: <b>{len(snapshot)}</b>")
 
     sorted_sources = sorted(

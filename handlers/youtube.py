@@ -376,6 +376,8 @@ async def download_video(message: types.Message, direct_url: Optional[str] = Non
                 on_retry_download,
             )
 
+        as_document = user_settings.get("as_document") == "on"
+
         async def _send_cached(file_id: str):
             logging.info(
                 "Serving cached YouTube video: url=%s file_id=%s",
@@ -383,6 +385,14 @@ async def download_video(message: types.Message, direct_url: Optional[str] = Non
                 file_id,
             )
             try:
+                if as_document:
+                    return await message.reply_document(
+                        document=file_id,
+                        caption=bm.captions(user_captions, yt["title"], bot_url),
+                        reply_markup=_reply_markup(),
+                        parse_mode="HTML",
+                        disable_content_type_detection=True,
+                    )
                 return await message.reply_video(
                     video=file_id,
                     caption=bm.captions(user_captions, yt["title"], bot_url),
@@ -393,6 +403,14 @@ async def download_video(message: types.Message, direct_url: Optional[str] = Non
                 return None
 
         async def _send_downloaded(path: str):
+            if as_document:
+                return await message.reply_document(
+                    document=FSInputFile(path),
+                    caption=bm.captions(user_captions, yt["title"], bot_url),
+                    reply_markup=_reply_markup(),
+                    parse_mode="HTML",
+                    disable_content_type_detection=True,
+                )
             return await message.reply_video(
                 video=FSInputFile(path),
                 caption=bm.captions(user_captions, yt["title"], bot_url),
@@ -419,9 +437,12 @@ async def download_video(message: types.Message, direct_url: Optional[str] = Non
                 show_service_status=business_id is None,
             )
 
+        cache_key = f"{yt['webpage_url']}#document" if as_document else yt["webpage_url"]
+        cache_file_type = "document" if as_document else "video"
+
         sent_message = await run_single_media_flow(
-            cache_key=yt["webpage_url"],
-            cache_file_type="video",
+            cache_key=cache_key,
+            cache_file_type=cache_file_type,
             db_service=db,
             upload_status_text=bm.uploading_status(),
             upload_action="upload_video",
@@ -433,7 +454,7 @@ async def download_video(message: types.Message, direct_url: Optional[str] = Non
             download_media=_download_media,
             send_downloaded=_send_downloaded,
             extract_file_id=lambda sent: (
-                sent.video.file_id if getattr(sent, "video", None) else None
+                sent.document.file_id if getattr(sent, "document", None) else (sent.video.file_id if getattr(sent, "video", None) else None)
             ),
             cleanup_path=remove_file,
             delete_status_message=lambda: safe_delete_message(status_message),

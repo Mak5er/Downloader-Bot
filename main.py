@@ -1,9 +1,22 @@
 import asyncio
+import time
 from contextlib import suppress
 import hashlib
 import os
 from dataclasses import dataclass
 from typing import Callable, Optional
+
+_HEARTBEAT_PATH = "/tmp/bot_heartbeat"
+
+
+async def _heartbeat_loop():
+    while True:
+        try:
+            with open(_HEARTBEAT_PATH, "w", encoding="utf-8") as f:
+                f.write(str(time.time()))
+        except Exception as exc:
+            logging.debug("Heartbeat write failed: %s", exc)
+        await asyncio.sleep(15)
 
 import httpx
 from aiocron import crontab
@@ -349,6 +362,7 @@ async def main():
 
             crontab("0 0 * * *", func=clear_downloads_and_notify, start=True)
 
+            heartbeat_task = asyncio.create_task(_heartbeat_loop())
             logging.perf(
                 "bot_startup_duration",
                 duration_ms=(asyncio.get_running_loop().time() - startup_started_at)
@@ -365,6 +379,8 @@ async def main():
             )
         finally:
             logging.event("polling_stopping")
+            if "heartbeat_task" in locals():
+                heartbeat_task.cancel()
             if analytics_started:
                 with suppress(Exception):
                     await stop_analytics_workers()

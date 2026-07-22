@@ -1,7 +1,7 @@
 services:
   downloader-bot:
     image: ghcr.io/mak5er/downloader-bot:latest
-    pull_policy: always
+    pull_policy: build
     build:
       context: .
       dockerfile: Dockerfile
@@ -14,13 +14,13 @@ services:
     depends_on:
       db-init:
         condition: service_completed_successfully
-    restart: on-failure:5
+    restart: unless-stopped
     healthcheck:
-      test: ["CMD", "python", "-c", "import asyncio; asyncio.run(asyncio.wait_for(asyncio.sleep(0.1), timeout=5))"]
+      test: ["CMD", "python", "scripts/healthcheck.py"]
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 15s
+      start_period: 20s
     deploy:
       resources:
         limits:

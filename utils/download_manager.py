@@ -22,6 +22,8 @@ from services.download.queue import (
 )
 from services.runtime.stats import record_download
 
+from utils.user_agents import merge_browser_headers
+
 logging = logging.bind(service="download_manager")
 
 _DEFAULT_SUBPROCESS_TIMEOUT_SECONDS = 30 * 60.0
@@ -126,8 +128,8 @@ class DownloadConfig:
     )  # 1 MiB chunks strike good throughput / memory balance
     multipart_threshold: int = 12 * 1024 * 1024  # Split downloads bigger than 12 MiB
     max_workers: int = 6  # Parallel range requests when supported
-    head_timeout: float = 8.0
-    probe_max_retries: int = 3
+    head_timeout: float = 3.0
+    probe_max_retries: int = 1
     stream_timeout: tuple[float, float] = (5.0, 60.0)
     max_retries: int = 3
     retry_backoff: float = 0.75
@@ -166,7 +168,7 @@ class ResilientDownloader:
     ) -> None:
         self.output_dir = output_dir
         self.config = config or DownloadConfig()
-        self._default_headers: MutableMapping[str, str] = dict(default_headers or {})
+        self._default_headers: MutableMapping[str, str] = merge_browser_headers(default_headers)
         self.source = source
         self._client: Optional[httpx.Client] = None
         self._client_lock = threading.Lock()
@@ -260,6 +262,17 @@ class ResilientDownloader:
                         exc,
                     )
 
+            if size_hint is not None:
+                return await asyncio.to_thread(
+                    self._download_sync,
+                    url,
+                    filename,
+                    headers_map,
+                    skip_if_exists,
+                    progress_bridge,
+                    max_size_bytes,
+                    size_hint=size_hint,
+                )
             return await asyncio.to_thread(
                 self._download_sync,
                 url,
@@ -446,6 +459,7 @@ class ResilientDownloader:
         skip_if_exists: bool,
         progress_callback: Optional[Callable[[DownloadProgress], None]] = None,
         max_size_bytes: Optional[int] = None,
+        size_hint: Optional[int] = None,
     ) -> DownloadMetrics:
         os.makedirs(self.output_dir, exist_ok=True)
         target_path = self._resolve_target_path(filename)
@@ -482,7 +496,15 @@ class ResilientDownloader:
 
         try:
             probe_started_at = time.perf_counter()
-            total_size, supports_range = self._probe(url, headers)
+            if size_hint is not None and 0 < size_hint < self.config.multipart_threshold:
+                total_size, supports_range = size_hint, False
+                logging.debug(
+                    "Skipping HEAD probe: size_hint (%d) < multipart_threshold (%d)",
+                    size_hint,
+                    self.config.multipart_threshold,
+                )
+            else:
+                total_size, supports_range = self._probe(url, headers)
             logging.perf(
                 "download_probe",
                 duration_ms=(time.perf_counter() - probe_started_at) * 1000.0,

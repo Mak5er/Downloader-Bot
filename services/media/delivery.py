@@ -238,9 +238,11 @@ async def send_audio_with_thumbnail(
 
 
 def extract_sent_file_id(sent_message: types.Message, media_kind: str) -> str | None:
-    if media_kind == "video" and sent_message.video:
+    if getattr(sent_message, "document", None):
+        return sent_message.document.file_id
+    if media_kind == "video" and getattr(sent_message, "video", None):
         return sent_message.video.file_id
-    if media_kind == "photo" and sent_message.photo:
+    if media_kind == "photo" and getattr(sent_message, "photo", None):
         return sent_message.photo[-1].file_id
     return None
 
@@ -293,6 +295,7 @@ async def send_cached_media_entries(
     caption: str | None = None,
     reply_markup: Any = None,
     parse_mode: str | None = None,
+    as_document: bool = False,
     kind_key: str = "kind",
     cache_key_key: str = "cache_key",
     cached_key: str = "cached",
@@ -317,7 +320,9 @@ async def send_cached_media_entries(
                     path_key=path_key,
                     url_key=url_key,
                 )
-                if media_kind == "video":
+                if as_document:
+                    media_group.add_document(media=media_ref)
+                elif media_kind == "video":
                     media_group.add_video(
                         media=media_ref,
                         **(await build_video_send_kwargs(str(entry.get(path_key)) if entry.get(path_key) else None)),
@@ -356,7 +361,11 @@ async def send_cached_media_entries(
     if parse_mode is not None:
         send_kwargs["parse_mode"] = parse_mode
 
-    if media_kind == "video":
+    if as_document:
+        send_kwargs["disable_content_type_detection"] = True
+        send_doc = message.answer_document if has_sent_media else message.reply_document
+        sent_message = await send_doc(document=media_ref, **send_kwargs)
+    elif media_kind == "video":
         send_kwargs.update(await build_video_send_kwargs(str(last_entry.get(path_key)) if last_entry.get(path_key) else None))
         send_video = message.answer_video if has_sent_media else message.reply_video
         sent_message = await send_video(video=media_ref, **send_kwargs)

@@ -138,6 +138,8 @@ class DataBase(
         self._settings_cache_max_entries = 4096
         self._file_cache_max_entries = 8192
         self._status_cache_max_entries = 4096
+        self._file_cache_hits = 0
+        self._file_cache_misses = 0
         self._cache_cleanup_interval_seconds = 60.0
         self._last_cache_cleanup_monotonic = 0.0
         _register_pool_listeners(self.engine)

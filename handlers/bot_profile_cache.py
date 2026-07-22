@@ -18,11 +18,16 @@ _AUDIO_THUMB_MAX_BYTES = 200 * 1024
 _AUDIO_THUMB_PATH = Path("downloads") / "bot_audio_thumbnail.jpg"
 
 
-async def get_bot_url(bot: Bot) -> str:
+async def get_bot_username(bot: Bot) -> str:
     global _bot_username
     if _bot_username is None:
         await _ensure_bot_identity(bot)
-    return f"t.me/{_bot_username}"
+    return _bot_username or ""
+
+
+async def get_bot_url(bot: Bot) -> str:
+    username = await get_bot_username(bot)
+    return f"t.me/{username}"
 
 
 async def _get_bot_id(bot: Bot) -> int:

@@ -2,12 +2,16 @@ from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 
-def start_keyboard(bot_username: str | None = None) -> InlineKeyboardMarkup:
-    share_url = "https://t.me/share/url?url=https://t.me/MaxLoadBot"
-    add_to_group_url = "https://t.me/MaxLoadBot?startgroup=true"
-    if bot_username:
-        share_url = f"https://t.me/share/url?url=https://t.me/{bot_username}"
-        add_to_group_url = f"https://t.me/{bot_username}?startgroup=true"
+from urllib.parse import quote
+
+
+def start_keyboard(bot_username: str | None = None, ref_user_id: int | None = None) -> InlineKeyboardMarkup:
+    username = bot_username or "MaxLoadBot"
+    base_link = f"https://t.me/{username}"
+
+    share_text = "Fast downloader bot for Instagram, TikTok, YouTube & more!"
+    share_url = f"https://t.me/share/url?url={quote(base_link)}&text={quote(share_text)}"
+    add_to_group_url = f"https://t.me/{username}?startgroup=true"
 
     return InlineKeyboardMarkup(
         inline_keyboard=[
@@ -41,35 +45,104 @@ def format_number(value: int) -> str | None:
     return str(value)
 
 
+FIELD_CATEGORY_MAP = {
+    "video_quality": "media",
+    "as_document": "media",
+    "audio_format": "media",
+    "captions": "appearance",
+    "info_buttons": "appearance",
+    "audio_button": "appearance",
+    "file_button": "appearance",
+    "url_button": "appearance",
+    "delete_message": "chat",
+}
+
+
+def return_settings_categories_keyboard() -> InlineKeyboardMarkup:
+    buttons = [
+        [InlineKeyboardButton(text="🎬 Media & Quality", callback_data="settings_cat:media")],
+        [InlineKeyboardButton(text="🎨 Appearance & Buttons", callback_data="settings_cat:appearance")],
+        [InlineKeyboardButton(text="💬 Chat & Clean-up", callback_data="settings_cat:chat")],
+    ]
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
+def return_category_settings_keyboard(category: str) -> InlineKeyboardMarkup:
+    if category == "media":
+        fields = [
+            ("🎬 Video Quality", "video_quality"),
+            ("📄 Send as File", "as_document"),
+            ("🎵 Audio Format", "audio_format"),
+        ]
+    elif category == "appearance":
+        fields = [
+            ("📝 Descriptions", "captions"),
+            ("ℹ️ Info Buttons", "info_buttons"),
+            ("🎧 MP3 Button", "audio_button"),
+            ("📄 File Button", "file_button"),
+            ("🔗 URL Button", "url_button"),
+        ]
+    else:
+        fields = [
+            ("🗑️ Delete Messages", "delete_message"),
+        ]
+
+    buttons = [
+        [InlineKeyboardButton(text=text, callback_data=f"settings:{field}")]
+        for text, field in fields
+    ]
+    buttons.append([InlineKeyboardButton(text="⬅️ Back to Categories", callback_data="back_to_settings")])
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
 def return_field_keyboard(field: str, value: str | None):
-    is_enabled = value == "on"
-    status_text = "🟢 Enabled" if is_enabled else "🔴 Disabled"
+    val = (value or "").strip().lower()
+    cat = FIELD_CATEGORY_MAP.get(field, "media")
+    back_cb = f"settings_cat:{cat}"
+
+    if field == "video_quality":
+        current = val or "best"
+        opt_best = "✅ 🏆 Best (1080p+)" if current == "best" else "🏆 Best (1080p+)"
+        opt_bal = "✅ ⚖️ Balanced (720p)" if current == "balanced" else "⚖️ Balanced (720p)"
+        opt_saver = "✅ ⚡ Data Saver (480p)" if current == "saver" else "⚡ Data Saver (480p)"
+
+        buttons = [
+            [InlineKeyboardButton(text=opt_best, callback_data="setting:video_quality:best")],
+            [InlineKeyboardButton(text=opt_bal, callback_data="setting:video_quality:balanced")],
+            [InlineKeyboardButton(text=opt_saver, callback_data="setting:video_quality:saver")],
+            [InlineKeyboardButton(text="⬅️ Back", callback_data=back_cb)],
+        ]
+        return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+    if field == "audio_format":
+        current = val or "mp3"
+        opt_mp3 = "✅ 🎧 MP3 Audio" if current == "mp3" else "🎧 MP3 Audio"
+        opt_m4a = "✅ 📱 M4A (AAC)" if current == "m4a" else "📱 M4A (AAC)"
+        opt_best = "✅ 🎼 FLAC / Original" if current == "best" else "🎼 FLAC / Original"
+
+        buttons = [
+            [InlineKeyboardButton(text=opt_mp3, callback_data="setting:audio_format:mp3")],
+            [InlineKeyboardButton(text=opt_m4a, callback_data="setting:audio_format:m4a")],
+            [InlineKeyboardButton(text=opt_best, callback_data="setting:audio_format:best")],
+            [InlineKeyboardButton(text="⬅️ Back", callback_data=back_cb)],
+        ]
+        return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+    is_enabled = val == "on"
+    status_text = "🟢 Currently ON" if is_enabled else "🔴 Currently OFF"
     next_value = "off" if is_enabled else "on"
-    action_text = "Turn OFF" if is_enabled else "Turn ON"
+    action_text = "🔴 Turn OFF" if is_enabled else "🟢 Turn ON"
 
     buttons = [
         [InlineKeyboardButton(text=status_text, callback_data="noop")],
         [InlineKeyboardButton(text=action_text, callback_data=f"setting:{field}:{next_value}")],
-        [InlineKeyboardButton(text="⬅️ Back", callback_data="back_to_settings")],
+        [InlineKeyboardButton(text="⬅️ Back", callback_data=back_cb)],
     ]
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
 def return_settings_keyboard():
-    settings_fields = [
-        ("📝 Descriptions", "captions"),
-        ("ℹ️ Info Buttons", "info_buttons"),
-        ("🎧 MP3 Button", "audio_button"),
-        ("🔗 URL Button", "url_button"),
-        ("🗑️ Delete Messages", "delete_message"),
-    ]
-
-    buttons = [
-        [InlineKeyboardButton(text=text, callback_data=f"settings:{field}")]
-        for text, field in settings_fields
-    ]
-
-    return InlineKeyboardMarkup(inline_keyboard=buttons)
+    return return_settings_categories_keyboard()
 
 
 def stats_keyboard(current_period: str = "Week", mode: str = "total"):
@@ -239,6 +312,7 @@ def return_video_info_keyboard(
     video_url,
     user_settings,
     audio_callback_data: str | None = None,
+    file_callback_data: str | None = None,
 ):
     builder = InlineKeyboardBuilder()
 
@@ -282,6 +356,13 @@ def return_video_info_keyboard(
 
     if user_settings.get("audio_button") == "on" and audio_callback_data:
         builder.row(InlineKeyboardButton(text="🎧 Download MP3", callback_data=audio_callback_data))
+
+    if (
+        user_settings.get("file_button") == "on"
+        and user_settings.get("as_document") != "on"
+        and file_callback_data
+    ):
+        builder.row(InlineKeyboardButton(text="📄 Download File", callback_data=file_callback_data))
 
     if user_settings["url_button"] == "on" and video_url:
         builder.row(InlineKeyboardButton(text="🔗 URL", url=video_url))
