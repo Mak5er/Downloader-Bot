@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1.7
 
-FROM denoland/deno:2.9.4 AS deno
+FROM denoland/deno:2.9.5 AS deno
 
 FROM python:3.14-slim AS builder
 
