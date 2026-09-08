@@ -33,6 +33,16 @@ def cancel_keyboard() -> InlineKeyboardMarkup:
     return builder.as_markup()
 
 
+def mailing_audience_keyboard() -> InlineKeyboardMarkup:
+    buttons = [
+        [InlineKeyboardButton(text="👤 Private chats only", callback_data="mailing_target:dm")],
+        [InlineKeyboardButton(text="🏘 Groups only", callback_data="mailing_target:groups")],
+        [InlineKeyboardButton(text="🌐 All (DM + Groups)", callback_data="mailing_target:all")],
+        [InlineKeyboardButton(text="❌ Cancel", callback_data="cancel_action")],
+    ]
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
 def format_number(value: int) -> str | None:
     if value is None:
         return None

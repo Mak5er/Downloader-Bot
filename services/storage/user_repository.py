@@ -197,6 +197,8 @@ class UserRepositoryMixin:
                 )
         self._status_cache[group_id_int] = (time.monotonic(), status)
 
+    set_group_status = update_group_status
+
     async def update_group_member_count(self, group_id: int, member_count: int) -> None:
         group_id_int = int(group_id)
         async with self.SessionLocal() as session:
@@ -209,7 +211,9 @@ class UserRepositoryMixin:
 
     async def get_active_groups(self) -> list[Group]:
         async with self.SessionLocal() as session:
-            result = await session.execute(select(Group).where(Group.status == "active"))
+            result = await session.execute(
+                select(Group).where(Group.status == "active").order_by(Group.id.asc())
+            )
             return list(result.scalars().all())
 
     async def get_users_for_reachability_check(self) -> list[User]:
@@ -218,7 +222,7 @@ class UserRepositoryMixin:
                 select(User).where(
                     User.has_dm.is_(True),
                     func.coalesce(User.status, "active") != "ban",
-                )
+                ).order_by(User.user_id.asc())
             )
             return list(result.scalars().all())
 
@@ -274,14 +278,7 @@ class UserRepositoryMixin:
             }
 
     async def get_user_counts(self) -> dict[str, int]:
-        stats = await self.get_community_stats()
-        return {
-            "user_count": stats["user_count"],
-            "active_user_count": stats["active_user_count"],
-            "inactive_user_count": stats["inactive_user_count"],
-            "private_chat_count": stats["private_chat_count"],
-            "group_chat_count": stats["group_chat_count"],
-        }
+        return await self.get_community_stats()
 
     async def delete_user(self, user_id: int) -> None:
         user_id_int = int(user_id)

@@ -1,10 +1,10 @@
 def admin_panel(
+    *args,
     total_count=None,
     private_count=None,
     group_count=None,
     active_user_count=None,
     inactive_user_count=None,
-    *,
     dm_total=None,
     dm_active=None,
     dm_inactive=None,
@@ -16,6 +16,43 @@ def admin_panel(
     tracked_group_members=None,
     **kwargs,
 ):
+    if len(args) == 1 and isinstance(args[0], dict):
+        d = args[0]
+        dm_total = d.get("dm_total", dm_total)
+        dm_active = d.get("dm_active", dm_active)
+        dm_inactive = d.get("dm_inactive", dm_inactive)
+        dm_banned = d.get("dm_banned", dm_banned)
+        groups_total = d.get("groups_total", groups_total)
+        groups_active = d.get("groups_active", groups_active)
+        groups_inactive = d.get("groups_inactive", groups_inactive)
+        total_reach = d.get("total_reach", total_reach)
+        tracked_group_members = d.get("tracked_group_members", tracked_group_members)
+        total_count = d.get("user_count", total_count)
+        private_count = d.get("private_chat_count", private_count)
+        group_count = d.get("group_chat_count", group_count)
+        active_user_count = d.get("active_user_count", active_user_count)
+        inactive_user_count = d.get("inactive_user_count", inactive_user_count)
+    elif len(args) == 9:
+        (
+            dm_total,
+            dm_active,
+            dm_inactive,
+            dm_banned,
+            groups_total,
+            groups_active,
+            groups_inactive,
+            total_reach,
+            tracked_group_members,
+        ) = args
+    elif len(args) == 5:
+        (
+            total_count,
+            private_count,
+            group_count,
+            active_user_count,
+            inactive_user_count,
+        ) = args
+
     if dm_total is not None:
         reach_val = total_reach or 0
         return (
@@ -80,6 +117,42 @@ Enter the message to send:""").format(
     )
 
 
+def mailing_select_audience() -> str:
+    return (
+        "<b>Broadcast Mailing</b>\n\n"
+        "Select the target audience for your broadcast:"
+    )
+
+
+def mailing_audience_preview_segmented(
+    audience_type: str | None = None,
+    total_recipients: int = 0,
+    active_count: int = 0,
+    inactive_count: int = 0,
+    estimated_reach: int = 0,
+    *,
+    audience_name: str | None = None,
+    **kwargs,
+) -> str:
+    chosen_audience = audience_name if audience_name is not None else (audience_type or "")
+    lines = [
+        "<b>Mailing audience preview</b>",
+        f"Target audience: <b>{chosen_audience}</b>",
+        f"Recipients to process: <b>{total_recipients}</b>",
+    ]
+    if active_count > 0 or inactive_count > 0:
+        lines.append(f"Active: <b>{active_count}</b>")
+        if inactive_count > 0:
+            lines.append(f"Inactive: <b>{inactive_count}</b>")
+    if estimated_reach > 0:
+        lines.append(f"Estimated reach: <b>~{estimated_reach:,} members</b>")
+    lines.extend([
+        "",
+        "Enter the message to send:",
+    ])
+    return "\n".join(lines)
+
+
 def canceled():
     return "Action canceled!"
 
@@ -119,22 +192,38 @@ def active_users_check_no_targets():
     return "There are no users available for checking."
 
 
-def active_groups_check_started(total_groups):
+def check_groups_started(total_groups: int) -> str:
     return f"Starting availability and reach check for {total_groups} groups..."
 
 
-def active_groups_check_completed(total_groups, reachable_groups, unreachable_groups, total_reach):
+def check_groups_completed(
+    total_groups: int,
+    reachable_groups: int = 0,
+    unreachable_groups: int = 0,
+    total_reach: int = 0,
+    *,
+    active_groups: int | None = None,
+    kicked_groups: int | None = None,
+) -> str:
+    reachable = active_groups if active_groups is not None else reachable_groups
+    unreachable = kicked_groups if kicked_groups is not None else unreachable_groups
+    reach_val = total_reach or 0
     return (
         "<b>Group check finished.</b>\n\n"
         f"Total groups processed: <b>{total_groups}</b>\n"
-        f"Reachable (bot member): <b>{reachable_groups}</b>\n"
-        f"Unreachable (kicked/left): <b>{unreachable_groups}</b>\n"
-        f"Total estimated reach: <b>~{total_reach:,} members</b>"
+        f"Reachable (bot member): <b>{reachable}</b>\n"
+        f"Unreachable (kicked/left): <b>{unreachable}</b>\n"
+        f"Total estimated reach: <b>~{reach_val:,} members</b>"
     )
 
 
-def active_groups_check_no_targets():
-    return "There are no groups available for checking."
+def check_groups_no_targets() -> str:
+    return "There are no active groups available for checking."
+
+
+active_groups_check_started = check_groups_started
+active_groups_check_completed = check_groups_completed
+active_groups_check_no_targets = check_groups_no_targets
 
 
 def enter_chat_id():

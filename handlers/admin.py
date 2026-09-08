@@ -225,8 +225,15 @@ def _cleanup_download_tree(*, now: float | None = None) -> tuple[int, int, int]:
 
 
 async def _check_user_reachability(user) -> bool:
-    user_id = int(user.user_id)
-    user_status = user.status or "inactive"
+    user_id = int(getattr(user, "user_id", 0))
+    if user_id <= 0:
+        logging.warning("Skipping non-positive ID %s in DM reachability check", user_id)
+        return False
+    if not getattr(user, "has_dm", True):
+        logging.warning("Skipping non-DM user %s in DM reachability check", user_id)
+        return False
+
+    user_status = getattr(user, "status", None) or "inactive"
     send_successful = False
 
     try:
@@ -262,33 +269,55 @@ async def _check_user_reachability(user) -> bool:
     return send_successful
 
 
-async def _deliver_mailing_message(user, *, sender_id: int, message_id: int) -> None:
-    user_id = int(getattr(user, "user_id", None) if getattr(user, "user_id", None) is not None else user.id)
-    user_status = getattr(user, "status", None) or "inactive"
+async def _deliver_mailing_message(target, *, sender_id: int, message_id: int) -> None:
+    chat_id = int(getattr(target, "user_id", None) if getattr(target, "user_id", None) is not None else target.id)
+    target_status = getattr(target, "status", None) or "inactive"
+    is_group = chat_id < 0
 
     try:
         await bot.copy_message(
-            chat_id=user_id,
+            chat_id=chat_id,
             from_chat_id=sender_id,
             message_id=message_id,
         )
-        if user_status == "inactive":
-            await db.set_active(user_id)
+        if is_group:
+            if target_status != "active" and hasattr(db, "update_group_status"):
+                await db.update_group_status(chat_id, "active")
+        else:
+            if target_status == "inactive":
+                await db.set_active(chat_id)
     except TelegramForbiddenError as error:
-        if "bots can't send messages to bots" in error.message:
-            await db.delete_user(user_id)
-        elif "blocked" in error.message:
-            await db.set_inactive(user_id)
+        if is_group:
+            logging.info("Group %s kicked or restricted during mailing: %s", chat_id, error)
+            if hasattr(db, "update_group_status"):
+                await db.update_group_status(chat_id, "kicked")
+            else:
+                await db.set_inactive(chat_id)
+        else:
+            if "bots can't send messages to bots" in error.message:
+                await db.delete_user(chat_id)
+            elif "blocked" in error.message:
+                await db.set_inactive(chat_id)
     except TelegramBadRequest as error:
         if "chat not found" in error.message.lower():
-            await db.set_inactive(user_id)
+            if is_group:
+                if hasattr(db, "update_group_status"):
+                    await db.update_group_status(chat_id, "kicked")
+                else:
+                    await db.set_inactive(chat_id)
+            else:
+                await db.set_inactive(chat_id)
+        elif is_group and any(p in error.message.lower() for p in ["not enough rights", "restricted", "have no rights"]):
+            if hasattr(db, "update_group_status"):
+                await db.update_group_status(chat_id, "kicked")
     except Exception as error:
-        logging.warning("Failed to deliver mailing message to %s: %s", user_id, error)
+        logging.warning("Failed to deliver mailing message to %s: %s", chat_id, error)
     finally:
         await asyncio.sleep(_ADMIN_THROTTLE_SECONDS)
 
 
 class Mailing(StatesGroup):
+    select_audience = State()
     send_to_all_message = State()
 
 
@@ -676,15 +705,15 @@ async def check_active_users(call: types.CallbackQuery):
 
     if hasattr(db, "get_users_for_reachability_check") and callable(getattr(db, "get_users_for_reachability_check", None)):
         users_info = await db.get_users_for_reachability_check()
-        users_to_check = [u for u in users_info if (getattr(u, "status", None) or "inactive") != "ban"]
     else:
         users_info = await db.get_all_users_info()
-        users_to_check = [
-            user for user in users_info
-            if (getattr(user, "status", None) or "inactive") != "ban"
-            and getattr(user, "has_dm", True)
-            and (getattr(user, "user_id", 0) > 0 or getattr(user, "chat_type", "private") == "private")
-        ]
+
+    users_to_check = [
+        user for user in users_info
+        if getattr(user, "user_id", 0) > 0
+        and getattr(user, "has_dm", True if getattr(user, "user_id", 0) > 0 else False)
+        and (getattr(user, "status", None) or "active") != "ban"
+    ]
 
     if not users_to_check:
         await call.message.edit_text(
@@ -710,7 +739,7 @@ async def check_active_users(call: types.CallbackQuery):
     )
 
 
-@router.callback_query(F.data == 'check_active_groups')
+@router.callback_query((F.data == 'check_groups') | (F.data == 'check_active_groups'))
 async def check_active_groups(call: types.CallbackQuery):
     if not await _ensure_admin_callback(call):
         return
@@ -725,13 +754,13 @@ async def check_active_groups(call: types.CallbackQuery):
 
     if not groups:
         await call.message.edit_text(
-            bm.active_groups_check_no_targets(),
+            bm.check_groups_no_targets(),
             reply_markup=kb.return_back_to_admin_keyboard()
         )
         return
 
     total_groups = len(groups)
-    status_message = await call.message.edit_text(bm.active_groups_check_started(total_groups))
+    status_message = await call.message.edit_text(bm.check_groups_started(total_groups))
 
     reachable = 0
     unreachable = 0
@@ -747,6 +776,21 @@ async def check_active_groups(call: types.CallbackQuery):
                 await db.update_group_member_count(group_id, member_count)
             if hasattr(db, "update_group_status") and callable(getattr(db, "update_group_status", None)):
                 await db.update_group_status(group_id, "active")
+        except TelegramRetryAfter as error:
+            await asyncio.sleep(error.retry_after)
+            try:
+                member_count = await bot.get_chat_member_count(group_id)
+                reachable += 1
+                total_reach += member_count
+                if hasattr(db, "update_group_member_count") and callable(getattr(db, "update_group_member_count", None)):
+                    await db.update_group_member_count(group_id, member_count)
+                if hasattr(db, "update_group_status") and callable(getattr(db, "update_group_status", None)):
+                    await db.update_group_status(group_id, "active")
+            except Exception as retry_error:
+                unreachable += 1
+                logging.info("Group %s unreachable on retry: %s", group_id, retry_error)
+                if hasattr(db, "update_group_status") and callable(getattr(db, "update_group_status", None)):
+                    await db.update_group_status(group_id, "kicked")
         except (TelegramForbiddenError, TelegramNotFound, TelegramBadRequest) as error:
             unreachable += 1
             logging.info("Group %s unreachable: %s", group_id, error)
@@ -757,10 +801,13 @@ async def check_active_groups(call: types.CallbackQuery):
         await asyncio.sleep(_ADMIN_THROTTLE_SECONDS)
 
     await status_message.edit_text(
-        bm.active_groups_check_completed(total_groups, reachable, unreachable, total_reach),
+        bm.check_groups_completed(total_groups, reachable, unreachable, total_reach),
         reply_markup=kb.return_back_to_admin_keyboard(),
         parse_mode="HTML"
     )
+
+
+check_groups = check_active_groups
 
 
 @router.callback_query(F.data == 'cancel_action')
@@ -936,26 +983,59 @@ async def send_to_all_callback(call: types.CallbackQuery, state: FSMContext):
     if not await _ensure_admin_callback(call):
         return
 
-    users = await db.get_all_users_info()
-    active_users = sum(1 for user in users if (user.status or "inactive") == "active")
-    banned_users = sum(1 for user in users if (user.status or "inactive") == "ban")
-    private_users = sum(1 for user in users if user.chat_type == "private")
-    group_users = sum(1 for user in users if user.chat_type != "private")
+    await call.answer()
+    await state.set_state(Mailing.select_audience)
+    await call.message.edit_text(
+        text=bm.mailing_select_audience(),
+        reply_markup=kb.mailing_audience_keyboard(),
+        parse_mode="HTML",
+    )
+
+
+@router.callback_query(F.data.startswith("mailing_target:"))
+async def mailing_target_callback(call: types.CallbackQuery, state: FSMContext):
+    if not await _ensure_admin_callback(call):
+        return
+
+    await call.answer()
+    target_audience = call.data.split(":", 1)[1]  # "dm", "groups", "all"
+    if hasattr(state, "update_data") and callable(getattr(state, "update_data", None)):
+        await state.update_data(target_audience=target_audience)
+
+    stats = await _get_admin_counts()
+    if target_audience == "dm":
+        audience_name = "Private chats only"
+        total = stats.get("dm_total", stats.get("private_chat_count", 0)) - stats.get("dm_banned", 0)
+        active = stats.get("dm_active", stats.get("active_user_count", 0))
+        inactive = stats.get("dm_inactive", stats.get("inactive_user_count", 0))
+        reach = 0
+    elif target_audience == "groups":
+        audience_name = "Groups only"
+        total = stats.get("groups_active", stats.get("group_chat_count", 0))
+        active = total
+        inactive = stats.get("groups_inactive", 0)
+        reach = stats.get("total_reach", 0)
+    else:  # "all"
+        audience_name = "All (DM + Groups)"
+        dm_recipients = stats.get("dm_total", stats.get("private_chat_count", 0)) - stats.get("dm_banned", 0)
+        group_recipients = stats.get("groups_active", stats.get("group_chat_count", 0))
+        total = dm_recipients + group_recipients
+        active = stats.get("dm_active", stats.get("active_user_count", 0)) + group_recipients
+        inactive = stats.get("dm_inactive", stats.get("inactive_user_count", 0))
+        reach = stats.get("total_reach", 0)
 
     await call.message.edit_text(
-        text=bm.mailing_audience_preview(
-            len(users) - banned_users,
-            active_users,
-            len(users) - active_users - banned_users,
-            banned_users,
-            private_users,
-            group_users,
+        text=bm.mailing_audience_preview_segmented(
+            audience_name=audience_name,
+            total_recipients=total,
+            active_count=active,
+            inactive_count=inactive,
+            estimated_reach=reach,
         ),
         reply_markup=kb.cancel_keyboard(),
         parse_mode="HTML",
     )
     await state.set_state(Mailing.send_to_all_message)
-    await call.answer()
 
 
 @router.message(Mailing.send_to_all_message)
@@ -970,34 +1050,57 @@ async def send_to_all_message(message: types.Message, state: FSMContext):
         await state.clear()
         return
 
-    else:
-        await state.clear()
+    target_audience = "all"
+    if hasattr(state, "get_data") and callable(getattr(state, "get_data", None)):
+        data = await state.get_data()
+        if isinstance(data, dict):
+            target_audience = data.get("target_audience", "all")
+    await state.clear()
 
-        await bot.send_message(chat_id=message.chat.id,
-                               text=bm.start_mailing(),
-                               reply_markup=types.ReplyKeyboardRemove())
+    await bot.send_message(
+        chat_id=message.chat.id,
+        text=bm.start_mailing(),
+        reply_markup=types.ReplyKeyboardRemove(),
+    )
 
+    targets = []
+    if target_audience in {"dm", "all"}:
         if hasattr(db, "get_users_for_reachability_check") and callable(getattr(db, "get_users_for_reachability_check", None)):
-            users = await db.get_users_for_reachability_check()
+            dm_users = await db.get_users_for_reachability_check()
         else:
-            users = [
+            dm_users = [
                 user for user in await db.get_all_users_info()
-                if (getattr(user, "status", None) or "inactive") != "ban" and getattr(user, "has_dm", True)
+                if (getattr(user, "status", None) or "inactive") != "ban"
+                and getattr(user, "has_dm", True)
+                and (getattr(user, "user_id", 0) > 0 or getattr(user, "chat_type", "private") == "private")
             ]
-        await _run_bounded(
-            users,
-            limit=_ADMIN_MAILING_CONCURRENCY,
-            worker=lambda user: _deliver_mailing_message(
-                user,
-                sender_id=sender_id,
-                message_id=message.message_id,
-            ),
-        )
+        targets.extend(dm_users)
 
-        await bot.send_message(chat_id=message.chat.id,
-                               text=bm.finish_mailing(),
-                               reply_markup=types.ReplyKeyboardRemove())
-        return
+    if target_audience in {"groups", "all"}:
+        if hasattr(db, "get_active_groups") and callable(getattr(db, "get_active_groups", None)):
+            active_groups = await db.get_active_groups()
+        else:
+            active_groups = [
+                user for user in await db.get_all_users_info()
+                if getattr(user, "user_id", 0) < 0 and (getattr(user, "status", None) or "active") == "active"
+            ]
+        targets.extend(active_groups)
+
+    await _run_bounded(
+        targets,
+        limit=_ADMIN_MAILING_CONCURRENCY,
+        worker=lambda target: _deliver_mailing_message(
+            target,
+            sender_id=sender_id,
+            message_id=message.message_id,
+        ),
+    )
+
+    await bot.send_message(
+        chat_id=message.chat.id,
+        text=bm.finish_mailing(),
+        reply_markup=types.ReplyKeyboardRemove(),
+    )
 
 
 @router.callback_query(F.data.startswith("write_"))

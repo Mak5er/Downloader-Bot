@@ -109,6 +109,8 @@ def test_user_message_formatters_include_dynamic_values():
         (lambda: admin_bm.unknown_chat_target(77), "not in the local database"),
         (lambda: admin_bm.downloads_cleanup_blocked(1, 2), "downloads are still running"),
         (lambda: admin_bm.downloads_cleanup_finished(3, 4, 5), "Removed 3 files"),
+        (admin_bm.check_groups_no_targets, "no active groups"),
+        (admin_bm.mailing_select_audience, "Select the target audience"),
     ],
 )
 def test_admin_message_factories_return_expected_text(factory, expected):
@@ -133,3 +135,74 @@ def test_admin_message_formatters_include_dynamic_values():
     known = admin_bm.known_chat_target(88, "Ops Chat", "@ops", "active")
     assert "Ops Chat" in known
     assert "@ops" in known
+
+
+def test_admin_panel_supports_all_calling_conventions():
+    # 9 positional arguments
+    panel_9 = admin_bm.admin_panel(100, 80, 15, 5, 10, 8, 2, 5000, 120)
+    assert "Private Chats (DM):" in panel_9
+    assert "100" in panel_9
+    assert "80" in panel_9
+    assert "15" in panel_9
+    assert "5" in panel_9
+    assert "10" in panel_9
+    assert "8" in panel_9
+    assert "2" in panel_9
+    assert "~5,000 members" in panel_9
+    assert "120" in panel_9
+
+    # 5 positional arguments (legacy fallback)
+    panel_5 = admin_bm.admin_panel(10, 7, 3, 8, 2)
+    assert "Total chats: <b>10</b>" in panel_5
+    assert "Private users: <b>7</b>" in panel_5
+    assert "Private Chats (DM):" not in panel_5
+
+    # Dict argument
+    panel_dict = admin_bm.admin_panel({"dm_total": 50, "total_reach": 1000, "dm_active": 45})
+    assert "Total with DM: <b>50</b>" in panel_dict
+    assert "~1,000 members" in panel_dict
+    assert "Active (reachable): <b>45</b>" in panel_dict
+
+    # Keyword arguments
+    panel_kw = admin_bm.admin_panel(dm_total=200, groups_total=5, total_reach=3000)
+    assert "Total with DM: <b>200</b>" in panel_kw
+    assert "Total groups: <b>5</b>" in panel_kw
+    assert "~3,000 members" in panel_kw
+
+
+def test_check_groups_and_segmented_mailing_templates():
+    started = admin_bm.check_groups_started(5)
+    assert "5 groups" in started
+
+    # Test with reachable_groups and unreachable_groups
+    completed_pos = admin_bm.check_groups_completed(5, 4, 1, 1200)
+    assert "Group check finished." in completed_pos
+    assert "Reachable (bot member): <b>4</b>" in completed_pos
+    assert "Unreachable (kicked/left): <b>1</b>" in completed_pos
+    assert "~1,200 members" in completed_pos
+
+    # Test with active_groups and kicked_groups keyword arguments
+    completed_kw = admin_bm.check_groups_completed(5, active_groups=3, kicked_groups=2, total_reach=950)
+    assert "Reachable (bot member): <b>3</b>" in completed_kw
+    assert "Unreachable (kicked/left): <b>2</b>" in completed_kw
+    assert "~950 members" in completed_kw
+
+    # Backward compatibility aliases
+    assert admin_bm.active_groups_check_started is admin_bm.check_groups_started
+    assert admin_bm.active_groups_check_completed is admin_bm.check_groups_completed
+    assert admin_bm.active_groups_check_no_targets is admin_bm.check_groups_no_targets
+
+    # Segmented mailing preview
+    preview = admin_bm.mailing_audience_preview_segmented(
+        audience_name="Groups only",
+        total_recipients=12,
+        active_count=10,
+        inactive_count=2,
+        estimated_reach=3400,
+    )
+    assert "Mailing audience preview" in preview
+    assert "Groups only" in preview
+    assert "12" in preview
+    assert "Active: <b>10</b>" in preview
+    assert "Inactive: <b>2</b>" in preview
+    assert "~3,400 members" in preview

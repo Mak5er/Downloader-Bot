@@ -309,6 +309,7 @@ async def test_perf_metrics_reports_queue_load_and_bottleneck(monkeypatch):
     message = SimpleNamespace(answer=AsyncMock())
 
     monkeypatch.setattr(admin, "get_download_queue", lambda: fake_queue)
+    monkeypatch.setattr(admin.db, "get_file_cache_stats", lambda: {"hits": 10, "misses": 5, "hit_rate_pct": 66.7})
 
     await admin.perf_metrics(message)
 
@@ -414,30 +415,122 @@ async def test_admin_runtime_storage_callback_renders_combined_panel(monkeypatch
 
 
 @pytest.mark.asyncio
-async def test_send_to_all_callback_shows_audience_preview(monkeypatch):
+async def test_send_to_all_callback_shows_audience_selector(monkeypatch):
     state = SimpleNamespace(set_state=AsyncMock())
     call = SimpleNamespace(
         from_user=SimpleNamespace(id=1),
         answer=AsyncMock(),
         message=SimpleNamespace(edit_text=AsyncMock()),
     )
-    fake_users = [
-        SimpleNamespace(user_id=1, status="active", chat_type="private"),
-        SimpleNamespace(user_id=2, status="inactive", chat_type="private"),
-        SimpleNamespace(user_id=3, status="ban", chat_type="group"),
-        SimpleNamespace(user_id=4, status="active", chat_type="group"),
-    ]
-
     monkeypatch.setattr(admin, "ADMINS_UID", [1])
-    monkeypatch.setattr(admin, "db", SimpleNamespace(get_all_users_info=AsyncMock(return_value=fake_users)))
 
     await admin.send_to_all_callback(call, state)
 
-    text = call.message.edit_text.await_args.kwargs["text"]
-    assert "audience preview" in text.lower()
-    assert "3" in text
-    assert "2" in text
+    call.answer.assert_awaited_once()
+    state.set_state.assert_awaited_once_with(admin.Mailing.select_audience)
+    kwargs = call.message.edit_text.await_args.kwargs
+    assert "select the target audience" in kwargs["text"].lower()
+    callbacks = [btn.callback_data for row in kwargs["reply_markup"].inline_keyboard for btn in row]
+    assert callbacks == ["mailing_target:dm", "mailing_target:groups", "mailing_target:all", "cancel_action"]
+
+
+@pytest.mark.asyncio
+async def test_mailing_target_callback_shows_segmented_preview(monkeypatch):
+    state = SimpleNamespace(update_data=AsyncMock(), set_state=AsyncMock())
+    call = SimpleNamespace(
+        from_user=SimpleNamespace(id=1),
+        data="mailing_target:dm",
+        answer=AsyncMock(),
+        message=SimpleNamespace(edit_text=AsyncMock()),
+    )
+    monkeypatch.setattr(admin, "ADMINS_UID", [1])
+    monkeypatch.setattr(
+        admin,
+        "_get_admin_counts",
+        AsyncMock(return_value={
+            "dm_total": 100,
+            "dm_active": 85,
+            "dm_inactive": 15,
+            "dm_banned": 2,
+        }),
+    )
+
+    await admin.mailing_target_callback(call, state)
+
+    call.answer.assert_awaited_once()
+    state.update_data.assert_awaited_once_with(target_audience="dm")
     state.set_state.assert_awaited_once_with(admin.Mailing.send_to_all_message)
+    kwargs = call.message.edit_text.await_args.kwargs
+    assert "mailing audience preview" in kwargs["text"].lower()
+    assert "Private chats only" in kwargs["text"]
+    assert "85" in kwargs["text"]
+
+
+@pytest.mark.asyncio
+async def test_send_to_all_message_segmented_audiences(monkeypatch):
+    run_bounded = AsyncMock(return_value=[None])
+    fake_users = [
+        SimpleNamespace(user_id=10, status="active", has_dm=True),
+    ]
+    fake_groups = [
+        SimpleNamespace(id=-20, status="active"),
+    ]
+    fake_db = SimpleNamespace(
+        get_users_for_reachability_check=AsyncMock(return_value=fake_users),
+        get_active_groups=AsyncMock(return_value=fake_groups),
+    )
+    fake_bot = SimpleNamespace(send_message=AsyncMock())
+    monkeypatch.setattr(admin, "ADMINS_UID", [1])
+    monkeypatch.setattr(admin, "db", fake_db)
+    monkeypatch.setattr(admin, "bot", fake_bot)
+    monkeypatch.setattr(admin, "_run_bounded", run_bounded)
+    monkeypatch.setattr(admin.bm, "cancel", lambda: "/cancel")
+    monkeypatch.setattr(admin.bm, "start_mailing", lambda: "start")
+    monkeypatch.setattr(admin.bm, "finish_mailing", lambda: "finish")
+
+    message = SimpleNamespace(from_user=SimpleNamespace(id=1), chat=SimpleNamespace(id=99), text="hello", message_id=1)
+
+    # Test DM audience
+    state_dm = SimpleNamespace(clear=AsyncMock(), get_data=AsyncMock(return_value={"target_audience": "dm"}))
+    await admin.send_to_all_message(message, state_dm)
+    targets_dm = run_bounded.await_args[0][0]
+    assert [t.user_id for t in targets_dm] == [10]
+
+    # Test Groups audience
+    run_bounded.reset_mock()
+    state_groups = SimpleNamespace(clear=AsyncMock(), get_data=AsyncMock(return_value={"target_audience": "groups"}))
+    await admin.send_to_all_message(message, state_groups)
+    targets_groups = run_bounded.await_args[0][0]
+    assert [t.id for t in targets_groups] == [-20]
+
+    # Test All audience
+    run_bounded.reset_mock()
+    state_all = SimpleNamespace(clear=AsyncMock(), get_data=AsyncMock(return_value={"target_audience": "all"}))
+    await admin.send_to_all_message(message, state_all)
+    targets_all = run_bounded.await_args[0][0]
+    assert len(targets_all) == 2
+
+
+@pytest.mark.asyncio
+async def test_deliver_mailing_message_handles_group_kicked(monkeypatch):
+    from aiogram.exceptions import TelegramForbiddenError
+
+    fake_db = SimpleNamespace(
+        update_group_status=AsyncMock(),
+        set_active=AsyncMock(),
+    )
+    fake_bot = SimpleNamespace(
+        copy_message=AsyncMock(side_effect=TelegramForbiddenError(method="copyMessage", message="bot was kicked from the supergroup chat"))
+    )
+
+    monkeypatch.setattr(admin, "db", fake_db)
+    monkeypatch.setattr(admin, "bot", fake_bot)
+    monkeypatch.setattr(admin, "_ADMIN_THROTTLE_SECONDS", 0.0)
+
+    group_target = SimpleNamespace(id=-100999, status="active")
+    await admin._deliver_mailing_message(group_target, sender_id=1, message_id=10)
+
+    fake_db.update_group_status.assert_awaited_once_with(-100999, "kicked")
 
 
 @pytest.mark.asyncio
