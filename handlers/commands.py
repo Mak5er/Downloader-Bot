@@ -19,32 +19,58 @@ import handlers.user as user_mod
 logging = logging.bind(service="user_commands")
 
 _UPDATE_INFO_TTL_SECONDS = 120.0
-_update_info_cache: dict[int, tuple[float, str, Optional[str]]] = {}
+_update_info_cache: dict[int, tuple[float, str, Optional[str], bool]] = {}
 
 
 async def update_info(message: types.Message, referred_by: int | None = None, source: str | None = None):
-    user_id = message.from_user.id
-    user_name = message.from_user.full_name
-    user_username = message.from_user.username
-    language = getattr(message.from_user, "language_code", None)
+    chat = getattr(message, "chat", None)
+    user = getattr(message, "from_user", None)
+    if not user or not chat:
+        return
+
+    user_id = user.id
+    user_name = user.full_name
+    user_username = user.username
+    language = getattr(user, "language_code", None)
+
+    chat_type = getattr(chat, "type", None)
+    is_private = (chat_type == ChatType.PRIVATE or str(chat_type).lower() == "private")
 
     now = time.monotonic()
     cached = user_mod._update_info_cache.get(user_id)
     if cached and now - cached[0] <= user_mod._UPDATE_INFO_TTL_SECONDS and referred_by is None and source is None:
-        if cached[1] == user_name and cached[2] == user_username:
+        cached_has_dm = cached[3] if len(cached) > 3 else True
+        if cached_has_dm and not is_private:
+            if cached[1] == user_name and cached[2] == user_username:
+                return
+        elif cached_has_dm == is_private and cached[1] == user_name and cached[2] == user_username:
             return
 
-    await user_mod.db.upsert_chat(
-        user_id=user_id,
-        user_name=user_name,
-        user_username=user_username,
-        chat_type="private",
-        language=language,
-        status="active",
-        referred_by=referred_by,
-        source=source,
-    )
-    user_mod._update_info_cache[user_id] = (now, user_name, user_username)
+    upsert_user_fn = getattr(user_mod.db, "upsert_user", None)
+    if callable(upsert_user_fn):
+        await upsert_user_fn(
+            user_id=user_id,
+            user_name=user_name,
+            user_username=user_username,
+            chat_type="private",
+            language=language,
+            has_dm=is_private,
+            status="active" if is_private else None,
+            referred_by=referred_by,
+            source=source,
+        )
+    else:
+        await user_mod.db.upsert_chat(
+            user_id=user_id,
+            user_name=user_name,
+            user_username=user_username,
+            chat_type="private",
+            language=language,
+            status="active",
+            referred_by=referred_by,
+            source=source,
+        )
+    user_mod._update_info_cache[user_id] = (now, user_name, user_username, is_private)
 
 
 def _extract_start_payload(text: str) -> Optional[str]:
@@ -122,28 +148,59 @@ async def handle_bot_membership(update: ChatMemberUpdated):
     new_status = update.new_chat_member.status
     old_status = getattr(update.old_chat_member, "status", None)
 
+    chat_type = getattr(chat, "type", None)
+    is_private = (chat_type == ChatType.PRIVATE or str(chat_type).lower() == "private")
+
     if new_status in {ChatMemberStatus.MEMBER, ChatMemberStatus.ADMINISTRATOR}:
         chat_id = chat.id
-        chat_type_value = "private" if chat.type == ChatType.PRIVATE else "public"
         chat_name = chat.title or getattr(chat, "full_name", None) or f"Chat {chat_id}"
         chat_username = getattr(chat, "username", None)
         language = getattr(chat, "language_code", None)
 
-        await user_mod.db.upsert_chat(
-            user_id=chat_id,
-            user_name=chat_name,
-            user_username=chat_username,
-            chat_type=chat_type_value,
-            language=language,
-            status="active",
-        )
+        if not is_private:
+            member_count = 0
+            bot = getattr(update, "bot", None) or user_mod.bot
+            if bot is not None and hasattr(bot, "get_chat_member_count"):
+                try:
+                    member_count = await bot.get_chat_member_count(chat_id)
+                except Exception as exc:
+                    logging.debug("Failed to get member count on join for %s: %s", chat_id, exc)
 
-        chat_title = chat.title or chat_name
+            chat_type_value = chat_type.value if hasattr(chat_type, "value") else str(chat_type or "group")
+            upsert_group_fn = getattr(user_mod.db, "upsert_group", None)
+            if callable(upsert_group_fn):
+                try:
+                    await upsert_group_fn(
+                        chat_id=chat_id,
+                        title=chat_name,
+                        username=chat_username,
+                        chat_type=chat_type_value,
+                        status="active",
+                        member_count=member_count,
+                    )
+                except TypeError:
+                    await upsert_group_fn(
+                        group_id=chat_id,
+                        title=chat_name,
+                        username=chat_username,
+                        chat_type=chat_type_value,
+                        status="active",
+                        member_count=member_count,
+                    )
+            else:
+                await user_mod.db.upsert_chat(
+                    user_id=chat_id,
+                    user_name=chat_name,
+                    user_username=chat_username,
+                    chat_type="public",
+                    language=language,
+                    status="active",
+                )
 
-        became_member = old_status not in {ChatMemberStatus.MEMBER, ChatMemberStatus.ADMINISTRATOR}
-        became_admin = new_status == ChatMemberStatus.ADMINISTRATOR and old_status != ChatMemberStatus.ADMINISTRATOR
+            chat_title = chat.title or chat_name
+            became_member = old_status not in {ChatMemberStatus.MEMBER, ChatMemberStatus.ADMINISTRATOR}
+            became_admin = new_status == ChatMemberStatus.ADMINISTRATOR and old_status != ChatMemberStatus.ADMINISTRATOR
 
-        if chat.type != ChatType.PRIVATE:
             if became_member:
                 await user_mod.bot.send_message(
                     chat_id=chat_id,
@@ -157,9 +214,40 @@ async def handle_bot_membership(update: ChatMemberUpdated):
                     text=bm.admin_rights_granted(chat_title),
                     parse_mode="HTML",
                 )
+        else:
+            upsert_user_fn = getattr(user_mod.db, "upsert_user", None)
+            if callable(upsert_user_fn):
+                await upsert_user_fn(
+                    user_id=chat_id,
+                    user_name=chat_name,
+                    user_username=chat_username,
+                    chat_type="private",
+                    language=language,
+                    has_dm=True,
+                    status="active",
+                )
+            else:
+                await user_mod.db.upsert_chat(
+                    user_id=chat_id,
+                    user_name=chat_name,
+                    user_username=chat_username,
+                    chat_type="private",
+                    language=language,
+                    status="active",
+                )
 
     elif new_status in {ChatMemberStatus.KICKED, ChatMemberStatus.LEFT, ChatMemberStatus.RESTRICTED}:
-        await user_mod.db.set_inactive(update.chat.id)
+        if not is_private:
+            update_group_status_fn = (
+                getattr(user_mod.db, "update_group_status", None)
+                or getattr(user_mod.db, "set_group_status", None)
+            )
+            if callable(update_group_status_fn):
+                await update_group_status_fn(update.chat.id, "kicked")
+            else:
+                await user_mod.db.set_inactive(update.chat.id)
+        else:
+            await user_mod.db.set_inactive(update.chat.id)
 
 
 async def remove_reply_keyboard(message: types.Message):

@@ -47,9 +47,22 @@ async def _ensure_bot_identity(bot: Bot) -> None:
         if _bot_username is not None and _bot_id is not None:
             return
 
-        bot_data = await bot.get_me()
-        _bot_username = bot_data.username or ""
-        _bot_id = bot_data.id
+        if not hasattr(bot, "get_me") or not callable(getattr(bot, "get_me", None)):
+            _bot_username = getattr(bot, "username", None) or "downloader_bot"
+            _bot_id = getattr(bot, "id", None) or 1
+            return
+
+        try:
+            res = bot.get_me()
+            if asyncio.iscoroutine(res) or hasattr(res, "__await__"):
+                bot_data = await res
+            else:
+                bot_data = res
+            _bot_username = getattr(bot_data, "username", "") or getattr(bot, "username", "") or "downloader_bot"
+            _bot_id = getattr(bot_data, "id", None) or getattr(bot, "id", 1)
+        except Exception:
+            _bot_username = getattr(bot, "username", None) or "downloader_bot"
+            _bot_id = getattr(bot, "id", None) or 1
 
 
 async def get_bot_avatar_file_id(bot: Bot) -> Optional[str]:

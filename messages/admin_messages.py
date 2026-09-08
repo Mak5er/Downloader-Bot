@@ -1,4 +1,38 @@
-def admin_panel(total_count, private_count, group_count, active_user_count, inactive_user_count):
+def admin_panel(
+    total_count=None,
+    private_count=None,
+    group_count=None,
+    active_user_count=None,
+    inactive_user_count=None,
+    *,
+    dm_total=None,
+    dm_active=None,
+    dm_inactive=None,
+    dm_banned=None,
+    groups_total=None,
+    groups_active=None,
+    groups_inactive=None,
+    total_reach=None,
+    tracked_group_members=None,
+    **kwargs,
+):
+    if dm_total is not None:
+        reach_val = total_reach or 0
+        return (
+            "<b>Hello, this is the admin panel.</b>\n\n"
+            "👤 <b>Private Chats (DM):</b>\n"
+            f"  ├ Total with DM: <b>{dm_total}</b>\n"
+            f"  ├ ✅ Active (reachable): <b>{dm_active or 0}</b>\n"
+            f"  ├ 🚫 Inactive (blocked bot): <b>{dm_inactive or 0}</b>\n"
+            f"  └ ⛔ Banned: <b>{dm_banned or 0}</b>\n\n"
+            "🏘 <b>Groups:</b>\n"
+            f"  ├ Total groups: <b>{groups_total or 0}</b>\n"
+            f"  ├ ✅ Active (bot member): <b>{groups_active or 0}</b>\n"
+            f"  ├ 🚫 Inactive (kicked/left): <b>{groups_inactive or 0}</b>\n"
+            f"  ├ 👥 <b>Estimated Reach:</b> <b>~{reach_val:,} members</b>\n"
+            f"  └ 💬 Tracked chatters: <b>{tracked_group_members or 0}</b>"
+        )
+
     return ("""<b>Hello, this is the admin panel.</b>
 
 👥 Total chats: <b>{total_count}</b>
@@ -83,6 +117,24 @@ Unreachable: <b>{unreachable_users}</b>""").format(
 
 def active_users_check_no_targets():
     return "There are no users available for checking."
+
+
+def active_groups_check_started(total_groups):
+    return f"Starting availability and reach check for {total_groups} groups..."
+
+
+def active_groups_check_completed(total_groups, reachable_groups, unreachable_groups, total_reach):
+    return (
+        "<b>Group check finished.</b>\n\n"
+        f"Total groups processed: <b>{total_groups}</b>\n"
+        f"Reachable (bot member): <b>{reachable_groups}</b>\n"
+        f"Unreachable (kicked/left): <b>{unreachable_groups}</b>\n"
+        f"Total estimated reach: <b>~{total_reach:,} members</b>"
+    )
+
+
+def active_groups_check_no_targets():
+    return "There are no groups available for checking."
 
 
 def enter_chat_id():

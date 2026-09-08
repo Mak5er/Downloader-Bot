@@ -1,7 +1,9 @@
 from dataclasses import dataclass, field
 
+import sqlalchemy as sa
 from sqlalchemy import (
     BigInteger,
+    Boolean,
     Column,
     ForeignKey,
     Index,
@@ -33,6 +35,8 @@ APP_SCHEMA_TABLES = frozenset(
         "users",
         "analytics_events",
         "settings",
+        "groups",
+        "group_members",
     }
 )
 
@@ -64,18 +68,53 @@ class User(Base):
         Index("ix_users_user_username", "user_username"),
         Index("ix_users_chat_type", "chat_type"),
         Index("ix_users_status", "status"),
+        Index("ix_users_has_dm", "has_dm"),
     )
 
-    user_id = Column(BigInteger, primary_key=True, autoincrement=True)
+    user_id = Column(BigInteger, primary_key=True, autoincrement=False)
     user_name = Column(Text, nullable=True)
     user_username = Column(Text, nullable=True)
-    chat_type = Column(Text, nullable=True)
+    chat_type = Column(Text, nullable=True, default="private")
     language = Column(Text, nullable=True)
-    status = Column(Text, nullable=True)
+    has_dm = Column(Boolean, nullable=False, default=False, server_default=sa.text("false"))
+    status = Column(Text, nullable=True, default="active")
     referred_by = Column(BigInteger, nullable=True)
     source = Column(Text, nullable=True)
 
-    settings = relationship("Settings", back_populates="user", uselist=False)
+    settings = relationship(
+        "Settings",
+        back_populates="user",
+        uselist=False,
+        primaryjoin="User.user_id == foreign(Settings.user_id)",
+    )
+
+
+class Group(Base):
+    __tablename__ = "groups"
+    __table_args__ = (
+        Index("ix_groups_status", "status"),
+    )
+
+    id = Column(BigInteger, primary_key=True, autoincrement=False)
+    title = Column(Text, nullable=True)
+    username = Column(Text, nullable=True)
+    chat_type = Column(Text, nullable=True)
+    status = Column(Text, nullable=False, default="active", server_default=sa.text("'active'"))
+    member_count = Column(BigInteger, nullable=False, default=0, server_default=sa.text("0"))
+    created_at = Column(TIMESTAMP(timezone=True), server_default=func.now())
+    updated_at = Column(TIMESTAMP(timezone=True), server_default=func.now(), onupdate=func.now())
+
+
+class GroupMember(Base):
+    __tablename__ = "group_members"
+    __table_args__ = (
+        Index("ix_group_members_user_id", "user_id"),
+        Index("ix_group_members_group_id", "group_id"),
+    )
+
+    group_id = Column(BigInteger, ForeignKey("groups.id", ondelete="CASCADE"), primary_key=True)
+    user_id = Column(BigInteger, ForeignKey("users.user_id", ondelete="CASCADE"), primary_key=True)
+    last_seen_at = Column(TIMESTAMP(timezone=True), server_default=func.now(), onupdate=func.now())
 
 
 class AnalyticsEvent(Base):
@@ -100,7 +139,7 @@ class Settings(Base):
     )
 
     id = Column(BigInteger, primary_key=True, autoincrement=True)
-    user_id = Column(BigInteger, ForeignKey("users.user_id", ondelete="CASCADE"))
+    user_id = Column(BigInteger, nullable=True)
     captions = Column(Text, default=SETTING_DISABLED, nullable=False)
     delete_message = Column(Text, default=SETTING_DISABLED, nullable=False)
     info_buttons = Column(Text, default=SETTING_DISABLED, nullable=False)
@@ -111,4 +150,8 @@ class Settings(Base):
     as_document = Column(Text, default=SETTING_DISABLED, nullable=False)
     audio_format = Column(Text, default="mp3", nullable=False)
 
-    user = relationship("User", back_populates="settings")
+    user = relationship(
+        "User",
+        back_populates="settings",
+        primaryjoin="User.user_id == foreign(Settings.user_id)",
+    )

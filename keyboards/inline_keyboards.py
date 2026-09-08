@@ -173,7 +173,10 @@ def admin_keyboard():
             InlineKeyboardButton(text="📦 Runtime", callback_data="admin_runtime_storage"),
         ],
         [InlineKeyboardButton(text="🔄 Refresh", callback_data="admin_refresh")],
-        [InlineKeyboardButton(text="👥 Check Active Users", callback_data="check_active_users")],
+        [
+            InlineKeyboardButton(text="👥 Check Active Users", callback_data="check_active_users"),
+            InlineKeyboardButton(text="🏘 Check Groups", callback_data="check_active_groups"),
+        ],
         [InlineKeyboardButton(text="📬 Mailing", callback_data="send_to_all")],
         [InlineKeyboardButton(text="✉️ Message by Chat ID", callback_data="message_chat_id")],
         [

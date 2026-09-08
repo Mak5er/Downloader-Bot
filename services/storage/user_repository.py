@@ -1,13 +1,19 @@
 import time
 from typing import Any
 
-from sqlalchemy import delete, func, select, update
+from sqlalchemy import case, delete, func, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
 from services.logger import logger as logging
 from services.settings import SETTING_DISABLED, SETTING_FIELDS, SETTING_VALUES, normalize_setting_value
-from services.storage.models import DEFAULT_USER_SETTINGS, Settings, User
+from services.storage.models import (
+    DEFAULT_USER_SETTINGS,
+    Group,
+    GroupMember,
+    Settings,
+    User,
+)
 
 logging = logging.bind(service="db_users")
 
@@ -18,58 +24,276 @@ class UserRepositoryMixin:
             return pg_insert(model)
         return sqlite_insert(model)
 
-    async def upsert_chat(self, user_id: int, user_name: str | None, user_username: str | None, chat_type: str | None, language: str | None = None, status: str = "active", referred_by: int | None = None, source: str | None = None) -> None:
+    async def upsert_chat(
+        self,
+        user_id: int,
+        user_name: str | None,
+        user_username: str | None,
+        chat_type: str | None,
+        language: str | None = None,
+        status: str = "active",
+        referred_by: int | None = None,
+        source: str | None = None,
+    ) -> None:
+        chat_id_int = int(user_id)
+        if chat_id_int < 0:
+            await self.upsert_group(
+                chat_id=chat_id_int,
+                title=user_name,
+                username=user_username,
+                chat_type=chat_type or "group",
+                status=status,
+            )
+            return
+
+        has_dm = (chat_type is None or chat_type == "private")
+        await self.upsert_user(
+            user_id=chat_id_int,
+            user_name=user_name,
+            user_username=user_username,
+            chat_type=chat_type or "private",
+            language=language,
+            has_dm=has_dm,
+            status=status,
+            referred_by=referred_by,
+            source=source,
+        )
+
+    async def upsert_user(
+        self,
+        user_id: int,
+        user_name: str | None = None,
+        user_username: str | None = None,
+        chat_type: str | None = "private",
+        language: str | None = None,
+        has_dm: bool = False,
+        status: str | None = None,
+        referred_by: int | None = None,
+        source: str | None = None,
+    ) -> None:
+        user_id_int = int(user_id)
+        initial_status = status or "active"
         values = {
+            "user_id": user_id_int,
             "user_name": user_name,
             "user_username": user_username,
-            "chat_type": chat_type,
+            "chat_type": chat_type or "private",
             "language": language,
-            "status": status,
+            "has_dm": has_dm,
+            "status": initial_status,
         }
         if referred_by is not None:
             values["referred_by"] = referred_by
         if source is not None:
             values["source"] = source
+
         async with self.SessionLocal() as session:
             async with session.begin():
-                stmt = (
-                    self._insert(User)
-                    .values(user_id=user_id, **values)
-                    .on_conflict_do_update(index_elements=[User.user_id], set_=values)
+                stmt = self._insert(User).values(**values)
+                set_dict = {
+                    "user_name": stmt.excluded.user_name,
+                    "user_username": stmt.excluded.user_username,
+                    "chat_type": stmt.excluded.chat_type,
+                    "has_dm": User.has_dm | stmt.excluded.has_dm,
+                    "status": case(
+                        (User.status == "ban", "ban"),
+                        (stmt.excluded.has_dm, "active"),
+                        else_=(stmt.excluded.status if status is not None else User.status),
+                    ),
+                    "referred_by": case((User.referred_by.is_(None), stmt.excluded.referred_by), else_=User.referred_by),
+                    "source": case((User.source.is_(None), stmt.excluded.source), else_=User.source),
+                }
+                if language is not None:
+                    set_dict["language"] = stmt.excluded.language
+
+                stmt = stmt.on_conflict_do_update(
+                    index_elements=[User.user_id],
+                    set_=set_dict,
+                )
+                stmt = stmt.returning(User.status)
+                res = await session.execute(stmt)
+                updated_status = res.scalar_one_or_none()
+
+        if updated_status is not None:
+            self._status_cache[user_id_int] = (time.monotonic(), updated_status)
+        elif status is not None:
+            self._status_cache[user_id_int] = (time.monotonic(), status)
+        else:
+            self._status_cache.pop(user_id_int, None)
+
+    async def upsert_group(
+        self,
+        chat_id: int,
+        title: str | None = None,
+        username: str | None = None,
+        chat_type: str | None = None,
+        status: str = "active",
+        member_count: int | None = None,
+    ) -> None:
+        chat_id_int = int(chat_id)
+        values = {
+            "id": chat_id_int,
+            "title": title,
+            "username": username,
+            "chat_type": chat_type or "group",
+            "status": status,
+            "member_count": member_count if member_count is not None else 0,
+        }
+        async with self.SessionLocal() as session:
+            async with session.begin():
+                stmt = self._insert(Group).values(**values)
+                set_dict = {
+                    "title": stmt.excluded.title,
+                    "username": stmt.excluded.username,
+                    "chat_type": stmt.excluded.chat_type,
+                    "status": case(
+                        (Group.status == "ban", "ban"),
+                        else_=stmt.excluded.status,
+                    ),
+                    "updated_at": func.now(),
+                }
+                if member_count is not None:
+                    set_dict["member_count"] = stmt.excluded.member_count
+                else:
+                    set_dict["member_count"] = Group.member_count
+
+                stmt = stmt.on_conflict_do_update(
+                    index_elements=[Group.id],
+                    set_=set_dict,
+                )
+                stmt = stmt.returning(Group.status)
+                res = await session.execute(stmt)
+                updated_status = res.scalar_one_or_none()
+
+        if updated_status is not None:
+            self._status_cache[chat_id_int] = (time.monotonic(), updated_status)
+        else:
+            self._status_cache.pop(chat_id_int, None)
+
+    async def record_group_member(self, group_id: int, user_id: int) -> None:
+        group_id_int = int(group_id)
+        user_id_int = int(user_id)
+        async with self.SessionLocal() as session:
+            async with session.begin():
+                stmt = self._insert(GroupMember).values(
+                    group_id=group_id_int,
+                    user_id=user_id_int,
+                    last_seen_at=func.now(),
+                )
+                stmt = stmt.on_conflict_do_update(
+                    index_elements=[GroupMember.group_id, GroupMember.user_id],
+                    set_={"last_seen_at": func.now()},
                 )
                 await session.execute(stmt)
-        self._status_cache[int(user_id)] = (time.monotonic(), status)
 
-    async def delete_user(self, user_id: int) -> None:
+    async def update_group_status(self, group_id: int, status: str) -> None:
+        group_id_int = int(group_id)
         async with self.SessionLocal() as session:
             async with session.begin():
-                await session.execute(delete(Settings).where(Settings.user_id == user_id))
-                await session.execute(delete(User).where(User.user_id == user_id))
-        user_id_int = int(user_id)
-        self._status_cache.pop(user_id_int, None)
-        self._settings_cache.pop(user_id_int, None)
+                await session.execute(
+                    update(Group)
+                    .where(Group.id == group_id_int)
+                    .values(status=status, updated_at=func.now())
+                )
+        self._status_cache[group_id_int] = (time.monotonic(), status)
 
-    async def get_user_counts(self) -> dict[str, int]:
+    async def update_group_member_count(self, group_id: int, member_count: int) -> None:
+        group_id_int = int(group_id)
+        async with self.SessionLocal() as session:
+            async with session.begin():
+                await session.execute(
+                    update(Group)
+                    .where(Group.id == group_id_int)
+                    .values(member_count=member_count, updated_at=func.now())
+                )
+
+    async def get_active_groups(self) -> list[Group]:
+        async with self.SessionLocal() as session:
+            result = await session.execute(select(Group).where(Group.status == "active"))
+            return list(result.scalars().all())
+
+    async def get_users_for_reachability_check(self) -> list[User]:
         async with self.SessionLocal() as session:
             result = await session.execute(
-                select(
-                    func.count(User.user_id).label("user_count"),
-                    func.count(User.user_id).filter(User.status == "active").label("active_user_count"),
-                    func.count(User.user_id).filter(User.status != "active").label("inactive_user_count"),
-                    func.count(User.user_id).filter(User.chat_type == "private").label("private_chat_count"),
-                    func.count(User.user_id).filter(
-                        User.chat_type != "private", User.chat_type.isnot(None)
-                    ).label("group_chat_count"),
+                select(User).where(
+                    User.has_dm.is_(True),
+                    func.coalesce(User.status, "active") != "ban",
                 )
             )
-            row = result.one()
+            return list(result.scalars().all())
+
+    async def get_community_stats(self) -> dict[str, int]:
+        async with self.SessionLocal() as session:
+            user_stats = (
+                await session.execute(
+                    select(
+                        func.count(User.user_id).label("user_count"),
+                        func.count(User.user_id).filter(User.status == "active").label("active_user_count"),
+                        func.count(User.user_id).filter(User.status != "active").label("inactive_user_count"),
+                        func.count(User.user_id).filter(User.has_dm.is_(True)).label("dm_total"),
+                        func.count(User.user_id).filter(User.has_dm.is_(True), User.status == "active").label("dm_active"),
+                        func.count(User.user_id).filter(User.has_dm.is_(True), User.status == "inactive").label("dm_inactive"),
+                        func.count(User.user_id).filter(User.has_dm.is_(True), User.status == "ban").label("dm_banned"),
+                    )
+                )
+            ).one()
+
+            group_stats = (
+                await session.execute(
+                    select(
+                        func.count(Group.id).label("groups_total"),
+                        func.count(Group.id).filter(Group.status == "active").label("groups_active"),
+                        func.count(Group.id).filter(Group.status != "active").label("groups_inactive"),
+                        func.coalesce(func.sum(Group.member_count).filter(Group.status == "active"), 0).label("total_reach"),
+                    )
+                )
+            ).one()
+
+            tracked_members = (
+                await session.execute(
+                    select(func.count(func.distinct(GroupMember.user_id)))
+                )
+            ).scalar() or 0
+
             return {
-                "user_count": row.user_count,
-                "active_user_count": row.active_user_count,
-                "inactive_user_count": row.inactive_user_count,
-                "private_chat_count": row.private_chat_count,
-                "group_chat_count": row.group_chat_count,
+                "dm_total": int(user_stats.dm_total),
+                "dm_active": int(user_stats.dm_active),
+                "dm_inactive": int(user_stats.dm_inactive),
+                "dm_banned": int(user_stats.dm_banned),
+                "groups_total": int(group_stats.groups_total),
+                "groups_active": int(group_stats.groups_active),
+                "groups_inactive": int(group_stats.groups_inactive),
+                "total_reach": int(group_stats.total_reach),
+                "tracked_group_members": int(tracked_members),
+                # Legacy compatibility keys
+                "user_count": int(user_stats.user_count),
+                "active_user_count": int(user_stats.active_user_count),
+                "inactive_user_count": int(user_stats.inactive_user_count),
+                "private_chat_count": int(user_stats.dm_total),
+                "group_chat_count": int(group_stats.groups_total),
             }
+
+    async def get_user_counts(self) -> dict[str, int]:
+        stats = await self.get_community_stats()
+        return {
+            "user_count": stats["user_count"],
+            "active_user_count": stats["active_user_count"],
+            "inactive_user_count": stats["inactive_user_count"],
+            "private_chat_count": stats["private_chat_count"],
+            "group_chat_count": stats["group_chat_count"],
+        }
+
+    async def delete_user(self, user_id: int) -> None:
+        user_id_int = int(user_id)
+        async with self.SessionLocal() as session:
+            async with session.begin():
+                await session.execute(delete(Settings).where(Settings.user_id == user_id_int))
+                if user_id_int < 0:
+                    await session.execute(delete(Group).where(Group.id == user_id_int))
+                else:
+                    await session.execute(delete(User).where(User.user_id == user_id_int))
+        self._status_cache.pop(user_id_int, None)
+        self._settings_cache.pop(user_id_int, None)
 
     async def get_user_setting(self, user_id: int, field: str) -> str | None:
         settings = await self.user_settings(user_id)
@@ -148,18 +372,24 @@ class UserRepositoryMixin:
         self._settings_cache[user_id_int] = (time.monotonic(), updated)
 
     async def set_inactive(self, user_id: int) -> None:
+        user_id_int = int(user_id)
         async with self.SessionLocal() as session:
             async with session.begin():
-                user_id_int = int(user_id)
-                await session.execute(update(User).where(User.user_id == user_id_int).values(status="inactive"))
-        self._status_cache[int(user_id)] = (time.monotonic(), "inactive")
+                if user_id_int < 0:
+                    await session.execute(update(Group).where(Group.id == user_id_int).values(status="inactive", updated_at=func.now()))
+                else:
+                    await session.execute(update(User).where(User.user_id == user_id_int).values(status="inactive"))
+        self._status_cache[user_id_int] = (time.monotonic(), "inactive")
 
     async def set_active(self, user_id: int) -> None:
+        user_id_int = int(user_id)
         async with self.SessionLocal() as session:
             async with session.begin():
-                user_id_int = int(user_id)
-                await session.execute(update(User).where(User.user_id == user_id_int).values(status="active"))
-        self._status_cache[int(user_id)] = (time.monotonic(), "active")
+                if user_id_int < 0:
+                    await session.execute(update(Group).where(Group.id == user_id_int).values(status="active", updated_at=func.now()))
+                else:
+                    await session.execute(update(User).where(User.user_id == user_id_int).values(status="active"))
+        self._status_cache[user_id_int] = (time.monotonic(), "active")
 
     async def status(self, user_id: int) -> str | None:
         user_id_int = int(user_id)
@@ -170,28 +400,48 @@ class UserRepositoryMixin:
             return cached[1]
 
         async with self.SessionLocal() as session:
-            result = await session.execute(select(User.status).where(User.user_id == user_id_int))
+            if user_id_int < 0:
+                result = await session.execute(select(Group.status).where(Group.id == user_id_int))
+            else:
+                result = await session.execute(select(User.status).where(User.user_id == user_id_int))
             value = result.scalar()
             self._status_cache[user_id_int] = (now, value)
             return value
 
     async def get_user_info(self, user_id: int) -> Any:
+        user_id_int = int(user_id)
         async with self.SessionLocal() as session:
-            result = await session.execute(
-                select(User.user_name, User.user_username, User.status).where(User.user_id == user_id)
-            )
+            if user_id_int < 0:
+                result = await session.execute(
+                    select(Group.title.label("user_name"), Group.username.label("user_username"), Group.status).where(Group.id == user_id_int)
+                )
+            else:
+                result = await session.execute(
+                    select(User.user_name, User.user_username, User.status).where(User.user_id == user_id_int)
+                )
             return result.first()
 
     async def get_all_users_info(self) -> list[Any]:
         async with self.SessionLocal() as session:
             result = await session.execute(
-                select(User.user_id, User.chat_type, User.user_name, User.user_username, User.language, User.status)
+                select(
+                    User.user_id,
+                    User.chat_type,
+                    User.user_name,
+                    User.user_username,
+                    User.language,
+                    User.status,
+                    User.has_dm,
+                )
             )
             return result.all()
 
     async def ban_user(self, user_id: int) -> None:
+        user_id_int = int(user_id)
         async with self.SessionLocal() as session:
             async with session.begin():
-                user_id_int = int(user_id)
-                await session.execute(update(User).where(User.user_id == user_id_int).values(status="ban"))
-        self._status_cache[int(user_id)] = (time.monotonic(), "ban")
+                if user_id_int < 0:
+                    await session.execute(update(Group).where(Group.id == user_id_int).values(status="ban", updated_at=func.now()))
+                else:
+                    await session.execute(update(User).where(User.user_id == user_id_int).values(status="ban"))
+        self._status_cache[user_id_int] = (time.monotonic(), "ban")
