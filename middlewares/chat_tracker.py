@@ -17,7 +17,7 @@ class ChatTrackerMiddleware(BaseMiddleware):
         self._db = database or db
         self._bot = bot
         self._user_touch_cache: dict[int, tuple[float, tuple[str, Optional[str], Optional[str], bool]]] = {}
-        self._group_touch_cache: dict[int, tuple[float, tuple[str, Optional[str], Optional[str]]]] = {}
+        self._group_touch_cache: dict[int, tuple[float, tuple[Any, ...]]] = {}
         self._member_count_cache: dict[int, tuple[float, int]] = {}
         self._member_touch_cache: dict[tuple[int, int], float] = {}
         self._touch_ttl_seconds = 90.0
@@ -85,7 +85,9 @@ class ChatTrackerMiddleware(BaseMiddleware):
             if user and not getattr(user, "is_bot", False):
                 await self._ensure_user(user, has_dm=True)
         else:
-            await self._ensure_group(chat, bot=resolved_bot)
+            raw_thread_id = getattr(message_or_chat, "message_thread_id", None)
+            thread_id = raw_thread_id if isinstance(raw_thread_id, int) else None
+            await self._ensure_group(chat, bot=resolved_bot, thread_id=thread_id)
             if user and not getattr(user, "is_bot", False):
                 await self._ensure_user(user, has_dm=False)
                 await self._ensure_group_member(group_id=chat.id, user_id=user.id)
@@ -144,7 +146,12 @@ class ChatTrackerMiddleware(BaseMiddleware):
             )
         self._user_touch_cache[user_id] = (now, signature)
 
-    async def _ensure_group(self, chat: Chat, bot: Optional[Bot] = None) -> None:
+    async def _ensure_group(
+        self,
+        chat: Chat,
+        bot: Optional[Bot] = None,
+        thread_id: Optional[int] = None,
+    ) -> None:
         chat_id = chat.id
         chat_name = chat.title or getattr(chat, "full_name", None)
 
@@ -160,12 +167,16 @@ class ChatTrackerMiddleware(BaseMiddleware):
 
         username = getattr(chat, "username", None)
         chat_type_str = self._resolve_chat_type(chat.type)
-        signature = (chat_name, username, chat_type_str)
+        signature = (chat_name, username, chat_type_str, thread_id)
 
         now = time.monotonic()
         cached = self._group_touch_cache.get(chat_id)
-        if cached and now - cached[0] <= self._touch_ttl_seconds and cached[1] == signature:
-            return
+        if cached and now - cached[0] <= self._touch_ttl_seconds:
+            cached_sig = cached[1]
+            if thread_id is None and cached_sig[:3] == signature[:3]:
+                return
+            if cached_sig == signature:
+                return
 
         # 1-hour TTL member_count cache
         member_count: int = 0
@@ -185,24 +196,32 @@ class ChatTrackerMiddleware(BaseMiddleware):
 
         upsert_group_fn = getattr(self._db, "upsert_group", None)
         if callable(upsert_group_fn):
+            group_kwargs = {
+                "chat_id": chat_id,
+                "title": chat_name,
+                "username": username,
+                "chat_type": chat_type_str,
+                "status": "active",
+                "member_count": member_count,
+            }
+            if thread_id is not None:
+                group_kwargs["last_thread_id"] = thread_id
+
             try:
-                await upsert_group_fn(
-                    chat_id=chat_id,
-                    title=chat_name,
-                    username=username,
-                    chat_type=chat_type_str,
-                    status="active",
-                    member_count=member_count,
-                )
+                await upsert_group_fn(**group_kwargs)
             except TypeError:
-                await upsert_group_fn(
-                    group_id=chat_id,
-                    title=chat_name,
-                    username=username,
-                    chat_type=chat_type_str,
-                    status="active",
-                    member_count=member_count,
-                )
+                group_kwargs.pop("last_thread_id", None)
+                try:
+                    await upsert_group_fn(**group_kwargs)
+                except TypeError:
+                    await upsert_group_fn(
+                        group_id=chat_id,
+                        title=chat_name,
+                        username=username,
+                        chat_type=chat_type_str,
+                        status="active",
+                        member_count=member_count,
+                    )
         else:
             language = getattr(chat, "language_code", None)
             await self._db.upsert_chat(

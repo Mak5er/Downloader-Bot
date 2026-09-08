@@ -101,6 +101,7 @@ class Group(Base):
     chat_type = Column(Text, nullable=True)
     status = Column(Text, nullable=False, default="active", server_default=sa.text("'active'"))
     member_count = Column(BigInteger, nullable=False, default=0, server_default=sa.text("0"))
+    last_thread_id = Column(BigInteger, nullable=True)
     created_at = Column(TIMESTAMP(timezone=True), server_default=func.now())
     updated_at = Column(TIMESTAMP(timezone=True), server_default=func.now(), onupdate=func.now())
 

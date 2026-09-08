@@ -29,6 +29,7 @@ from filters import IsBotAdmin
 from services.logger import ERROR_LOG, EVENT_LOG, INFO_LOG, PERF_LOG, logger as logging
 from services.download.queue import get_download_queue
 from services.runtime.analytics_status import get_snapshot as get_analytics_runtime_snapshot
+from services.runtime.rate_limiter import broadcast_limiter
 from services.runtime.stats import get_runtime_snapshot
 
 logging = logging.bind(service="admin")
@@ -237,28 +238,31 @@ async def _check_user_reachability(user) -> bool:
     user_status = getattr(user, "status", None) or "inactive"
     send_successful = False
 
-    try:
-        await bot.send_chat_action(chat_id=user_id, action="typing")
-        send_successful = True
-    except TelegramRetryAfter as error:
-        await asyncio.sleep(error.retry_after)
+    async with broadcast_limiter:
         try:
             await bot.send_chat_action(chat_id=user_id, action="typing")
             send_successful = True
-        except TelegramRetryAfter as retry_error:
-            logging.warning("Retry-after triggered twice while checking user %s: %s", user_id, retry_error)
-        except (TelegramForbiddenError, TelegramNotFound, TelegramBadRequest) as retry_error:
-            logging.info("User %s unreachable on retry: %s", user_id, retry_error)
-        except TelegramAPIError as retry_error:
-            logging.error("API error on retry while checking user %s: %s", user_id, retry_error)
-        except Exception as retry_error:
-            logging.error("Unexpected retry error while checking user %s: %s", user_id, retry_error)
-    except (TelegramForbiddenError, TelegramNotFound, TelegramBadRequest) as error:
-        logging.info("User %s unreachable: %s", user_id, error)
-    except TelegramAPIError as error:
-        logging.error("API error while checking user %s: %s", user_id, error)
-    except Exception as error:
-        logging.error("Unexpected error while checking user %s: %s", user_id, error)
+        except TelegramRetryAfter as error:
+            broadcast_limiter.penalize(error.retry_after)
+            await asyncio.sleep(error.retry_after)
+            try:
+                await bot.send_chat_action(chat_id=user_id, action="typing")
+                send_successful = True
+            except TelegramRetryAfter as retry_error:
+                broadcast_limiter.penalize(retry_error.retry_after)
+                logging.warning("Retry-after triggered twice while checking user %s: %s", user_id, retry_error)
+            except (TelegramForbiddenError, TelegramNotFound, TelegramBadRequest) as retry_error:
+                logging.info("User %s unreachable on retry: %s", user_id, retry_error)
+            except TelegramAPIError as retry_error:
+                logging.error("API error on retry while checking user %s: %s", user_id, retry_error)
+            except Exception as retry_error:
+                logging.error("Unexpected retry error while checking user %s: %s", user_id, retry_error)
+        except (TelegramForbiddenError, TelegramNotFound, TelegramBadRequest) as error:
+            logging.info("User %s unreachable: %s", user_id, error)
+        except TelegramAPIError as error:
+            logging.error("API error while checking user %s: %s", user_id, error)
+        except Exception as error:
+            logging.error("Unexpected error while checking user %s: %s", user_id, error)
 
     if send_successful:
         if user_status != "active":
@@ -270,66 +274,119 @@ async def _check_user_reachability(user) -> bool:
     return send_successful
 
 
-async def _deliver_mailing_message(target, *, sender_id: int, message_id: int) -> None:
+async def _deliver_mailing_message(target, *, sender_id: int, message_id: int) -> str:
     chat_id = int(getattr(target, "user_id", None) if getattr(target, "user_id", None) is not None else target.id)
     target_status = getattr(target, "status", None) or "inactive"
     is_group = chat_id < 0
+    thread_id = getattr(target, "last_thread_id", None) if is_group else None
 
-    try:
-        await bot.copy_message(
-            chat_id=chat_id,
-            from_chat_id=sender_id,
-            message_id=message_id,
-        )
-        if is_group:
-            if target_status != "active" and hasattr(db, "update_group_status"):
-                await db.update_group_status(chat_id, "active")
-        else:
-            if target_status == "inactive":
-                await db.set_active(chat_id)
-    except TelegramMigrateToChat as error:
-        new_chat_id = error.migrate_to_chat_id
-        logging.info("Chat %s migrated to supergroup %s during mailing", chat_id, new_chat_id)
-        if hasattr(db, "migrate_group_chat") and callable(getattr(db, "migrate_group_chat", None)):
-            await db.migrate_group_chat(chat_id, new_chat_id)
+    async with broadcast_limiter:
         try:
-            await bot.copy_message(
-                chat_id=new_chat_id,
-                from_chat_id=sender_id,
-                message_id=message_id,
-            )
-            if hasattr(db, "update_group_status") and callable(getattr(db, "update_group_status", None)):
-                await db.update_group_status(new_chat_id, "active")
-        except Exception as retry_err:
-            logging.warning("Failed to deliver mailing to migrated chat %s: %s", new_chat_id, retry_err)
-    except TelegramForbiddenError as error:
-        if is_group:
-            logging.info("Group %s kicked or restricted during mailing: %s", chat_id, error)
-            if hasattr(db, "update_group_status"):
-                await db.update_group_status(chat_id, "kicked")
-            else:
-                await db.set_inactive(chat_id)
-        else:
-            if "bots can't send messages to bots" in error.message:
-                await db.delete_user(chat_id)
-            elif "blocked" in error.message:
-                await db.set_inactive(chat_id)
-    except TelegramBadRequest as error:
-        if "chat not found" in error.message.lower():
+            copy_kwargs = {
+                "chat_id": chat_id,
+                "from_chat_id": sender_id,
+                "message_id": message_id,
+            }
+            if thread_id is not None:
+                copy_kwargs["message_thread_id"] = thread_id
+
+            try:
+                await bot.copy_message(**copy_kwargs)
+            except TelegramBadRequest as tb_err:
+                if thread_id is not None and "thread not found" in str(tb_err).lower():
+                    copy_kwargs.pop("message_thread_id", None)
+                    await bot.copy_message(**copy_kwargs)
+                else:
+                    raise
+
             if is_group:
+                if target_status != "active" and hasattr(db, "update_group_status"):
+                    await db.update_group_status(chat_id, "active")
+            else:
+                if target_status == "inactive":
+                    await db.set_active(chat_id)
+            return "delivered"
+        except TelegramRetryAfter as error:
+            broadcast_limiter.penalize(error.retry_after)
+            await asyncio.sleep(error.retry_after)
+            try:
+                copy_kwargs = {
+                    "chat_id": chat_id,
+                    "from_chat_id": sender_id,
+                    "message_id": message_id,
+                }
+                if thread_id is not None:
+                    copy_kwargs["message_thread_id"] = thread_id
+
+                try:
+                    await bot.copy_message(**copy_kwargs)
+                except TelegramBadRequest as tb_err:
+                    if thread_id is not None and "thread not found" in str(tb_err).lower():
+                        copy_kwargs.pop("message_thread_id", None)
+                        await bot.copy_message(**copy_kwargs)
+                    else:
+                        raise
+
+                if is_group:
+                    if target_status != "active" and hasattr(db, "update_group_status"):
+                        await db.update_group_status(chat_id, "active")
+                else:
+                    if target_status == "inactive":
+                        await db.set_active(chat_id)
+                return "delivered"
+            except Exception as retry_err:
+                logging.warning("Failed to deliver mailing on retry to %s: %s", chat_id, retry_err)
+                return "failed"
+        except TelegramMigrateToChat as error:
+            new_chat_id = error.migrate_to_chat_id
+            logging.info("Chat %s migrated to supergroup %s during mailing", chat_id, new_chat_id)
+            if hasattr(db, "migrate_group_chat") and callable(getattr(db, "migrate_group_chat", None)):
+                await db.migrate_group_chat(chat_id, new_chat_id)
+            try:
+                await bot.copy_message(
+                    chat_id=new_chat_id,
+                    from_chat_id=sender_id,
+                    message_id=message_id,
+                )
+                if hasattr(db, "update_group_status") and callable(getattr(db, "update_group_status", None)):
+                    await db.update_group_status(new_chat_id, "active")
+                return "migrated"
+            except Exception as retry_err:
+                logging.warning("Failed to deliver mailing to migrated chat %s: %s", new_chat_id, retry_err)
+                return "failed"
+        except TelegramForbiddenError as error:
+            if is_group:
+                logging.info("Group %s kicked or restricted during mailing: %s", chat_id, error)
                 if hasattr(db, "update_group_status"):
                     await db.update_group_status(chat_id, "kicked")
                 else:
                     await db.set_inactive(chat_id)
             else:
-                await db.set_inactive(chat_id)
-        elif is_group and any(p in error.message.lower() for p in ["not enough rights", "restricted", "have no rights"]):
-            if hasattr(db, "update_group_status"):
-                await db.update_group_status(chat_id, "kicked")
-    except Exception as error:
-        logging.warning("Failed to deliver mailing message to %s: %s", chat_id, error)
-    finally:
-        await asyncio.sleep(_ADMIN_THROTTLE_SECONDS)
+                if "bots can't send messages to bots" in error.message:
+                    await db.delete_user(chat_id)
+                elif "blocked" in error.message:
+                    await db.set_inactive(chat_id)
+            return "unreachable"
+        except TelegramBadRequest as error:
+            if "chat not found" in error.message.lower():
+                if is_group:
+                    if hasattr(db, "update_group_status"):
+                        await db.update_group_status(chat_id, "kicked")
+                    else:
+                        await db.set_inactive(chat_id)
+                else:
+                    await db.set_inactive(chat_id)
+                return "unreachable"
+            elif is_group and any(p in error.message.lower() for p in ["not enough rights", "restricted", "have no rights"]):
+                if hasattr(db, "update_group_status"):
+                    await db.update_group_status(chat_id, "kicked")
+                return "unreachable"
+            return "failed"
+        except Exception as error:
+            logging.warning("Failed to deliver mailing message to %s: %s", chat_id, error)
+            return "failed"
+        finally:
+            await asyncio.sleep(_ADMIN_THROTTLE_SECONDS)
 
 
 class Mailing(StatesGroup):
@@ -784,34 +841,7 @@ async def check_active_groups(call: types.CallbackQuery):
 
     for group in groups:
         group_id = int(group.id)
-        try:
-            member_count = await bot.get_chat_member_count(group_id)
-            reachable += 1
-            total_reach += member_count
-            if hasattr(db, "update_group_member_count") and callable(getattr(db, "update_group_member_count", None)):
-                await db.update_group_member_count(group_id, member_count)
-            if hasattr(db, "update_group_status") and callable(getattr(db, "update_group_status", None)):
-                await db.update_group_status(group_id, "active")
-        except TelegramMigrateToChat as error:
-            new_chat_id = error.migrate_to_chat_id
-            logging.info("Group %s migrated to supergroup %s during check", group_id, new_chat_id)
-            if hasattr(db, "migrate_group_chat") and callable(getattr(db, "migrate_group_chat", None)):
-                await db.migrate_group_chat(group_id, new_chat_id)
-            try:
-                member_count = await bot.get_chat_member_count(new_chat_id)
-                reachable += 1
-                total_reach += member_count
-                if hasattr(db, "update_group_member_count") and callable(getattr(db, "update_group_member_count", None)):
-                    await db.update_group_member_count(new_chat_id, member_count)
-                if hasattr(db, "update_group_status") and callable(getattr(db, "update_group_status", None)):
-                    await db.update_group_status(new_chat_id, "active")
-            except Exception as migrate_err:
-                unreachable += 1
-                logging.info("Migrated group %s unreachable: %s", new_chat_id, migrate_err)
-                if hasattr(db, "update_group_status") and callable(getattr(db, "update_group_status", None)):
-                    await db.update_group_status(new_chat_id, "kicked")
-        except TelegramRetryAfter as error:
-            await asyncio.sleep(error.retry_after)
+        async with broadcast_limiter:
             try:
                 member_count = await bot.get_chat_member_count(group_id)
                 reachable += 1
@@ -820,19 +850,49 @@ async def check_active_groups(call: types.CallbackQuery):
                     await db.update_group_member_count(group_id, member_count)
                 if hasattr(db, "update_group_status") and callable(getattr(db, "update_group_status", None)):
                     await db.update_group_status(group_id, "active")
-            except Exception as retry_error:
+            except TelegramMigrateToChat as error:
+                new_chat_id = error.migrate_to_chat_id
+                logging.info("Group %s migrated to supergroup %s during check", group_id, new_chat_id)
+                if hasattr(db, "migrate_group_chat") and callable(getattr(db, "migrate_group_chat", None)):
+                    await db.migrate_group_chat(group_id, new_chat_id)
+                try:
+                    member_count = await bot.get_chat_member_count(new_chat_id)
+                    reachable += 1
+                    total_reach += member_count
+                    if hasattr(db, "update_group_member_count") and callable(getattr(db, "update_group_member_count", None)):
+                        await db.update_group_member_count(new_chat_id, member_count)
+                    if hasattr(db, "update_group_status") and callable(getattr(db, "update_group_status", None)):
+                        await db.update_group_status(new_chat_id, "active")
+                except Exception as migrate_err:
+                    unreachable += 1
+                    logging.info("Migrated group %s unreachable: %s", new_chat_id, migrate_err)
+                    if hasattr(db, "update_group_status") and callable(getattr(db, "update_group_status", None)):
+                        await db.update_group_status(new_chat_id, "kicked")
+            except TelegramRetryAfter as error:
+                broadcast_limiter.penalize(error.retry_after)
+                await asyncio.sleep(error.retry_after)
+                try:
+                    member_count = await bot.get_chat_member_count(group_id)
+                    reachable += 1
+                    total_reach += member_count
+                    if hasattr(db, "update_group_member_count") and callable(getattr(db, "update_group_member_count", None)):
+                        await db.update_group_member_count(group_id, member_count)
+                    if hasattr(db, "update_group_status") and callable(getattr(db, "update_group_status", None)):
+                        await db.update_group_status(group_id, "active")
+                except Exception as retry_error:
+                    unreachable += 1
+                    logging.info("Group %s unreachable on retry: %s", group_id, retry_error)
+                    if hasattr(db, "update_group_status") and callable(getattr(db, "update_group_status", None)):
+                        await db.update_group_status(group_id, "kicked")
+            except (TelegramForbiddenError, TelegramNotFound, TelegramBadRequest) as error:
                 unreachable += 1
-                logging.info("Group %s unreachable on retry: %s", group_id, retry_error)
+                logging.info("Group %s unreachable: %s", group_id, error)
                 if hasattr(db, "update_group_status") and callable(getattr(db, "update_group_status", None)):
                     await db.update_group_status(group_id, "kicked")
-        except (TelegramForbiddenError, TelegramNotFound, TelegramBadRequest) as error:
-            unreachable += 1
-            logging.info("Group %s unreachable: %s", group_id, error)
-            if hasattr(db, "update_group_status") and callable(getattr(db, "update_group_status", None)):
-                await db.update_group_status(group_id, "kicked")
-        except Exception as error:
-            logging.error("Error checking group %s: %s", group_id, error)
-        await asyncio.sleep(_ADMIN_THROTTLE_SECONDS)
+            except Exception as error:
+                logging.error("Error checking group %s: %s", group_id, error)
+            finally:
+                await asyncio.sleep(_ADMIN_THROTTLE_SECONDS)
 
     await status_message.edit_text(
         bm.check_groups_completed(total_groups, reachable, unreachable, total_reach),
@@ -1120,7 +1180,7 @@ async def send_to_all_message(message: types.Message, state: FSMContext):
             ]
         targets.extend(active_groups)
 
-    await _run_bounded(
+    results = await _run_bounded(
         targets,
         limit=_ADMIN_MAILING_CONCURRENCY,
         worker=lambda target: _deliver_mailing_message(
@@ -1130,10 +1190,28 @@ async def send_to_all_message(message: types.Message, state: FSMContext):
         ),
     )
 
+    delivered = results.count("delivered") if results else 0
+    migrated = results.count("migrated") if results else 0
+    unreachable = results.count("unreachable") if results else 0
+    failed = results.count("failed") if results else 0
+    total = len(targets)
+
+    try:
+        completion_text = bm.finish_mailing(
+            total=total,
+            delivered=delivered + migrated,
+            unreachable=unreachable,
+            migrated=migrated,
+            failed=failed,
+        )
+    except TypeError:
+        completion_text = bm.finish_mailing()
+
     await bot.send_message(
         chat_id=message.chat.id,
-        text=bm.finish_mailing(),
+        text=completion_text,
         reply_markup=types.ReplyKeyboardRemove(),
+        parse_mode="HTML",
     )
 
 

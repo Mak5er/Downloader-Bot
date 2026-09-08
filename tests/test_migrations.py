@@ -193,3 +193,65 @@ def test_redundant_analytics_index_migration_downgrade_recreates_missing(monkeyp
     assert create_index.call_count == 2
     create_index.assert_any_call("ix_analytics_events_created_at", "analytics_events", ["created_at"], unique=False)
     create_index.assert_any_call("ix_analytics_events_action_name", "analytics_events", ["action_name"], unique=False)
+
+
+def test_partial_indexes_and_thread_id_upgrade_postgresql(monkeypatch):
+    module = _load_migration_module("20260908_000012_add_partial_indexes_and_thread_id.py")
+    add_column = Mock()
+    execute = Mock()
+    monkeypatch.setattr(module.op, "add_column", add_column)
+    monkeypatch.setattr(module.op, "execute", execute)
+    fake_bind = SimpleNamespace(dialect=SimpleNamespace(name="postgresql"))
+    monkeypatch.setattr(module.op, "get_bind", lambda: fake_bind)
+    monkeypatch.setattr(
+        module.sa,
+        "inspect",
+        lambda _bind: SimpleNamespace(get_columns=lambda _table: [{"name": "id"}, {"name": "title"}]),
+    )
+
+    module.upgrade()
+
+    add_column.assert_called_once()
+    assert add_column.call_args[0][0] == "groups"
+    assert add_column.call_args[0][1].name == "last_thread_id"
+    assert execute.call_count == 2
+
+
+def test_partial_indexes_and_thread_id_upgrade_sqlite_skips_postgres_indexes(monkeypatch):
+    module = _load_migration_module("20260908_000012_add_partial_indexes_and_thread_id.py")
+    add_column = Mock()
+    execute = Mock()
+    monkeypatch.setattr(module.op, "add_column", add_column)
+    monkeypatch.setattr(module.op, "execute", execute)
+    fake_bind = SimpleNamespace(dialect=SimpleNamespace(name="sqlite"))
+    monkeypatch.setattr(module.op, "get_bind", lambda: fake_bind)
+    monkeypatch.setattr(
+        module.sa,
+        "inspect",
+        lambda _bind: SimpleNamespace(get_columns=lambda _table: [{"name": "id"}, {"name": "last_thread_id"}]),
+    )
+
+    module.upgrade()
+
+    add_column.assert_not_called()
+    execute.assert_not_called()
+
+
+def test_partial_indexes_and_thread_id_downgrade(monkeypatch):
+    module = _load_migration_module("20260908_000012_add_partial_indexes_and_thread_id.py")
+    drop_column = Mock()
+    execute = Mock()
+    monkeypatch.setattr(module.op, "drop_column", drop_column)
+    monkeypatch.setattr(module.op, "execute", execute)
+    fake_bind = SimpleNamespace(dialect=SimpleNamespace(name="postgresql"))
+    monkeypatch.setattr(module.op, "get_bind", lambda: fake_bind)
+    monkeypatch.setattr(
+        module.sa,
+        "inspect",
+        lambda _bind: SimpleNamespace(get_columns=lambda _table: [{"name": "id"}, {"name": "last_thread_id"}]),
+    )
+
+    module.downgrade()
+
+    assert execute.call_count == 2
+    drop_column.assert_called_once_with("groups", "last_thread_id")

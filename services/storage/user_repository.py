@@ -129,6 +129,7 @@ class UserRepositoryMixin:
         chat_type: str | None = None,
         status: str = "active",
         member_count: int | None = None,
+        last_thread_id: int | None = None,
     ) -> None:
         chat_id_int = int(chat_id)
         values = {
@@ -138,6 +139,7 @@ class UserRepositoryMixin:
             "chat_type": chat_type or "group",
             "status": status,
             "member_count": member_count if member_count is not None else 0,
+            "last_thread_id": last_thread_id,
         }
         async with self.SessionLocal() as session:
             async with session.begin():
@@ -156,6 +158,8 @@ class UserRepositoryMixin:
                     set_dict["member_count"] = stmt.excluded.member_count
                 else:
                     set_dict["member_count"] = Group.member_count
+                if last_thread_id is not None:
+                    set_dict["last_thread_id"] = stmt.excluded.last_thread_id
 
                 stmt = stmt.on_conflict_do_update(
                     index_elements=[Group.id],

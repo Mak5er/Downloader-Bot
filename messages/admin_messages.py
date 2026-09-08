@@ -90,8 +90,24 @@ def not_groups():
     return "This command cannot be used in a group!"
 
 
-def finish_mailing():
-    return "Mailing is complete!"
+def finish_mailing(
+    total: int = 0,
+    delivered: int = 0,
+    unreachable: int = 0,
+    migrated: int = 0,
+    failed: int = 0,
+) -> str:
+    if total <= 0 and delivered <= 0:
+        return "Mailing is complete!"
+    return (
+        f"<b>Mailing is complete!</b>\n\n"
+        f"📊 <b>Delivery Report:</b>\n"
+        f"├ 🎯 Total targets: <b>{total}</b>\n"
+        f"├ ✅ Delivered: <b>{delivered}</b>\n"
+        f"├ 🚫 Unreachable / Blocked: <b>{unreachable}</b>\n"
+        f"├ 🔄 Migrated to supergroup: <b>{migrated}</b>\n"
+        f"└ ⚠️ Failed: <b>{failed}</b>"
+    )
 
 
 def start_mailing():
