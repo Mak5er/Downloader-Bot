@@ -1,10 +1,9 @@
-import asyncio
 import time
 from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from aiogram.enums import ChatType, ChatMemberStatus
 from aiogram.types import Chat, Message, User, ChatMemberUpdated
-from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError
+from aiogram.exceptions import TelegramBadRequest
 
 from middlewares.chat_tracker import ChatTrackerMiddleware
 import handlers.commands as cmd_mod
@@ -190,10 +189,9 @@ async def test_group_message_from_brand_new_user():
         user_id=99999,
     )
 
-    # Verify call arguments satisfy constraints: has_dm != True and status != "inactive"
+    # Verify call arguments satisfy constraints: has_dm is False and status != "inactive"
     user_call_kwargs = db.upsert_user.await_args.kwargs
     assert user_call_kwargs["has_dm"] is False
-    assert user_call_kwargs["has_dm"] != True
     assert user_call_kwargs["status"] != "inactive"
 
 
@@ -226,8 +224,7 @@ async def test_has_dm_lifecycle_and_sticky_preservation_e2e():
     db_member1 = sqlite_db.get_group_member(-100999, 55555)
 
     assert db_user1 is not None
-    assert db_user1["has_dm"] == False
-    assert db_user1["has_dm"] != True
+    assert not db_user1["has_dm"]
     assert db_user1["status"] != "inactive"
     assert db_user1["status"] == "active"  # default initial status
 
@@ -244,7 +241,7 @@ async def test_has_dm_lifecycle_and_sticky_preservation_e2e():
     await middleware._process_message(msg2)
 
     db_user2 = sqlite_db.get_user(55555)
-    assert db_user2["has_dm"] == True
+    assert db_user2["has_dm"]
     assert db_user2["status"] == "active"
 
     # --- STEP 3: Subsequent group message from same user (within cache TTL) ---
@@ -255,7 +252,7 @@ async def test_has_dm_lifecycle_and_sticky_preservation_e2e():
     # Within 90s TTL, touch cache detects has_dm_bool=False is suppressed by cached_has_dm=True
     mock_db.upsert_user.assert_not_called()
     db_user3 = sqlite_db.get_user(55555)
-    assert db_user3["has_dm"] == True
+    assert db_user3["has_dm"]
     assert db_user3["status"] == "active"
 
     # --- STEP 4: Subsequent group message from same user (AFTER cache TTL) ---
@@ -276,7 +273,7 @@ async def test_has_dm_lifecycle_and_sticky_preservation_e2e():
 
     # Verify sticky preservation in SQLite database row!
     db_user4 = sqlite_db.get_user(55555)
-    assert db_user4["has_dm"] == True, "STICKY PRESERVATION FAILED: has_dm flipped from True to False!"
+    assert db_user4["has_dm"], "STICKY PRESERVATION FAILED: has_dm flipped from True to False!"
     assert db_user4["status"] == "active", "STICKY PRESERVATION FAILED: status overwritten!"
 
 
@@ -588,7 +585,7 @@ async def test_user_name_change_in_group_preserves_has_dm_in_db():
 
     # User establishes DM
     await middleware._process_message(MagicMock(spec=Message, chat=p_chat, from_user=user_initial, bot=bot))
-    assert sqlite_db.get_user(1234)["has_dm"] == True
+    assert sqlite_db.get_user(1234)["has_dm"]
     assert sqlite_db.get_user(1234)["user_name"] == "Original Name"
 
     # User changes name and speaks in group
@@ -598,7 +595,7 @@ async def test_user_name_change_in_group_preserves_has_dm_in_db():
     # Name is updated, but has_dm must remain True in DB!
     user_row = sqlite_db.get_user(1234)
     assert user_row["user_name"] == "Renamed User"
-    assert user_row["has_dm"] == True, "STICKY FAILURE: Name change in group erased has_dm flag in DB!"
+    assert user_row["has_dm"], "STICKY FAILURE: Name change in group erased has_dm flag in DB!"
 
 
 # =========================================================================

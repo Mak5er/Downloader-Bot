@@ -1,8 +1,7 @@
-import asyncio
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock
 import pytest
-from aiogram.exceptions import TelegramForbiddenError, TelegramBadRequest
+from aiogram.exceptions import TelegramForbiddenError
 
 from handlers import admin
 import keyboards.inline_keyboards as inline_kb
