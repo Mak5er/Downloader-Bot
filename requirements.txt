@@ -11,5 +11,5 @@ matplotlib==3.11.1
 mutagen==1.48.1
 pillow==12.3.0
 psycopg2-binary==2.9.12
-python-dotenv==1.2.2
+python-dotenv==1.2.3
 yt-dlp[default]==2026.7.4
