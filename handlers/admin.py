@@ -11,6 +11,7 @@ from aiogram.exceptions import (
     TelegramAPIError,
     TelegramBadRequest,
     TelegramForbiddenError,
+    TelegramMigrateToChat,
     TelegramNotFound,
     TelegramRetryAfter,
 )
@@ -286,6 +287,21 @@ async def _deliver_mailing_message(target, *, sender_id: int, message_id: int) -
         else:
             if target_status == "inactive":
                 await db.set_active(chat_id)
+    except TelegramMigrateToChat as error:
+        new_chat_id = error.migrate_to_chat_id
+        logging.info("Chat %s migrated to supergroup %s during mailing", chat_id, new_chat_id)
+        if hasattr(db, "migrate_group_chat") and callable(getattr(db, "migrate_group_chat", None)):
+            await db.migrate_group_chat(chat_id, new_chat_id)
+        try:
+            await bot.copy_message(
+                chat_id=new_chat_id,
+                from_chat_id=sender_id,
+                message_id=message_id,
+            )
+            if hasattr(db, "update_group_status") and callable(getattr(db, "update_group_status", None)):
+                await db.update_group_status(new_chat_id, "active")
+        except Exception as retry_err:
+            logging.warning("Failed to deliver mailing to migrated chat %s: %s", new_chat_id, retry_err)
     except TelegramForbiddenError as error:
         if is_group:
             logging.info("Group %s kicked or restricted during mailing: %s", chat_id, error)
@@ -776,6 +792,24 @@ async def check_active_groups(call: types.CallbackQuery):
                 await db.update_group_member_count(group_id, member_count)
             if hasattr(db, "update_group_status") and callable(getattr(db, "update_group_status", None)):
                 await db.update_group_status(group_id, "active")
+        except TelegramMigrateToChat as error:
+            new_chat_id = error.migrate_to_chat_id
+            logging.info("Group %s migrated to supergroup %s during check", group_id, new_chat_id)
+            if hasattr(db, "migrate_group_chat") and callable(getattr(db, "migrate_group_chat", None)):
+                await db.migrate_group_chat(group_id, new_chat_id)
+            try:
+                member_count = await bot.get_chat_member_count(new_chat_id)
+                reachable += 1
+                total_reach += member_count
+                if hasattr(db, "update_group_member_count") and callable(getattr(db, "update_group_member_count", None)):
+                    await db.update_group_member_count(new_chat_id, member_count)
+                if hasattr(db, "update_group_status") and callable(getattr(db, "update_group_status", None)):
+                    await db.update_group_status(new_chat_id, "active")
+            except Exception as migrate_err:
+                unreachable += 1
+                logging.info("Migrated group %s unreachable: %s", new_chat_id, migrate_err)
+                if hasattr(db, "update_group_status") and callable(getattr(db, "update_group_status", None)):
+                    await db.update_group_status(new_chat_id, "kicked")
         except TelegramRetryAfter as error:
             await asyncio.sleep(error.retry_after)
             try:

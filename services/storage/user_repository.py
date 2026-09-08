@@ -209,6 +209,99 @@ class UserRepositoryMixin:
                     .values(member_count=member_count, updated_at=func.now())
                 )
 
+    async def migrate_group_chat(
+        self,
+        old_group_id: int,
+        new_group_id: int,
+        *,
+        new_title: str | None = None,
+        new_username: str | None = None,
+    ) -> None:
+        old_id = int(old_group_id)
+        new_id = int(new_group_id)
+        if old_id == new_id:
+            return
+
+        async with self.SessionLocal() as session:
+            async with session.begin():
+                old_group_res = await session.execute(select(Group).where(Group.id == old_id))
+                old_group = old_group_res.scalar_one_or_none()
+
+                new_group_res = await session.execute(select(Group).where(Group.id == new_id))
+                new_group = new_group_res.scalar_one_or_none()
+
+                title = new_title or (new_group.title if new_group else None) or (old_group.title if old_group else None)
+                username = new_username or (new_group.username if new_group else None) or (old_group.username if old_group else None)
+                status = (new_group.status if new_group else None) or (old_group.status if old_group else "active")
+                member_count = (new_group.member_count if new_group and new_group.member_count else None) or (old_group.member_count if old_group else 0)
+
+                stmt = self._insert(Group).values(
+                    id=new_id,
+                    title=title,
+                    username=username,
+                    chat_type="supergroup",
+                    status=status,
+                    member_count=member_count,
+                    created_at=old_group.created_at if old_group else func.now(),
+                    updated_at=func.now(),
+                )
+                stmt = stmt.on_conflict_do_update(
+                    index_elements=[Group.id],
+                    set_={
+                        "title": func.coalesce(stmt.excluded.title, Group.title),
+                        "username": func.coalesce(stmt.excluded.username, Group.username),
+                        "chat_type": "supergroup",
+                        "status": stmt.excluded.status,
+                        "member_count": case(
+                            (stmt.excluded.member_count > 0, stmt.excluded.member_count),
+                            else_=Group.member_count,
+                        ),
+                        "updated_at": func.now(),
+                    },
+                )
+                await session.execute(stmt)
+
+                # Migrate group members
+                old_members_res = await session.execute(
+                    select(GroupMember).where(GroupMember.group_id == old_id)
+                )
+                old_members = old_members_res.scalars().all()
+                for member in old_members:
+                    m_stmt = self._insert(GroupMember).values(
+                        group_id=new_id,
+                        user_id=member.user_id,
+                        last_seen_at=member.last_seen_at or func.now(),
+                    )
+                    m_stmt = m_stmt.on_conflict_do_update(
+                        index_elements=[GroupMember.group_id, GroupMember.user_id],
+                        set_={
+                            "last_seen_at": case(
+                                (m_stmt.excluded.last_seen_at > GroupMember.last_seen_at, m_stmt.excluded.last_seen_at),
+                                else_=GroupMember.last_seen_at,
+                            )
+                        },
+                    )
+                    await session.execute(m_stmt)
+
+                await session.execute(delete(GroupMember).where(GroupMember.group_id == old_id))
+
+                # Migrate settings
+                new_settings_res = await session.execute(
+                    select(Settings).where(Settings.user_id == new_id)
+                )
+                new_settings = new_settings_res.scalar_one_or_none()
+                if new_settings:
+                    await session.execute(delete(Settings).where(Settings.user_id == old_id))
+                else:
+                    await session.execute(
+                        update(Settings).where(Settings.user_id == old_id).values(user_id=new_id)
+                    )
+
+                # Delete old group record
+                await session.execute(delete(Group).where(Group.id == old_id))
+
+        self._status_cache.pop(old_id, None)
+
     async def get_active_groups(self) -> list[Group]:
         async with self.SessionLocal() as session:
             result = await session.execute(

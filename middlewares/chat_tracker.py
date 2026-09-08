@@ -60,6 +60,25 @@ class ChatTrackerMiddleware(BaseMiddleware):
         if not chat:
             return
 
+        # Check if group was upgraded to supergroup
+        migrate_to = getattr(message_or_chat, "migrate_to_chat_id", None)
+        migrate_from = getattr(message_or_chat, "migrate_from_chat_id", None)
+        if migrate_to:
+            await self._handle_group_migration(
+                old_chat_id=chat.id,
+                new_chat_id=migrate_to,
+                chat=chat,
+                bot=resolved_bot,
+            )
+            return
+        if migrate_from:
+            await self._handle_group_migration(
+                old_chat_id=migrate_from,
+                new_chat_id=chat.id,
+                chat=chat,
+                bot=resolved_bot,
+            )
+
         chat_type_value = self._resolve_chat_type(chat.type)
 
         if chat_type_value == "private":
@@ -219,3 +238,25 @@ class ChatTrackerMiddleware(BaseMiddleware):
         if callable(record_member_fn):
             await record_member_fn(group_id=actual_group_id, user_id=user_id)
         self._member_touch_cache[key] = now
+
+    async def _handle_group_migration(
+        self,
+        old_chat_id: int,
+        new_chat_id: int,
+        chat: Chat,
+        bot: Optional[Bot] = None,
+    ) -> None:
+        logging.info("Chat migrated from %s to %s", old_chat_id, new_chat_id)
+        self._group_touch_cache.pop(old_chat_id, None)
+        self._member_count_cache.pop(old_chat_id, None)
+        for key in list(self._member_touch_cache.keys()):
+            if key[0] == old_chat_id:
+                self._member_touch_cache.pop(key, None)
+
+        migrate_fn = getattr(self._db, "migrate_group_chat", None)
+        if callable(migrate_fn):
+            title = chat.title or getattr(chat, "full_name", None)
+            username = getattr(chat, "username", None)
+            await migrate_fn(old_chat_id, new_chat_id, new_title=title, new_username=username)
+
+        await self._ensure_group(chat, bot=bot)
