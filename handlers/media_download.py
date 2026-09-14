@@ -78,6 +78,17 @@ async def _process_pending_message(message: types.Message) -> None:
 
 
 async def _process_supported_link(message: types.Message, service: str, url: str) -> None:
+    user = getattr(message, "from_user", None)
+    user_id = getattr(user, "id", None) or 0
+    username = getattr(user, "username", None)
+    logging.download_request(
+        user_id=user_id,
+        username=username,
+        service=service,
+        url=url,
+        chat_type=getattr(getattr(message, "chat", None), "type", None),
+    )
+
     if service == "tiktok":
         from handlers import tiktok
         await tiktok.process_tiktok(message, direct_url=url)

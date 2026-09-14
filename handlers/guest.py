@@ -23,7 +23,6 @@ from services.links.detection import extract_supported_link
 from services.logger import (
     logger as logging,
     summarize_text_for_log,
-    summarize_url_for_log,
 )
 
 logging = logging.bind(service="guest_mode")
@@ -251,11 +250,12 @@ async def handle_guest_message(
         return
 
     service, url = detected
-    logging.info(
-        "Supported link detected in guest query: user_id=%s service=%s url=%s",
-        user_id,
-        service,
-        summarize_url_for_log(url),
+    logging.download_request(
+        user_id=user_id,
+        username=getattr(user, "username", None),
+        service=service,
+        url=url,
+        chat_type=chat_type,
     )
 
     await deps.send_analytics(

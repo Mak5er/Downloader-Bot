@@ -269,15 +269,18 @@ class ContextFilter(logging.Filter):
         elif duration_ms in (None, ""):
             record.duration_ms = "-"
 
-        record.text_context = _build_text_context(record)
-        record.text_context_block = f" | {record.text_context}" if record.text_context else ""
-
         message = record.getMessage()
-        event_name = getattr(record, "event_name", None)
-        if _is_meaningful_text_value(event_name) and message == event_name:
-            record.text_message_block = ""
+        if message.startswith("[") and (" | " in message):
+            record.text_context_block = ""
+            record.text_message_block = f" | {message}"
         else:
-            record.text_message_block = f" | {message}" if message else ""
+            record.text_context = _build_text_context(record)
+            record.text_context_block = f" | {record.text_context}" if record.text_context else ""
+            event_name = getattr(record, "event_name", None)
+            if _is_meaningful_text_value(event_name) and message == event_name:
+                record.text_message_block = ""
+            else:
+                record.text_message_block = f" | {message}" if message else ""
 
         return True
 
@@ -357,6 +360,90 @@ class ContextLoggerAdapter(logging.LoggerAdapter):
             },
         )
 
+    def download_request(
+        self,
+        *,
+        user_id: Any,
+        username: str | None = None,
+        service: str,
+        url: str,
+        chat_type: str | None = None,
+        **extra: Any,
+    ) -> None:
+        user_str = f"{user_id} (@{username})" if username else str(user_id)
+        msg = f"[REQUEST] user={user_str} | service={service} | url={url}"
+        self.info(msg, extra={"kind": "app", "user_id": user_id, "service": service, "url": url, **extra})
+
+    def download_success(
+        self,
+        *,
+        user_id: Any,
+        service: str,
+        file_type: str | None = "media",
+        size_bytes: int | None = None,
+        duration_s: float | None = None,
+        url: str,
+        **extra: Any,
+    ) -> None:
+        details: list[str] = []
+        if size_bytes:
+            details.append(_format_bytes_compact(size_bytes))
+        if duration_s is not None:
+            details.append(f"{duration_s:.2f}s")
+        details_str = f" ({' in '.join(details)})" if details else ""
+        ft = file_type or "media"
+        msg = f"[SUCCESS] user={user_id} | {service} | {ft}{details_str} | {url}"
+        self.info(msg, extra={"kind": "app", "user_id": user_id, "service": service, "url": url, **extra})
+
+    def download_cached(
+        self,
+        *,
+        user_id: Any,
+        service: str,
+        file_type: str | None = "media",
+        url: str,
+        **extra: Any,
+    ) -> None:
+        ft = file_type or "media"
+        msg = f"[CACHED] user={user_id} | {service} | {ft} (cache hit) | {url}"
+        self.info(msg, extra={"kind": "app", "user_id": user_id, "service": service, "url": url, **extra})
+
+    def download_error(
+        self,
+        *,
+        user_id: Any,
+        service: str,
+        error: Any,
+        url: str,
+        **extra: Any,
+    ) -> None:
+        msg = f"[FAILED] user={user_id} | {service} | error={error} | {url}"
+        self.error(msg, extra={"kind": "app", "user_id": user_id, "service": service, "url": url, **extra})
+
+
+def _console_verbose() -> bool:
+    return os.getenv("LOG_CONSOLE_VERBOSE", "").strip().lower() in {"1", "true", "yes"}
+
+
+def _format_bytes_compact(size_bytes: int) -> str:
+    if size_bytes < 1024:
+        return f"{size_bytes} B"
+    if size_bytes < 1024 * 1024:
+        return f"{size_bytes / 1024:.2f} KB"
+    if size_bytes < 1024 * 1024 * 1024:
+        return f"{size_bytes / (1024 * 1024):.2f} MB"
+    return f"{size_bytes / (1024 * 1024 * 1024):.2f} GB"
+
+
+class ConsoleCleanFilter(logging.Filter):
+    def filter(self, record: logging.LogRecord) -> bool:
+        if _console_verbose():
+            return True
+        kind = getattr(record, "kind", "app")
+        if kind in ("event", "perf"):
+            return False
+        return True
+
 
 CONSOLE_FORMAT = (
     "%(log_color)s%(asctime)s | %(levelname)s | %(name)s%(text_context_block)s%(text_message_block)s%(reset)s"
@@ -380,6 +467,7 @@ def _build_console_handler(level: int) -> logging.Handler:
         },
     )
     handler.setFormatter(formatter)
+    handler.addFilter(ConsoleCleanFilter())
     handler.addFilter(ContextFilter())
     return handler
 

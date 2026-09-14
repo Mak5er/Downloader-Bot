@@ -86,3 +86,103 @@ def test_disable_log_sinks_detaches_and_closes_all_sinks(monkeypatch):
     assert isinstance(base.handlers[0], logging.NullHandler)
     assert logger_module._sinks_disabled() is True
 
+
+def test_console_filter_suppresses_telemetry_events_by_default(monkeypatch):
+    monkeypatch.delenv("LOG_CONSOLE_VERBOSE", raising=False)
+    stream = io.StringIO()
+    handler = logger_module._build_console_handler(logging.INFO)
+    # Replace stream so we can capture output
+    handler.setStream(stream)
+
+    record_event = logging.LogRecord(
+        name="maxload",
+        level=logging.INFO,
+        pathname="",
+        lineno=0,
+        msg="flow_started",
+        args=(),
+        exc_info=None,
+    )
+    record_event.kind = "event"
+    record_event.event_name = "flow_started"
+
+    record_perf = logging.LogRecord(
+        name="maxload",
+        level=logging.INFO,
+        pathname="",
+        lineno=0,
+        msg="download_probe",
+        args=(),
+        exc_info=None,
+    )
+    record_perf.kind = "perf"
+    record_perf.event_name = "download_probe"
+
+    record_app = logging.LogRecord(
+        name="maxload",
+        level=logging.INFO,
+        pathname="",
+        lineno=0,
+        msg="[REQUEST] user=123 | twitter | https://x.com/status/1",
+        args=(),
+        exc_info=None,
+    )
+    record_app.kind = "app"
+
+    handler.handle(record_event)
+    handler.handle(record_perf)
+    handler.handle(record_app)
+
+    output = stream.getvalue()
+    assert "flow_started" not in output
+    assert "download_probe" not in output
+    assert "[REQUEST] user=123 | twitter | https://x.com/status/1" in output
+
+
+def test_console_filter_allows_telemetry_when_verbose_enabled(monkeypatch):
+    monkeypatch.setenv("LOG_CONSOLE_VERBOSE", "1")
+    stream = io.StringIO()
+    handler = logger_module._build_console_handler(logging.INFO)
+    handler.setStream(stream)
+
+    record_event = logging.LogRecord(
+        name="maxload",
+        level=logging.INFO,
+        pathname="",
+        lineno=0,
+        msg="flow_started",
+        args=(),
+        exc_info=None,
+    )
+    record_event.kind = "event"
+    record_event.event_name = "flow_started"
+
+    handler.handle(record_event)
+    output = stream.getvalue()
+    assert "flow_started" in output
+
+
+def test_logger_download_summary_helpers():
+    stream = io.StringIO()
+    test_logger = logging.getLogger("maxload-test-summary")
+    test_logger.handlers.clear()
+    test_logger.setLevel(logging.INFO)
+    test_logger.propagate = False
+
+    handler = logging.StreamHandler(stream)
+    handler.setFormatter(logging.Formatter("%(levelname)s | %(message)s"))
+    test_logger.addHandler(handler)
+
+    adapter = logger_module.ContextLoggerAdapter(test_logger, {})
+    adapter.download_request(user_id=123, username="john_doe", service="twitter", url="https://x.com/post/1")
+    adapter.download_success(user_id=123, service="twitter", file_type="video", size_bytes=2514440, duration_s=0.55, url="https://x.com/post/1")
+    adapter.download_cached(user_id=123, service="twitter", file_type="video", url="https://x.com/post/1")
+    adapter.download_error(user_id=123, service="twitter", error="File too large", url="https://x.com/post/1")
+
+    output = stream.getvalue()
+    assert "[REQUEST] user=123 (@john_doe) | service=twitter | url=https://x.com/post/1" in output
+    assert "[SUCCESS] user=123 | twitter | video (2.40 MB in 0.55s) | https://x.com/post/1" in output
+    assert "[CACHED] user=123 | twitter | video (cache hit) | https://x.com/post/1" in output
+    assert "[FAILED] user=123 | twitter | error=File too large | https://x.com/post/1" in output
+
+
