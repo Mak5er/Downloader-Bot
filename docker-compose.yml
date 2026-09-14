@@ -1,7 +1,7 @@
 services:
   downloader-bot:
     image: ghcr.io/mak5er/downloader-bot:latest
-    pull_policy: missing
+    pull_policy: always
     build:
       context: .
       dockerfile: Dockerfile
