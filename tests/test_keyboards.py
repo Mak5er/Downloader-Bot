@@ -45,3 +45,18 @@ def test_mailing_audience_keyboard_structure():
     assert any("Groups only" in t for t in texts)
     assert any("All (DM + Groups)" in t for t in texts)
     assert any("Cancel" in t for t in texts)
+
+
+def test_admin_keyboard_excludes_message_chat_id_and_includes_history():
+    markup = inline_kb.admin_keyboard()
+    callbacks = _flatten_callbacks(markup)
+    assert "message_chat_id" not in callbacks
+    assert "admin_download_history" in callbacks
+
+
+def test_return_back_to_history_keyboard():
+    markup = inline_kb.return_back_to_history_keyboard()
+    callbacks = _flatten_callbacks(markup)
+    assert callbacks == ["admin_download_history"]
+    assert markup.inline_keyboard[0][0].text == "⬅️ Back"
+

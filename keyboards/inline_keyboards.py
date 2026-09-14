@@ -277,11 +277,6 @@ def admin_keyboard():
         ],
         [InlineKeyboardButton(text="📬 Mailing", callback_data="send_to_all")],
         [
-            InlineKeyboardButton(
-                text="✉️ Message by Chat ID", callback_data="message_chat_id"
-            )
-        ],
-        [
             InlineKeyboardButton(text="📄 View Log", callback_data="download_log"),
             InlineKeyboardButton(text="🗑️ Delete Log", callback_data="delete_log"),
         ],
@@ -318,6 +313,11 @@ def downloads_admin_keyboard(
 
 def return_back_to_admin_keyboard():
     back_button = [[InlineKeyboardButton(text="⬅️ Back", callback_data="back_to_admin")]]
+    return InlineKeyboardMarkup(inline_keyboard=back_button)
+
+
+def return_back_to_history_keyboard() -> InlineKeyboardMarkup:
+    back_button = [[InlineKeyboardButton(text="⬅️ Back", callback_data="admin_download_history")]]
     return InlineKeyboardMarkup(inline_keyboard=back_button)
 
 

@@ -593,3 +593,32 @@ async def test_admin_command_renders_button_panel(monkeypatch):
     assert "Hello, this is the admin panel." in kwargs["text"]
     assert "Runtime now" in kwargs["text"]
     assert kwargs["reply_markup"] is fake_keyboard
+
+
+@pytest.mark.asyncio
+async def test_cancel_action_returns_to_history_for_chat_id_message(monkeypatch):
+    call = SimpleNamespace(
+        from_user=SimpleNamespace(id=1),
+        message=SimpleNamespace(
+            chat=SimpleNamespace(id=10),
+            edit_text=AsyncMock(),
+            answer=AsyncMock(),
+        ),
+        answer=AsyncMock(),
+    )
+    state = AsyncMock()
+    state.get_state = AsyncMock(return_value=admin.Admin.write_chat_id.state)
+
+    monkeypatch.setattr(admin, "ADMINS_UID", [1])
+    history_kb = object()
+    monkeypatch.setattr(admin.kb, "return_back_to_history_keyboard", lambda: history_kb)
+
+    await admin.cancel_action(call, state)
+
+    state.clear.assert_awaited_once()
+    call.answer.assert_awaited_once_with("Canceled")
+    call.message.edit_text.assert_awaited_once_with(
+        admin.bm.canceled(),
+        reply_markup=history_kb,
+    )
+

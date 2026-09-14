@@ -5,6 +5,7 @@ import time
 from dataclasses import dataclass
 from datetime import timedelta
 from pathlib import Path
+from typing import Optional
 
 from aiogram import types, F, Router
 from aiogram.exceptions import (
@@ -915,13 +916,24 @@ async def cancel_action(call: types.CallbackQuery, state: FSMContext):
         await call.answer("Nothing to cancel")
         return
 
+    is_message_by_chat = current_state in (
+        Admin.write_chat_id.state,
+        Admin.write_chat_text.state,
+    )
+
     await state.clear()
     await call.answer("Canceled")
+
+    reply_kb = (
+        kb.return_back_to_history_keyboard()
+        if is_message_by_chat
+        else kb.return_back_to_admin_keyboard()
+    )
 
     try:
         await call.message.edit_text(
             bm.canceled(),
-            reply_markup=kb.return_back_to_admin_keyboard()
+            reply_markup=reply_kb
         )
     except TelegramBadRequest:
         try:
@@ -930,7 +942,7 @@ async def cancel_action(call: types.CallbackQuery, state: FSMContext):
             pass
         await call.message.answer(
             bm.canceled(),
-            reply_markup=kb.return_back_to_admin_keyboard()
+            reply_markup=reply_kb
         )
 
 
@@ -946,17 +958,21 @@ async def admin_download_history(call: types.CallbackQuery, dialog_manager: Dial
 
 
 @router.callback_query(F.data == 'message_chat_id')
-async def message_chat_id(call: types.CallbackQuery, state: FSMContext):
+async def message_chat_id(call: types.CallbackQuery, state: FSMContext, dialog_manager: Optional[DialogManager] = None):
     if not await _ensure_admin_callback(call):
         return
 
     await call.answer()
-    await bot.send_chat_action(call.message.chat.id, "typing")
-    await call.message.edit_text(
-        bm.enter_chat_id(),
-        reply_markup=kb.cancel_keyboard()
-    )
-    await state.set_state(Admin.write_chat_id)
+    if dialog_manager is not None:
+        from handlers.admin_history_dialog import AdminHistorySG
+        await dialog_manager.start(AdminHistorySG.message_user, mode=StartMode.RESET_STACK)
+    else:
+        await bot.send_chat_action(call.message.chat.id, "typing")
+        await call.message.edit_text(
+            bm.enter_chat_id(),
+            reply_markup=kb.cancel_keyboard()
+        )
+        await state.set_state(Admin.write_chat_id)
 
 
 @router.message(Admin.write_chat_id)
@@ -966,7 +982,7 @@ async def admin_collect_chat_id(message: types.Message, state: FSMContext):
         return
 
     if message.text == bm.cancel():
-        await bot.send_message(message.chat.id, bm.canceled(), reply_markup=types.ReplyKeyboardRemove())
+        await bot.send_message(message.chat.id, bm.canceled(), reply_markup=kb.return_back_to_history_keyboard())
         await state.clear()
         return
 
@@ -1004,7 +1020,7 @@ async def admin_send_to_chat(message: types.Message, state: FSMContext):
         return
 
     if message.text == bm.cancel():
-        await bot.send_message(message.chat.id, bm.canceled(), reply_markup=types.ReplyKeyboardRemove())
+        await bot.send_message(message.chat.id, bm.canceled(), reply_markup=kb.return_back_to_history_keyboard())
         await state.clear()
         return
 
@@ -1012,7 +1028,7 @@ async def admin_send_to_chat(message: types.Message, state: FSMContext):
     chat_id = data.get("target_chat_id")
 
     if chat_id is None:
-        await message.reply(bm.chat_message_failed("unknown"), reply_markup=types.ReplyKeyboardRemove())
+        await message.reply(bm.chat_message_failed("unknown"), reply_markup=kb.return_back_to_history_keyboard())
         await state.clear()
         return
 
@@ -1028,17 +1044,17 @@ async def admin_send_to_chat(message: types.Message, state: FSMContext):
     except (TelegramForbiddenError, TelegramNotFound, TelegramBadRequest) as error:
         logging.info("Failed to send message to chat %s: %s", chat_id, error)
         await bot.delete_message(message.chat.id, progress_message.message_id)
-        await message.answer(bm.chat_message_failed(chat_id), reply_markup=kb.return_back_to_admin_keyboard())
+        await message.answer(bm.chat_message_failed(chat_id), reply_markup=kb.return_back_to_history_keyboard())
         return
     except TelegramAPIError as error:
         logging.error("API error while sending message to chat %s: %s", chat_id, error)
         await bot.delete_message(message.chat.id, progress_message.message_id)
-        await message.answer(bm.chat_message_failed(chat_id), reply_markup=kb.return_back_to_admin_keyboard())
+        await message.answer(bm.chat_message_failed(chat_id), reply_markup=kb.return_back_to_history_keyboard())
         return
     except Exception as error:
         logging.error("Unexpected error while sending message to chat %s: %s", chat_id, error)
         await bot.delete_message(message.chat.id, progress_message.message_id)
-        await message.answer(bm.chat_message_failed(chat_id), reply_markup=kb.return_back_to_admin_keyboard())
+        await message.answer(bm.chat_message_failed(chat_id), reply_markup=kb.return_back_to_history_keyboard())
         return
 
     if sent_message:
@@ -1072,7 +1088,7 @@ async def admin_send_to_chat(message: types.Message, state: FSMContext):
         )
 
     await bot.delete_message(message.chat.id, progress_message.message_id)
-    await message.answer(bm.chat_message_sent(chat_id), reply_markup=kb.return_back_to_admin_keyboard())
+    await message.answer(bm.chat_message_sent(chat_id), reply_markup=kb.return_back_to_history_keyboard())
 
 
 @router.callback_query(F.data == 'back_to_admin')
