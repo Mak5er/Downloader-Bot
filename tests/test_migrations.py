@@ -255,3 +255,45 @@ def test_partial_indexes_and_thread_id_downgrade(monkeypatch):
 
     assert execute.call_count == 2
     drop_column.assert_called_once_with("groups", "last_thread_id")
+
+
+def test_download_history_migration_upgrade(monkeypatch):
+    module = _load_migration_module("20260914_000013_add_download_history.py")
+    create_table = Mock()
+    create_index = Mock()
+    monkeypatch.setattr(module.op, "create_table", create_table)
+    monkeypatch.setattr(module.op, "create_index", create_index)
+    fake_bind = SimpleNamespace(dialect=SimpleNamespace(name="sqlite"))
+    monkeypatch.setattr(module.op, "get_bind", lambda: fake_bind)
+    monkeypatch.setattr(
+        module.sa,
+        "inspect",
+        lambda _bind: SimpleNamespace(get_table_names=lambda: ["users"]),
+    )
+
+    module.upgrade()
+
+    create_table.assert_called_once()
+    assert create_table.call_args[0][0] == "download_history"
+    assert create_index.call_count == 4
+
+
+def test_download_history_migration_downgrade(monkeypatch):
+    module = _load_migration_module("20260914_000013_add_download_history.py")
+    drop_table = Mock()
+    drop_index = Mock()
+    monkeypatch.setattr(module.op, "drop_table", drop_table)
+    monkeypatch.setattr(module.op, "drop_index", drop_index)
+    fake_bind = SimpleNamespace(dialect=SimpleNamespace(name="sqlite"))
+    monkeypatch.setattr(module.op, "get_bind", lambda: fake_bind)
+    monkeypatch.setattr(
+        module.sa,
+        "inspect",
+        lambda _bind: SimpleNamespace(get_table_names=lambda: ["download_history"]),
+    )
+
+    module.downgrade()
+
+    assert drop_index.call_count == 4
+    drop_table.assert_called_once_with("download_history")
+

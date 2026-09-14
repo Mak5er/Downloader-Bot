@@ -37,6 +37,7 @@ APP_SCHEMA_TABLES = frozenset(
         "settings",
         "groups",
         "group_members",
+        "download_history",
     }
 )
 
@@ -156,3 +157,35 @@ class Settings(Base):
         back_populates="settings",
         primaryjoin="User.user_id == foreign(Settings.user_id)",
     )
+
+
+class DownloadHistory(Base):
+    __tablename__ = "download_history"
+    __table_args__ = (
+        Index("ix_download_history_user_id", "user_id"),
+        Index("ix_download_history_created_at", "created_at"),
+        Index("ix_download_history_service", "service"),
+        Index("ix_download_history_status", "status"),
+    )
+
+    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    user_id = Column(BigInteger, ForeignKey("users.user_id", ondelete="CASCADE"), nullable=False)
+    chat_id = Column(BigInteger, nullable=True)
+    chat_type = Column(Text, nullable=True)
+    service = Column(Text, nullable=False)
+    url = Column(Text, nullable=False)
+    title = Column(Text, nullable=True)
+    file_type = Column(Text, nullable=True)
+    file_id = Column(Text, nullable=True)
+    file_size_bytes = Column(BigInteger, nullable=True)
+    duration_seconds = Column(sa.Float, nullable=True)
+    status = Column(Text, nullable=False, default="success", server_default=sa.text("'success'"))
+    error_message = Column(Text, nullable=True)
+    created_at = Column(TIMESTAMP(timezone=True), server_default=func.now())
+
+    user = relationship(
+        "User",
+        primaryjoin="DownloadHistory.user_id == foreign(User.user_id)",
+        lazy="selectin",
+    )
+

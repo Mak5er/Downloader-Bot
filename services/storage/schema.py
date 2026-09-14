@@ -90,6 +90,9 @@ class SchemaManagerMixin:
             await conn.execute(
                 text("SELECT setval(pg_get_serial_sequence('users','user_id'), COALESCE(MAX(user_id),0)+1, false) FROM users")
             )
+            await conn.execute(
+                text("SELECT setval(pg_get_serial_sequence('download_history','id'), COALESCE(MAX(id),0)+1, false) FROM download_history")
+            )
 
     async def init_db(self, *, use_migrations: bool = True):
         started_at = time.perf_counter()
