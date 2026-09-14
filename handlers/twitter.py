@@ -423,7 +423,7 @@ async def reply_media(message, tweet_id, tweet_media, bot_url, business_id, user
                 tweet_id,
             )
             logging.download_success(
-                "twitter",
+                service="twitter",
                 user_id=message.from_user.id if message.from_user else None,
                 url=post_url,
             )
@@ -446,7 +446,7 @@ async def reply_media(message, tweet_id, tweet_media, bot_url, business_id, user
             e,
         )
         logging.download_error(
-            "twitter",
+            service="twitter",
             error=str(e),
             user_id=message.from_user.id if message.from_user else None,
             url=post_url,

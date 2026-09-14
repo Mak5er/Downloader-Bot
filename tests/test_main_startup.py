@@ -73,6 +73,7 @@ async def test_main_registers_one_shared_middleware_instance_per_class(monkeypat
     monkeypatch.setattr(main_module.session, "close", AsyncMock())
     monkeypatch.setattr(main_module, "set_app_context", lambda **_kwargs: None)
     monkeypatch.setattr(main_module, "crontab", Mock())
+    monkeypatch.setattr(main_module, "setup_dialogs", Mock())
     monkeypatch.setattr(main_module.dp, "include_router", Mock())
     monkeypatch.setattr(main_module.dp.message, "outer_middleware", Mock())
     monkeypatch.setattr(main_module.dp.callback_query, "outer_middleware", Mock())

@@ -13,6 +13,7 @@ from aiogram.client.default import DefaultBotProperties
 from aiogram.client.session.aiohttp import AiohttpSession
 from aiogram.client.telegram import TelegramAPIServer
 from aiogram.enums.parse_mode import ParseMode
+from aiogram_dialog import setup_dialogs
 from sqlalchemy import insert as sql_insert
 
 from app_context import set_app_context
@@ -351,9 +352,6 @@ async def main():
                 os.makedirs(OUTPUT_DIR)
 
             dp.include_router(handlers.router)
-            from aiogram_dialog import setup_dialogs
-
-            setup_dialogs(dp)
 
             for middleware_cls in middlewares.__all__:
                 middleware = middleware_cls()
@@ -361,6 +359,8 @@ async def main():
                 dp.callback_query.outer_middleware(middleware)
                 dp.inline_query.outer_middleware(middleware)
                 dp.guest_message.outer_middleware(middleware)
+
+            setup_dialogs(dp)
 
             await bot.set_my_commands(commands=BOT_COMMANDS)
             await bot.delete_webhook(drop_pending_updates=True)
