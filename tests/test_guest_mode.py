@@ -649,3 +649,71 @@ async def test_send_welcome_handles_settings_and_stats_start_payloads():
         await cmd_mod.send_welcome(dm_msg)
         mock_stats.assert_awaited_once_with(dm_msg)
 
+
+@pytest.mark.asyncio
+async def test_guest_message_reply_to_bot_video_without_link_ignored(fake_deps):
+    bot_msg = Mock(spec=Message)
+    bot_msg.from_user = User(
+        id=999999, is_bot=True, first_name="Bot", username="TestDownloaderBot"
+    )
+    bot_msg.text = None
+    bot_msg.caption = "Downloaded via t.me/TestDownloaderBot"
+
+    msg = _build_guest_message("nice video bro!", reply_to_message=bot_msg)
+    await guest.handle_guest_message(msg, deps=fake_deps)
+
+    msg.answer_guest_query.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_guest_message_reply_to_bot_video_with_bot_mention_no_link_ignored(fake_deps):
+    bot_msg = Mock(spec=Message)
+    bot_msg.from_user = User(
+        id=999999, is_bot=True, first_name="Bot", username="TestDownloaderBot"
+    )
+    bot_msg.text = None
+    bot_msg.caption = "Downloaded via t.me/TestDownloaderBot"
+
+    msg = _build_guest_message("@TestDownloaderBot thanks a lot!", reply_to_message=bot_msg)
+    await guest.handle_guest_message(msg, deps=fake_deps)
+
+    msg.answer_guest_query.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_guest_message_reply_to_bot_video_with_social_link_downloads(fake_deps):
+    bot_msg = Mock(spec=Message)
+    bot_msg.from_user = User(
+        id=999999, is_bot=True, first_name="Bot", username="TestDownloaderBot"
+    )
+    bot_msg.text = None
+    bot_msg.caption = "Previous download"
+
+    msg = _build_guest_message(
+        "download this one too https://vm.tiktok.com/ZM123456/",
+        reply_to_message=bot_msg,
+    )
+    mock_sender = AsyncMock()
+
+    with patch("handlers.guest._get_service_sender", return_value=mock_sender):
+        await guest.handle_guest_message(msg, deps=fake_deps)
+
+    msg.answer_guest_query.assert_awaited_once()
+    result = msg.answer_guest_query.await_args.kwargs["result"]
+    assert "guest_tiktok_" in result.id
+
+
+@pytest.mark.asyncio
+async def test_guest_message_reply_to_bot_video_does_not_extract_from_bot_caption(fake_deps):
+    bot_msg = Mock(spec=Message)
+    bot_msg.from_user = User(
+        id=999999, is_bot=True, first_name="Bot", username="TestDownloaderBot"
+    )
+    bot_msg.text = None
+    bot_msg.caption = "Source: https://vm.tiktok.com/ZM123456/"
+
+    msg = _build_guest_message("haha lol", reply_to_message=bot_msg)
+    await guest.handle_guest_message(msg, deps=fake_deps)
+
+    msg.answer_guest_query.assert_not_awaited()
+

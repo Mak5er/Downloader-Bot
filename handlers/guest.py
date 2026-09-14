@@ -64,14 +64,86 @@ def _get_service_sender(service: str):
     return None
 
 
-def extract_link_from_guest_message(message: types.Message) -> tuple[str, str] | None:
+def is_message_from_bot(
+    reply: Optional[types.Message],
+    bot_id: Optional[int] = None,
+    bot_username: Optional[str] = None,
+) -> bool:
+    if not reply:
+        return False
+
+    reply_user = getattr(reply, "from_user", None)
+    if reply_user:
+        ru_id = getattr(reply_user, "id", None)
+        ru_username = getattr(reply_user, "username", None)
+        if bot_id and ru_id == bot_id:
+            return True
+        if bot_username and ru_username and ru_username.lower() == bot_username.lower():
+            return True
+        if getattr(reply_user, "is_bot", False):
+            if ru_username and bot_username and ru_username.lower() == bot_username.lower():
+                return True
+            if ru_id and bot_id and ru_id == bot_id:
+                return True
+            if not bot_id and not bot_username:
+                return True
+
+    via_bot = getattr(reply, "via_bot", None)
+    if via_bot:
+        vb_id = getattr(via_bot, "id", None)
+        vb_username = getattr(via_bot, "username", None)
+        if bot_id and vb_id == bot_id:
+            return True
+        if bot_username and vb_username and vb_username.lower() == bot_username.lower():
+            return True
+        if not bot_id and not bot_username:
+            return True
+
+    return False
+
+
+def is_bot_directly_mentioned(
+    message: types.Message,
+    bot_username: Optional[str] = None,
+    bot_id: Optional[int] = None,
+) -> bool:
+    text = (message.text or message.caption or "").strip()
+    if bot_username and re.search(rf"@{re.escape(bot_username)}\b", text, re.IGNORECASE):
+        return True
+
+    # In guest mode, summoning starts with @mention
+    if re.match(r"^@\w+\b", text):
+        return True
+
+    entities = list(getattr(message, "entities", None) or ()) + list(
+        getattr(message, "caption_entities", None) or ()
+    )
+    for ent in entities:
+        ent_type = getattr(ent, "type", None)
+        if ent_type == "mention":
+            ent_text = text[ent.offset : ent.offset + ent.length]
+            if not bot_username or ent_text.lstrip("@").lower() == bot_username.lower():
+                return True
+        elif ent_type == "text_mention" and bot_id:
+            user = getattr(ent, "user", None)
+            if user and getattr(user, "id", None) == bot_id:
+                return True
+
+    return False
+
+
+def extract_link_from_guest_message(
+    message: types.Message,
+    *,
+    ignore_reply: bool = False,
+) -> tuple[str, str] | None:
     """Extract a supported service link from a guest message or its reply/quote context.
 
     Search priority:
     1. Direct message text or caption (user explicitly typed link in summon).
     2. Direct message text_link entities.
     3. Direct message quote text (user quoted specific text with a link).
-    4. Replied-to message text or caption.
+    4. Replied-to message text or caption (skipped when ignore_reply is True, e.g. replying to bot).
     5. Replied-to message text_link entities.
     6. Replied-to message quote text.
     """
@@ -104,6 +176,9 @@ def extract_link_from_guest_message(message: types.Message) -> tuple[str, str] |
                 detected = extract_supported_link(url)
                 if detected:
                     return detected
+
+    if ignore_reply:
+        return None
 
     # 4. Replied-to message
     reply = getattr(message, "reply_to_message", None)
@@ -178,63 +253,95 @@ async def handle_guest_message(
     )
 
     bot_username = await get_bot_username(deps.bot)
+    bot_id = getattr(deps.bot, "id", None)
+    if not bot_id and getattr(deps.bot, "token", None):
+        try:
+            bot_id = int(str(deps.bot.token).split(":")[0])
+        except (ValueError, IndexError):
+            pass
 
-    # Check for commands in guest message (e.g. "@bot /settings", "@bot /stats", "/settings@bot")
-    stripped = text.strip()
-    command_match = re.search(r"^@\w+\s+(/\w+)", stripped) or re.search(
-        r"^(/[\w@]+)", stripped
+    reply = getattr(message, "reply_to_message", None)
+    reply_to_bot = is_message_from_bot(reply, bot_id=bot_id, bot_username=bot_username)
+    directly_mentioned = is_bot_directly_mentioned(
+        message, bot_username=bot_username, bot_id=bot_id
     )
-    command = command_match.group(1).split("@")[0].lower() if command_match else None
 
-    if command == "/settings":
-        article = InlineQueryResultArticle(
-            id=f"guest_settings_{uuid.uuid4().hex[:8]}",
-            title="Settings (Private Only)",
-            description="Open settings in private chat with the bot.",
-            input_message_content=InputTextMessageContent(
-                message_text=bm.settings_private_only(),
-                parse_mode="HTML",
-            ),
-            reply_markup=types.InlineKeyboardMarkup(
-                inline_keyboard=[
-                    [
-                        types.InlineKeyboardButton(
-                            text="⚙️ Open Settings in DM",
-                            url=f"https://t.me/{bot_username}?start=settings",
-                        )
-                    ]
-                ]
-            ),
-        )
-        await message.answer_guest_query(result=article)
-        return
-
-    if command == "/stats":
-        article = InlineQueryResultArticle(
-            id=f"guest_stats_{uuid.uuid4().hex[:8]}",
-            title="Statistics",
-            description="View bot statistics in DM.",
-            input_message_content=InputTextMessageContent(
-                message_text="📊 <b>MaxLoad Statistics</b>\n\nInteractive charts and stats are available in private chat.",
-                parse_mode="HTML",
-            ),
-            reply_markup=types.InlineKeyboardMarkup(
-                inline_keyboard=[
-                    [
-                        types.InlineKeyboardButton(
-                            text="📊 View Stats in DM",
-                            url=f"https://t.me/{bot_username}?start=stats",
-                        )
-                    ]
-                ]
-            ),
-        )
-        await message.answer_guest_query(result=article)
-        return
-
-    detected = extract_link_from_guest_message(message)
+    detected = extract_link_from_guest_message(message, ignore_reply=reply_to_bot)
     if not detected:
-        # Summoned without a supported link (e.g. @bot, @bot /help, @bot hello)
+        # If user replied to the bot's own message and did NOT include a supported link:
+        # DO NOT TRIGGER (ignore comments/reactions/replies on bot downloads).
+        if reply_to_bot:
+            logging.debug(
+                "Ignoring reply to bot message without a supported link: user_id=%s guest_query_id=%s",
+                user_id,
+                guest_query_id,
+            )
+            return
+
+        # If bot was not directly mentioned/tagged and no link was provided:
+        # DO NOT TRIGGER.
+        if not directly_mentioned:
+            logging.debug(
+                "Ignoring guest message without mention and without supported link: user_id=%s guest_query_id=%s",
+                user_id,
+                guest_query_id,
+            )
+            return
+
+        # Check for commands in guest message (e.g. "@bot /settings", "@bot /stats", "/settings@bot")
+        stripped = text.strip()
+        command_match = re.search(r"^@\w+\s+(/\w+)", stripped) or re.search(
+            r"^(/[\w@]+)", stripped
+        )
+        command = command_match.group(1).split("@")[0].lower() if command_match else None
+
+        if command == "/settings":
+            article = InlineQueryResultArticle(
+                id=f"guest_settings_{uuid.uuid4().hex[:8]}",
+                title="Settings (Private Only)",
+                description="Open settings in private chat with the bot.",
+                input_message_content=InputTextMessageContent(
+                    message_text=bm.settings_private_only(),
+                    parse_mode="HTML",
+                ),
+                reply_markup=types.InlineKeyboardMarkup(
+                    inline_keyboard=[
+                        [
+                            types.InlineKeyboardButton(
+                                text="⚙️ Open Settings in DM",
+                                url=f"https://t.me/{bot_username}?start=settings",
+                            )
+                        ]
+                    ]
+                ),
+            )
+            await message.answer_guest_query(result=article)
+            return
+
+        if command == "/stats":
+            article = InlineQueryResultArticle(
+                id=f"guest_stats_{uuid.uuid4().hex[:8]}",
+                title="Statistics",
+                description="View bot statistics in DM.",
+                input_message_content=InputTextMessageContent(
+                    message_text="📊 <b>MaxLoad Statistics</b>\n\nInteractive charts and stats are available in private chat.",
+                    parse_mode="HTML",
+                ),
+                reply_markup=types.InlineKeyboardMarkup(
+                    inline_keyboard=[
+                        [
+                            types.InlineKeyboardButton(
+                                text="📊 View Stats in DM",
+                                url=f"https://t.me/{bot_username}?start=stats",
+                            )
+                        ]
+                    ]
+                ),
+            )
+            await message.answer_guest_query(result=article)
+            return
+
+        # Summoned directly without a supported link (e.g. @bot, @bot /help, @bot hello)
         article = InlineQueryResultArticle(
             id=f"guest_help_{uuid.uuid4().hex[:8]}",
             title="MaxLoad — Guest Mode",
