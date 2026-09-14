@@ -115,19 +115,24 @@ def format_history_entry(item: Any) -> str:
 
     extras_str = f" ({', '.join(extras)})" if extras else ""
 
-    lines = [
-        "<blockquote expandable>",
+    body_lines = [
         f"{icon} <b>{service_title}</b> | {media_link}",
         f"{user_display} | {status_badge}",
         f"⏱ <i>{created_str}</i>{extras_str}",
     ]
+    if url and url != "#":
+        clean_url = url.split("?")[0] if len(url) > 50 else url
+        if len(clean_url) > 45:
+            clean_url = clean_url[:42] + "..."
+        body_lines.append(f"🔗 <a href=\"{url}\">{html.escape(clean_url)}</a>")
+
     err_msg = getattr(item, "error_message", None)
     if status_str != "success" and err_msg:
         err_snippet = html.escape(str(err_msg)[:80])
-        lines.append(f"⚠️ <code>{err_snippet}</code>")
-    lines.append("</blockquote>")
+        body_lines.append(f"⚠️ <code>{err_snippet}</code>")
 
-    return "\n".join(lines)
+    body_content = "\n".join(body_lines)
+    return f"<blockquote expandable>{body_content}</blockquote>"
 
 
 async def get_history_data(dialog_manager: DialogManager, **kwargs) -> dict[str, Any]:
@@ -162,7 +167,7 @@ async def get_history_data(dialog_manager: DialogManager, **kwargs) -> dict[str,
 
     if items:
         formatted_items = [format_history_entry(it) for it in items]
-        history_text = "\n\n".join(formatted_items)
+        history_text = "\n".join(formatted_items)
     else:
         history_text = "<i>No download records found matching criteria.</i>"
 
@@ -428,7 +433,7 @@ history_window = Window(
     Format(
         "📥 <b>Download History</b>\n"
         "Filter: <b>{service_filter}</b> | Status: <b>{status_filter}</b>\n"
-        "Total: <b>{total_count}</b> downloads (Page <b>{page}</b>/<b>{total_pages}</b>)\n\n"
+        "Total: <b>{total_count}</b> downloads (Page <b>{page}</b>/<b>{total_pages}</b>)\n"
         "{history_text}"
     ),
     LinkPreview(is_disabled=True),
