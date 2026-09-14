@@ -329,6 +329,11 @@ async def process_instagram_video(
         on_rate_limit=_handle_backpressure,
         on_queue_busy=_handle_backpressure,
         on_unexpected_error=_handle_unexpected_error,
+        user_id=message.from_user.id if message.from_user else None,
+        chat_id=message.chat.id,
+        chat_type=getattr(message.chat, "type", None),
+        service="instagram",
+        url=db_video_url,
     )
     return sent_message is not None
 

@@ -406,6 +406,12 @@ async def download_video(message: types.Message, direct_url: Optional[str] = Non
             inspect_metrics=_inspect_metrics,
             on_rate_limit=_handle_backpressure,
             on_queue_busy=_handle_backpressure,
+            user_id=message.from_user.id if message.from_user else None,
+            chat_id=message.chat.id,
+            chat_type=getattr(message.chat, "type", None),
+            service="youtube",
+            url=direct_url or yt.get("webpage_url") or cache_key,
+            title=yt.get("title"),
         )
         if sent_message and getattr(sent_message, "video", None):
             request_lease.mark_success()
@@ -589,6 +595,12 @@ async def download_music(message: types.Message, direct_url: Optional[str] = Non
             send_downloaded=_send_downloaded,
             cleanup_path=remove_file,
             on_after_send=_after_send,
+            user_id=message.from_user.id if message.from_user else None,
+            chat_id=message.chat.id,
+            chat_type=message.chat.type,
+            service="youtube_audio",
+            url=yt.get("webpage_url") or url,
+            title=yt.get("title"),
         )
         if not result or result.from_cache:
             return
@@ -747,6 +759,12 @@ async def download_youtube_mp3_callback(call: types.CallbackQuery):
             prepare_metadata=_prepare_metadata,
             send_downloaded=_send_downloaded,
             cleanup_path=remove_file,
+            user_id=call.from_user.id if call.from_user else None,
+            chat_id=call.message.chat.id if call.message else None,
+            chat_type=call.message.chat.type if call.message else None,
+            service="youtube_audio",
+            url=url,
+            title=yt.get("title"),
         )
     except (DownloadRateLimitError, DownloadQueueBusyError, DownloadTooLargeError) as e:
         await handle_download_backpressure_error(

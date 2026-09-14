@@ -1,6 +1,7 @@
 import asyncio
 from typing import Any, Awaitable, Callable, Optional, Sequence, TypeVar
 
+from services.logger import logger as logging
 from services.media.resolver import resolve_cached_media_items
 from utils.download_manager import (
     DownloadMetrics,
@@ -122,12 +123,48 @@ async def run_single_media_flow(
     on_queue_busy: Optional[Callable[[DownloadQueueBusyError], Awaitable[None]]] = None,
     on_too_large: Optional[Callable[[DownloadTooLargeError], Awaitable[None]]] = None,
     on_unexpected_error: Optional[Callable[[Exception], Awaitable[None]]] = None,
+    user_id: Optional[int] = None,
+    chat_id: Optional[int] = None,
+    chat_type: Optional[str] = None,
+    service: Optional[str] = None,
+    url: Optional[str] = None,
+    title: Optional[str] = None,
 ) -> Optional[T]:
     metrics: DownloadMetrics | None = None
     inflight_future: asyncio.Future[Optional[str]] | None = None
     owns_inflight = False
     resolved_file_id: Optional[str] = None
     ignored_cached_file_ids: set[str] = set()
+
+    async def _safe_record(
+        *,
+        status: str,
+        file_id: Optional[str] = None,
+        file_size_bytes: Optional[int] = None,
+        duration_seconds: Optional[float] = None,
+        error_message: Optional[str] = None,
+    ) -> None:
+        record_fn = getattr(db_service, "record_download", None)
+        if not callable(record_fn) or user_id is None:
+            return
+        try:
+            await record_fn(
+                user_id=user_id,
+                chat_id=chat_id,
+                chat_type=chat_type,
+                service=service or "unknown",
+                url=url or cache_key,
+                title=title,
+                file_type=cache_file_type,
+                file_id=file_id,
+                file_size_bytes=file_size_bytes,
+                duration_seconds=duration_seconds,
+                status=status,
+                error_message=error_message,
+            )
+        except Exception as exc:
+            logging.debug("Failed to record download history: %s", exc)
+
     try:
         while True:
             cached_file_id = await db_service.get_file_id(cache_key)
@@ -138,6 +175,14 @@ async def run_single_media_flow(
                 if sent_cached is None:
                     ignored_cached_file_ids.add(cached_file_id)
                     continue
+                await _safe_record(status="cached", file_id=cached_file_id)
+                if user_id and service:
+                    logging.download_cached(
+                        user_id=user_id,
+                        service=service,
+                        file_type=cache_file_type,
+                        url=url or cache_key,
+                    )
                 if on_after_send:
                     await on_after_send()
                 return sent_cached
@@ -154,6 +199,14 @@ async def run_single_media_flow(
                 if sent_cached is None:
                     ignored_cached_file_ids.add(resolved_file_id)
                     continue
+                await _safe_record(status="cached", file_id=resolved_file_id)
+                if user_id and service:
+                    logging.download_cached(
+                        user_id=user_id,
+                        service=service,
+                        file_type=cache_file_type,
+                        url=url or cache_key,
+                    )
                 if on_after_send:
                     await on_after_send()
                 return sent_cached
@@ -181,25 +234,56 @@ async def run_single_media_flow(
             except Exception as exc:
                 if on_cache_store_error:
                     await _maybe_await(on_cache_store_error(exc))
+
+        size_bytes = getattr(metrics, "size", None)
+        duration_s = getattr(metrics, "elapsed", None)
+        await _safe_record(
+            status="success",
+            file_id=resolved_file_id,
+            file_size_bytes=size_bytes,
+            duration_seconds=duration_s,
+        )
+        if user_id and service:
+            logging.download_success(
+                user_id=user_id,
+                service=service,
+                file_type=cache_file_type,
+                size_bytes=size_bytes,
+                duration_s=duration_s,
+                url=url or cache_key,
+            )
+
         if on_after_send:
             await on_after_send()
         return sent
     except DownloadRateLimitError as exc:
+        await _safe_record(status="error", error_message=str(exc))
+        if user_id and service:
+            logging.download_error(user_id=user_id, service=service, error=exc, url=url or cache_key)
         if on_rate_limit:
             await on_rate_limit(exc)
             return None
         raise
     except DownloadQueueBusyError as exc:
+        await _safe_record(status="error", error_message=str(exc))
+        if user_id and service:
+            logging.download_error(user_id=user_id, service=service, error=exc, url=url or cache_key)
         if on_queue_busy:
             await on_queue_busy(exc)
             return None
         raise
     except DownloadTooLargeError as exc:
+        await _safe_record(status="error", error_message=str(exc))
+        if user_id and service:
+            logging.download_error(user_id=user_id, service=service, error=exc, url=url or cache_key)
         if on_too_large:
             await on_too_large(exc)
             return None
         raise
     except Exception as exc:
+        await _safe_record(status="error", error_message=str(exc))
+        if user_id and service:
+            logging.download_error(user_id=user_id, service=service, error=exc, url=url or cache_key)
         if on_unexpected_error:
             await on_unexpected_error(exc)
             return None

@@ -205,6 +205,11 @@ async def process_spotify(message: types.Message, direct_url: Optional[str] = No
             send_downloaded=_send_downloaded,
             cleanup_path=remove_file,
             on_after_send=_after_send,
+            user_id=message.from_user.id if message.from_user else None,
+            chat_id=message.chat.id,
+            chat_type=getattr(message.chat, "type", None),
+            service="spotify",
+            url=source_url,
         )
     except SpotifyError as exc:
         logging.warning("Spotify metadata error: url=%s error=%s", source_url, exc)

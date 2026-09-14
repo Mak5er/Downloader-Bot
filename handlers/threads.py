@@ -276,6 +276,11 @@ async def process_threads_single_media(
         inspect_metrics=_inspect_metrics,
         on_rate_limit=_handle_backpressure,
         on_queue_busy=_handle_backpressure,
+        user_id=message.from_user.id if message.from_user else None,
+        chat_id=message.chat.id,
+        chat_type=getattr(message.chat, "type", None),
+        service="threads",
+        url=source_url,
     )
     return sent is not None
 

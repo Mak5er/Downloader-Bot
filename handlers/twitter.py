@@ -422,6 +422,21 @@ async def reply_media(message, tweet_id, tweet_media, bot_url, business_id, user
                 message.from_user.id,
                 tweet_id,
             )
+            logging.download_success(
+                "twitter",
+                user_id=message.from_user.id if message.from_user else None,
+                url=post_url,
+            )
+            if db and hasattr(db, "record_download"):
+                await db.record_download(
+                    user_id=message.from_user.id if message.from_user else None,
+                    chat_id=message.chat.id,
+                    chat_type=message.chat.type,
+                    service="twitter",
+                    url=post_url,
+                    title=post_caption[:100] if post_caption else None,
+                    status="success",
+                )
         return delivered
     except Exception as e:
         logging.exception(
@@ -430,6 +445,22 @@ async def reply_media(message, tweet_id, tweet_media, bot_url, business_id, user
             message.from_user.id,
             e,
         )
+        logging.download_error(
+            "twitter",
+            error=str(e),
+            user_id=message.from_user.id if message.from_user else None,
+            url=post_url,
+        )
+        if db and hasattr(db, "record_download"):
+            await db.record_download(
+                user_id=message.from_user.id if message.from_user else None,
+                chat_id=message.chat.id,
+                chat_type=message.chat.type,
+                service="twitter",
+                url=post_url,
+                status="error",
+                error_message=str(e)[:500],
+            )
         await react_to_message(message, "👎", business_id=business_id)
         await message.reply(bm.something_went_wrong())
         return False

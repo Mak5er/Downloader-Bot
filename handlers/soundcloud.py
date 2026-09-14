@@ -273,6 +273,11 @@ async def process_soundcloud(message: types.Message, direct_url: Optional[str] =
             send_downloaded=_send_downloaded,
             cleanup_path=remove_file,
             on_cache_store_error=_on_cache_store_error,
+            user_id=message.from_user.id if message.from_user else None,
+            chat_id=message.chat.id,
+            chat_type=getattr(message.chat, "type", None),
+            service="soundcloud",
+            url=source_url,
             on_after_send=_after_send,
         )
 

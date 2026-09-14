@@ -290,6 +290,12 @@ async def send_inline_youtube_music(
             prepare_metadata=_prepare_metadata,
             send_downloaded=_send_downloaded,
             cleanup_path=remove_file,
+            user_id=actor_user_id,
+            chat_id=None,
+            chat_type="inline",
+            service="youtube_music",
+            url=request.source_url,
+            title=yt.get("title"),
         )
         if result is None:
             return

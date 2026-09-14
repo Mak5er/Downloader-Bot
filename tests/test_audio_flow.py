@@ -200,3 +200,38 @@ async def test_run_audio_flow_cache_store_error_propagates_without_handler(tmp_p
 
     prepared.cleanup.assert_called_once_with()
     kwargs["cleanup_path"].assert_awaited_once_with(metrics.path)
+
+
+@pytest.mark.asyncio
+async def test_run_audio_flow_records_download_history(tmp_path):
+    db = _make_db()
+    db.record_download = AsyncMock()
+    metrics = _make_metrics(tmp_path)
+    kwargs = _make_flow_kwargs(
+        db,
+        download_audio=AsyncMock(return_value=metrics),
+        user_id=777,
+        chat_id=-1001,
+        chat_type="supergroup",
+        service="youtube",
+        url="https://youtube.com/watch?v=123",
+        title="Test Track",
+    )
+
+    result = await run_audio_flow(**kwargs)
+    assert result is not None
+    db.record_download.assert_awaited_once_with(
+        user_id=777,
+        chat_id=-1001,
+        chat_type="supergroup",
+        service="youtube",
+        url="https://youtube.com/watch?v=123",
+        title="Test Track",
+        file_type="audio",
+        file_id="sent-file-id",
+        file_size_bytes=metrics.size,
+        duration_seconds=metrics.elapsed,
+        status="success",
+        error_message=None,
+    )
+

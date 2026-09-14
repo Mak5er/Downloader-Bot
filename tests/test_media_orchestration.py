@@ -279,3 +279,67 @@ async def test_run_media_group_flow_calls_on_empty_when_nothing_resolved():
 
     assert result is False
     assert events == ["empty"]
+
+
+@pytest.mark.asyncio
+async def test_run_single_media_flow_records_download_history():
+    db = _FakeDb()
+    db.record_download = AsyncMock()
+
+    cache_key = "https://x.com/user/status/999"
+
+    async def _noop(*_args, **_kwargs):
+        return None
+
+    async def _download_media():
+        return DownloadMetrics(
+            url=cache_key,
+            path="downloads/video.mp4",
+            size=2048,
+            elapsed=0.5,
+            used_multipart=False,
+            resumed=False,
+        )
+
+    async def _send_downloaded(_path):
+        return {"video": SimpleNamespace(file_id="vid_123")}
+
+    result = await orchestration.run_single_media_flow(
+        cache_key=cache_key,
+        cache_file_type="video",
+        db_service=db,
+        upload_status_text="Uploading...",
+        upload_action="upload_video",
+        update_status=_noop,
+        send_chat_action=_noop,
+        send_cached=_noop,
+        download_media=_download_media,
+        send_downloaded=_send_downloaded,
+        extract_file_id=lambda msg: msg["video"].file_id,
+        cleanup_path=_noop,
+        delete_status_message=_noop,
+        on_missing_media=_noop,
+        user_id=42,
+        chat_id=100,
+        chat_type="private",
+        service="twitter",
+        url=cache_key,
+        title="Sample Video",
+    )
+
+    assert result is not None
+    db.record_download.assert_awaited_once_with(
+        user_id=42,
+        chat_id=100,
+        chat_type="private",
+        service="twitter",
+        url=cache_key,
+        title="Sample Video",
+        file_type="video",
+        file_id="vid_123",
+        file_size_bytes=2048,
+        duration_seconds=0.5,
+        status="success",
+        error_message=None,
+    )
+
