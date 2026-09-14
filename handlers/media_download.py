@@ -23,13 +23,25 @@ from services.links.detection import extract_supported_link, extract_supported_l
 logging = logging.bind(service="media_download")
 
 _MAX_BATCH_LINKS = max(1, int(BATCH_LINKS_MAX_ITEMS))
-_ALBUM_SERVICES = {"instagram", "threads", "tiktok", "pinterest", "twitter"}
+_ALBUM_SERVICES = {
+    "instagram",
+    "threads",
+    "tiktok",
+    "pinterest",
+    "twitter",
+    "spotify",
+    "soundcloud",
+    "youtube",
+}
 
 
 async def _process_inline_album_deeplink(message: types.Message, payload: str) -> bool:
-    if not payload.startswith("album_"):
+    if not (payload.startswith("album_") or payload.startswith("dl_")):
         return False
-    token = payload.removeprefix("album_").strip()
+    if payload.startswith("album_"):
+        token = payload.removeprefix("album_").strip()
+    else:
+        token = payload.removeprefix("dl_").strip()
     if not token:
         return False
 

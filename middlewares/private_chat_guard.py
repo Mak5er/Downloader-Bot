@@ -2,7 +2,11 @@ from typing import Any, Awaitable, Callable, Dict
 
 from aiogram import BaseMiddleware
 from aiogram.enums import ChatType
-from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError, TelegramNotFound
+from aiogram.exceptions import (
+    TelegramBadRequest,
+    TelegramForbiddenError,
+    TelegramNotFound,
+)
 from aiogram.types import Message
 
 import keyboards as kb
@@ -26,6 +30,9 @@ class PrivateChatGuardMiddleware(BaseMiddleware):
         if not isinstance(event, Message):
             return await handler(event, data)
 
+        if getattr(event, "guest_query_id", None):
+            return await handler(event, data)
+
         if event.chat.type == ChatType.PRIVATE:
             return await handler(event, data)
 
@@ -43,6 +50,7 @@ class PrivateChatGuardMiddleware(BaseMiddleware):
             return await handler(event, data)
 
         import time
+
         now = time.monotonic()
         cached = _can_dm_cache.get(event.from_user.id)
         if cached is not None and now - cached[0] <= _CAN_DM_CACHE_TTL:
@@ -66,7 +74,9 @@ class PrivateChatGuardMiddleware(BaseMiddleware):
 
         if pending:
             try:
-                await bot.delete_message(pending.notice_chat_id, pending.notice_message_id)
+                await bot.delete_message(
+                    pending.notice_chat_id, pending.notice_message_id
+                )
             except Exception:
                 pass
 

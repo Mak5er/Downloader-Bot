@@ -28,9 +28,7 @@ def settings():
 
 
 def settings_private_only():
-    return (
-        "Settings are available only in private chat. Open DM with the bot to change preferences."
-    )
+    return "Settings are available only in private chat. Open DM with the bot to change preferences."
 
 
 def get_field_text(field: str):
@@ -49,8 +47,7 @@ def get_field_text(field: str):
             "Toggle additional info buttons under downloaded media."
         ),
         "url_button": (
-            "<b>🔗 URL Button</b>\n"
-            "Show or hide a button with the original post link."
+            "<b>🔗 URL Button</b>\nShow or hide a button with the original post link."
         ),
         "audio_button": (
             "<b>🎧 MP3 Button</b>\n"
@@ -79,7 +76,9 @@ def get_field_text(field: str):
             "• <b>FLAC / Original</b>: Uncompressed lossless audio where available."
         ),
     }
-    return texts.get(field, "<b>Settings</b>\nThis option doesn't have a description yet.")
+    return texts.get(
+        field, "<b>Settings</b>\nThis option doesn't have a description yet."
+    )
 
 
 def captions(user_captions, post_caption, bot_url, *, limit: int = 1024):
@@ -97,7 +96,9 @@ def captions(user_captions, post_caption, bot_url, *, limit: int = 1024):
             cut = cut[:amp]
         return cut
 
-    footer = '<tg-emoji emoji-id="5283080528818360566">🚀</tg-emoji> Powered by <a href="{bot_url}">MaxLoad</a>'.format(bot_url=bot_url)
+    footer = '<tg-emoji emoji-id="5283080528818360566">🚀</tg-emoji> Powered by <a href="{bot_url}">MaxLoad</a>'.format(
+        bot_url=bot_url
+    )
 
     if user_captions == "on" and post_caption:
         body = html.escape(str(post_caption))
@@ -109,7 +110,9 @@ def captions(user_captions, post_caption, bot_url, *, limit: int = 1024):
 
         if len(body) > budget:
             suffix = "…"
-            body = _truncate_escaped(body, max(0, budget - len(suffix))).rstrip() + suffix
+            body = (
+                _truncate_escaped(body, max(0, budget - len(suffix))).rstrip() + suffix
+            )
 
         return f"{body}{sep}{footer}"
 
@@ -122,7 +125,6 @@ def downloading_audio_status():
 
 def downloading_video_status():
     return "<tg-emoji emoji-id='5375464961822695044'>🎬</tg-emoji> Downloading video..."
-
 
 
 def uploading_status():
@@ -142,7 +144,9 @@ def duplicate_link_processing():
 
 
 def duplicate_link_recently_processed():
-    return "This link was just handled. If you still need it, try again in a few seconds."
+    return (
+        "This link was just handled. If you still need it, try again in a few seconds."
+    )
 
 
 def settings_admin_only():
@@ -343,7 +347,9 @@ def batch_links_finished(total: int):
 
 
 def timeout_error():
-    return "Request timed out. The source may be slow right now. Please try again later."
+    return (
+        "Request timed out. The source may be slow right now. Please try again later."
+    )
 
 
 def something_went_wrong():
@@ -364,3 +370,31 @@ def audio_too_large():
 
 def nothing_found():
     return "No media found. Check that the link is public, not expired, and points directly to a post or video."
+
+
+def guest_help_message(bot_username: str) -> str:
+    return (
+        "👋 <b>MaxLoad — Guest Mode</b>\n\n"
+        "You summoned the bot in this chat! To download media, mention me with a link from any supported platform:\n\n"
+        "• <b>TikTok</b> (videos, photos)\n"
+        "• <b>Instagram & Threads</b> (reels, photos)\n"
+        "• <b>YouTube</b> (videos, music)\n"
+        "• <b>Twitter / X</b> (videos, gifs)\n"
+        "• <b>SoundCloud & Spotify</b> (music)\n"
+        "• <b>Pinterest</b> (pins, videos)\n\n"
+        "<i>💡 Tip: Add me to this group or open a direct chat with @{bot_username} for full features and settings!</i>"
+    ).format(bot_username=bot_username)
+
+
+def guest_downloading_status(service_name: str) -> str:
+    return (
+        "⏳ <b>{service_name} media is being prepared...</b>\n"
+        "Please wait a moment while the media is processed."
+    ).format(service_name=service_name)
+
+
+def guest_unsupported_link() -> str:
+    return (
+        "Sorry, no supported media link was found in your mention. "
+        "Please include a link from TikTok, Instagram, YouTube, X, SoundCloud, Spotify, or Pinterest."
+    )

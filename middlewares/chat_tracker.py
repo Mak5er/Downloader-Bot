@@ -16,7 +16,9 @@ class ChatTrackerMiddleware(BaseMiddleware):
         super().__init__()
         self._db = database or db
         self._bot = bot
-        self._user_touch_cache: dict[int, tuple[float, tuple[str, Optional[str], Optional[str], bool]]] = {}
+        self._user_touch_cache: dict[
+            int, tuple[float, tuple[str, Optional[str], Optional[str], bool]]
+        ] = {}
         self._group_touch_cache: dict[int, tuple[float, tuple[Any, ...]]] = {}
         self._member_count_cache: dict[int, tuple[float, int]] = {}
         self._member_touch_cache: dict[tuple[int, int], float] = {}
@@ -34,7 +36,10 @@ class ChatTrackerMiddleware(BaseMiddleware):
             await self._process_message(event, bot=bot)
 
         request_id = str(uuid.uuid4())[:12]
-        user_id = getattr(getattr(event, "from_user", None), "id", None)
+        caller_user = getattr(event, "guest_bot_caller_user", None) or getattr(
+            event, "from_user", None
+        )
+        user_id = getattr(caller_user, "id", None)
         with logging.context(request_id=request_id, flow="handler", user_id=user_id):
             return await handler(event, data)
 
@@ -45,8 +50,12 @@ class ChatTrackerMiddleware(BaseMiddleware):
         bot: Optional[Bot] = None,
     ) -> None:
         if hasattr(message_or_chat, "chat"):
-            chat = message_or_chat.chat
-            user = getattr(message_or_chat, "from_user", None)
+            chat = getattr(message_or_chat, "guest_bot_caller_chat", None) or getattr(
+                message_or_chat, "chat", None
+            )
+            user = getattr(message_or_chat, "guest_bot_caller_user", None) or getattr(
+                message_or_chat, "from_user", None
+            )
             resolved_bot = (
                 user_or_bot
                 if isinstance(user_or_bot, Bot)
@@ -58,6 +67,11 @@ class ChatTrackerMiddleware(BaseMiddleware):
             resolved_bot = bot or getattr(chat, "bot", None) or self._bot
 
         if not chat:
+            return
+
+        if getattr(message_or_chat, "guest_query_id", None):
+            if user and not getattr(user, "is_bot", False):
+                await self._ensure_user(user, has_dm=False)
             return
 
         # Check if group was upgraded to supergroup
@@ -102,7 +116,7 @@ class ChatTrackerMiddleware(BaseMiddleware):
 
     async def _ensure_user(self, user: User, has_dm: bool | str = False) -> None:
         if isinstance(has_dm, str):
-            has_dm_bool = (has_dm == "private")
+            has_dm_bool = has_dm == "private"
         else:
             has_dm_bool = bool(has_dm)
 
@@ -119,9 +133,14 @@ class ChatTrackerMiddleware(BaseMiddleware):
             cached_has_dm = cached_sig[3]
             # If already marked with has_dm=True, group interaction within TTL skips DB write
             if cached_has_dm and not has_dm_bool:
-                if now - cached_time <= self._touch_ttl_seconds and cached_sig[:3] == signature[:3]:
+                if (
+                    now - cached_time <= self._touch_ttl_seconds
+                    and cached_sig[:3] == signature[:3]
+                ):
                     return
-            elif cached_sig == signature and now - cached_time <= self._touch_ttl_seconds:
+            elif (
+                cached_sig == signature and now - cached_time <= self._touch_ttl_seconds
+            ):
                 return
 
         upsert_user_fn = getattr(self._db, "upsert_user", None)
@@ -188,7 +207,9 @@ class ChatTrackerMiddleware(BaseMiddleware):
                 member_count = await bot.get_chat_member_count(chat_id)
                 self._member_count_cache[chat_id] = (now, member_count)
             except Exception as exc:
-                logging.debug("Failed to get member count for chat %s: %s", chat_id, exc)
+                logging.debug(
+                    "Failed to get member count for chat %s: %s", chat_id, exc
+                )
                 if cached_count:
                     member_count = cached_count[1]
         elif cached_count:
@@ -250,9 +271,8 @@ class ChatTrackerMiddleware(BaseMiddleware):
         if cached and now - cached <= self._touch_ttl_seconds:
             return
 
-        record_member_fn = (
-            getattr(self._db, "record_group_member", None)
-            or getattr(self._db, "add_group_member", None)
+        record_member_fn = getattr(self._db, "record_group_member", None) or getattr(
+            self._db, "add_group_member", None
         )
         if callable(record_member_fn):
             await record_member_fn(group_id=actual_group_id, user_id=user_id)
@@ -276,6 +296,8 @@ class ChatTrackerMiddleware(BaseMiddleware):
         if callable(migrate_fn):
             title = chat.title or getattr(chat, "full_name", None)
             username = getattr(chat, "username", None)
-            await migrate_fn(old_chat_id, new_chat_id, new_title=title, new_username=username)
+            await migrate_fn(
+                old_chat_id, new_chat_id, new_title=title, new_username=username
+            )
 
         await self._ensure_group(chat, bot=bot)

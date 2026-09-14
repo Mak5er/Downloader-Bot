@@ -107,6 +107,14 @@ async def send_welcome(message: types.Message):
                     pass
             elif payload.startswith("src_"):
                 source = payload[4:]
+            elif payload == "settings":
+                await user_mod.update_info(message)
+                await user_mod.settings_menu(message)
+                return
+            elif payload == "stats":
+                await user_mod.update_info(message)
+                await user_mod.stats_command(message)
+                return
             else:
                 if await user_mod._process_inline_album_deeplink(message, payload):
                     await user_mod.update_info(message)

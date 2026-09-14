@@ -7,6 +7,7 @@ INLINE_SERVICE_ICONS: dict[str, str] = {
     "threads": _favicon_url("https://www.threads.com"),
     "pinterest": _favicon_url("https://www.pinterest.com"),
     "soundcloud": _favicon_url("https://soundcloud.com"),
+    "spotify": _favicon_url("https://open.spotify.com"),
     "tiktok": _favicon_url("https://www.tiktok.com"),
     "twitter": _favicon_url("https://twitter.com"),
     "youtube": _favicon_url("https://www.youtube.com"),

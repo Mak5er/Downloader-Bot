@@ -5,7 +5,9 @@ from aiogram.types import Message, CallbackQuery, InlineQuery
 
 from app_context import db
 
-_ACCESS_TEMPORARILY_UNAVAILABLE = "Service is temporarily unavailable. Please try again later."
+_ACCESS_TEMPORARILY_UNAVAILABLE = (
+    "Service is temporarily unavailable. Please try again later."
+)
 
 
 class UserBannedMiddleware(BaseMiddleware):
@@ -31,10 +33,12 @@ class UserBannedMiddleware(BaseMiddleware):
 
     async def on_pre_process_message(self, message: Message, data: dict):
         user_status = await self._get_status(message.from_user.id)
-        if user_status == 'ban':
-            if message.chat.type == 'private':
-                await message.answer(('You are banned please contact to @mak5er for more information!'),
-                                     parse_mode='HTML')
+        if user_status == "ban":
+            if message.chat.type == "private":
+                await message.answer(
+                    ("You are banned please contact to @mak5er for more information!"),
+                    parse_mode="HTML",
+                )
             data["_skip_handler"] = True
             return
         if user_status == "restricted":
@@ -43,15 +47,21 @@ class UserBannedMiddleware(BaseMiddleware):
             data["_skip_handler"] = True
             return
 
-    async def on_pre_process_callback_query(self, callback_query: CallbackQuery, data: dict):
+    async def on_pre_process_callback_query(
+        self, callback_query: CallbackQuery, data: dict
+    ):
         user_status = await self._get_status(callback_query.from_user.id)
-        if user_status == 'ban':
-            await callback_query.answer(('You are banned please contact to @mak5er for more information!'),
-                                        show_alert=True)
+        if user_status == "ban":
+            await callback_query.answer(
+                ("You are banned please contact to @mak5er for more information!"),
+                show_alert=True,
+            )
             data["_skip_handler"] = True
             return
         if user_status == "restricted":
-            await callback_query.answer(_ACCESS_TEMPORARILY_UNAVAILABLE, show_alert=True)
+            await callback_query.answer(
+                _ACCESS_TEMPORARILY_UNAVAILABLE, show_alert=True
+            )
             data["_skip_handler"] = True
             return
 
@@ -61,8 +71,41 @@ class UserBannedMiddleware(BaseMiddleware):
             data["_skip_handler"] = True
             return
 
+    async def on_pre_process_guest_message(self, message: Message, data: dict):
+        user = getattr(message, "guest_bot_caller_user", None) or getattr(
+            message, "from_user", None
+        )
+        user_id = getattr(user, "id", None)
+        if not user_id:
+            return
+        user_status = await self._get_status(user_id)
+        if user_status in {"ban", "restricted"}:
+            if hasattr(message, "answer_guest_query"):
+                from aiogram.types import (
+                    InlineQueryResultArticle,
+                    InputTextMessageContent,
+                )
+
+                try:
+                    await message.answer_guest_query(
+                        InlineQueryResultArticle(
+                            id="banned_guest",
+                            title="Access Restricted",
+                            description="You are restricted from using this bot.",
+                            input_message_content=InputTextMessageContent(
+                                message_text="You are restricted from using this bot."
+                            ),
+                        )
+                    )
+                except Exception:
+                    pass
+            data["_skip_handler"] = True
+            return
+
     async def __call__(self, handler, event, data):
-        if isinstance(event, Message):
+        if getattr(event, "guest_query_id", None):
+            await self.on_pre_process_guest_message(event, data)
+        elif isinstance(event, Message):
             await self.on_pre_process_message(event, data)
         elif isinstance(event, CallbackQuery):
             await self.on_pre_process_callback_query(event, data)

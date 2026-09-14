@@ -28,7 +28,9 @@ def _validate_custom_api_url(value: str, name: str) -> str:
         raise RuntimeError(f"Invalid URL for {name}: {exc}") from exc
 
     if parsed.scheme not in ("http", "https"):
-        raise RuntimeError(f"Invalid scheme for {name}: {parsed.scheme}. Must be http or https.")
+        raise RuntimeError(
+            f"Invalid scheme for {name}: {parsed.scheme}. Must be http or https."
+        )
 
     host = (parsed.hostname or "").strip("[]")
     if not host:
@@ -59,14 +61,18 @@ def _validate_cobalt_api_url(value: str, name: str) -> str:
         addr = ipaddress.ip_address(host)
         for net in _PRIVATE_IP_RANGES:
             if addr in net:
-                raise RuntimeError(f"Host {host} in {name} resolves to a private/internal IP range.")
+                raise RuntimeError(
+                    f"Host {host} in {name} resolves to a private/internal IP range."
+                )
     except ValueError:
         pass
 
     return value
 
 
-def _read_env(name: str, *, required: bool = False, aliases: tuple[str, ...] = ()) -> str | None:
+def _read_env(
+    name: str, *, required: bool = False, aliases: tuple[str, ...] = ()
+) -> str | None:
     value = os.getenv(name)
     if value is None:
         for alias in aliases:
@@ -82,7 +88,9 @@ def _read_env(name: str, *, required: bool = False, aliases: tuple[str, ...] = (
     return value
 
 
-def _read_int_env(name: str, *, required: bool = False, aliases: tuple[str, ...] = ()) -> int | None:
+def _read_int_env(
+    name: str, *, required: bool = False, aliases: tuple[str, ...] = ()
+) -> int | None:
     value = _read_env(name, required=required, aliases=aliases)
     if value is None:
         return None
@@ -92,7 +100,9 @@ def _read_int_env(name: str, *, required: bool = False, aliases: tuple[str, ...]
         raise RuntimeError(f"Environment variable {name} must be an integer.") from exc
 
 
-def _read_float_env(name: str, *, required: bool = False, aliases: tuple[str, ...] = ()) -> float | None:
+def _read_float_env(
+    name: str, *, required: bool = False, aliases: tuple[str, ...] = ()
+) -> float | None:
     value = _read_env(name, required=required, aliases=aliases)
     if value is None:
         return None
@@ -106,7 +116,8 @@ BOT_TOKEN = _read_env("BOT_TOKEN", required=True)
 DATABASE_URL = _read_env("DATABASE_URL", required=True)
 ADMIN_ID = _read_int_env("ADMIN_ID", required=True, aliases=("admin_id",))
 CUSTOM_API_URL = _validate_custom_api_url(
-    _read_env("CUSTOM_API_URL", required=True, aliases=("custom_api_url",)) or "", "CUSTOM_API_URL"
+    _read_env("CUSTOM_API_URL", required=True, aliases=("custom_api_url",)) or "",
+    "CUSTOM_API_URL",
 )
 MEASUREMENT_ID = _read_env("MEASUREMENT_ID")
 API_SECRET = _read_env("API_SECRET")
@@ -124,44 +135,76 @@ COBALT_API_KEY = _read_env("COBALT_API_KEY")
 SPOTIFY_CLIENT_ID = _read_env("SPOTIFY_CLIENT_ID")
 SPOTIFY_CLIENT_SECRET = _read_env("SPOTIFY_CLIENT_SECRET")
 SPOTIFY_MARKET = _read_env("SPOTIFY_MARKET") or "UA"
-BOT_POLLING_TASKS_CONCURRENCY_LIMIT = _read_int_env("BOT_POLLING_TASKS_CONCURRENCY_LIMIT") or 256
+BOT_POLLING_TASKS_CONCURRENCY_LIMIT = (
+    _read_int_env("BOT_POLLING_TASKS_CONCURRENCY_LIMIT") or 256
+)
 BOT_SESSION_CONNECTION_LIMIT = _read_int_env("BOT_SESSION_CONNECTION_LIMIT") or 400
 DB_POOL_SIZE = _read_int_env("DB_POOL_SIZE") or 5
 DB_MAX_OVERFLOW = _read_int_env("DB_MAX_OVERFLOW") or 10
 DB_POOL_TIMEOUT = _read_float_env("DB_POOL_TIMEOUT") or 15.0
 ANTIFLOOD_MESSAGE_LIMIT = _read_int_env("ANTIFLOOD_MESSAGE_LIMIT") or 4
-ANTIFLOOD_MESSAGE_WINDOW_SECONDS = _read_float_env("ANTIFLOOD_MESSAGE_WINDOW_SECONDS") or 2.0
+ANTIFLOOD_MESSAGE_WINDOW_SECONDS = (
+    _read_float_env("ANTIFLOOD_MESSAGE_WINDOW_SECONDS") or 2.0
+)
 ANTIFLOOD_CALLBACK_LIMIT = _read_int_env("ANTIFLOOD_CALLBACK_LIMIT") or 6
-ANTIFLOOD_CALLBACK_WINDOW_SECONDS = _read_float_env("ANTIFLOOD_CALLBACK_WINDOW_SECONDS") or 2.0
+ANTIFLOOD_CALLBACK_WINDOW_SECONDS = (
+    _read_float_env("ANTIFLOOD_CALLBACK_WINDOW_SECONDS") or 2.0
+)
 ANTIFLOOD_INLINE_LIMIT = _read_int_env("ANTIFLOOD_INLINE_LIMIT") or 4
-ANTIFLOOD_INLINE_WINDOW_SECONDS = _read_float_env("ANTIFLOOD_INLINE_WINDOW_SECONDS") or 3.0
+ANTIFLOOD_INLINE_WINDOW_SECONDS = (
+    _read_float_env("ANTIFLOOD_INLINE_WINDOW_SECONDS") or 3.0
+)
+ANTIFLOOD_GUEST_LIMIT = _read_int_env("ANTIFLOOD_GUEST_LIMIT") or 4
+ANTIFLOOD_GUEST_WINDOW_SECONDS = (
+    _read_float_env("ANTIFLOOD_GUEST_WINDOW_SECONDS") or 3.0
+)
 ANTIFLOOD_GLOBAL_LIMIT = _read_int_env("ANTIFLOOD_GLOBAL_LIMIT") or 8
-ANTIFLOOD_GLOBAL_WINDOW_SECONDS = _read_float_env("ANTIFLOOD_GLOBAL_WINDOW_SECONDS") or 3.0
+ANTIFLOOD_GLOBAL_WINDOW_SECONDS = (
+    _read_float_env("ANTIFLOOD_GLOBAL_WINDOW_SECONDS") or 3.0
+)
 ANTIFLOOD_COOLDOWN_SECONDS = _read_float_env("ANTIFLOOD_COOLDOWN_SECONDS") or 6.0
 ANTIFLOOD_USER_TTL_SECONDS = _read_float_env("ANTIFLOOD_USER_TTL_SECONDS") or 180.0
 ANTIFLOOD_MAX_TRACKED_USERS = _read_int_env("ANTIFLOOD_MAX_TRACKED_USERS") or 50000
-REQUEST_DEDUPE_ACTIVE_TTL_SECONDS = _read_float_env("REQUEST_DEDUPE_ACTIVE_TTL_SECONDS") or 900.0
-REQUEST_DEDUPE_COMPLETED_TTL_SECONDS = _read_float_env("REQUEST_DEDUPE_COMPLETED_TTL_SECONDS") or 12.0
+REQUEST_DEDUPE_ACTIVE_TTL_SECONDS = (
+    _read_float_env("REQUEST_DEDUPE_ACTIVE_TTL_SECONDS") or 900.0
+)
+REQUEST_DEDUPE_COMPLETED_TTL_SECONDS = (
+    _read_float_env("REQUEST_DEDUPE_COMPLETED_TTL_SECONDS") or 12.0
+)
 REQUEST_DEDUPE_MAX_ENTRIES = _read_int_env("REQUEST_DEDUPE_MAX_ENTRIES") or 50000
 DOWNLOAD_QUEUE_MIN_WORKERS = _read_int_env("DOWNLOAD_QUEUE_MIN_WORKERS") or 3
 DOWNLOAD_QUEUE_MAX_WORKERS = _read_int_env("DOWNLOAD_QUEUE_MAX_WORKERS") or 7
 DOWNLOAD_QUEUE_MAX_SIZE = _read_int_env("DOWNLOAD_QUEUE_MAX_SIZE") or 250
-DOWNLOAD_QUEUE_PER_USER_RATE_LIMIT = _read_int_env("DOWNLOAD_QUEUE_PER_USER_RATE_LIMIT") or 4
-DOWNLOAD_QUEUE_PER_USER_WINDOW_SECONDS = _read_float_env("DOWNLOAD_QUEUE_PER_USER_WINDOW_SECONDS") or 10.0
-DOWNLOAD_QUEUE_PER_USER_MAX_PENDING = _read_int_env("DOWNLOAD_QUEUE_PER_USER_MAX_PENDING") or 3
+DOWNLOAD_QUEUE_PER_USER_RATE_LIMIT = (
+    _read_int_env("DOWNLOAD_QUEUE_PER_USER_RATE_LIMIT") or 4
+)
+DOWNLOAD_QUEUE_PER_USER_WINDOW_SECONDS = (
+    _read_float_env("DOWNLOAD_QUEUE_PER_USER_WINDOW_SECONDS") or 10.0
+)
+DOWNLOAD_QUEUE_PER_USER_MAX_PENDING = (
+    _read_int_env("DOWNLOAD_QUEUE_PER_USER_MAX_PENDING") or 3
+)
 DOWNLOAD_QUEUE_PER_USER_PENDING_TIMEOUT_SECONDS = (
     _read_float_env("DOWNLOAD_QUEUE_PER_USER_PENDING_TIMEOUT_SECONDS")
     if _read_float_env("DOWNLOAD_QUEUE_PER_USER_PENDING_TIMEOUT_SECONDS") is not None
     else 20.0
 )
-DOWNLOAD_QUEUE_SCALE_COOLDOWN_SECONDS = _read_float_env("DOWNLOAD_QUEUE_SCALE_COOLDOWN_SECONDS") or 8.0
-DOWNLOAD_QUEUE_IDLE_SCALE_DOWN_SECONDS = _read_float_env("DOWNLOAD_QUEUE_IDLE_SCALE_DOWN_SECONDS") or 35.0
+DOWNLOAD_QUEUE_SCALE_COOLDOWN_SECONDS = (
+    _read_float_env("DOWNLOAD_QUEUE_SCALE_COOLDOWN_SECONDS") or 8.0
+)
+DOWNLOAD_QUEUE_IDLE_SCALE_DOWN_SECONDS = (
+    _read_float_env("DOWNLOAD_QUEUE_IDLE_SCALE_DOWN_SECONDS") or 35.0
+)
 DOWNLOAD_MAX_WORKERS_CAP = _read_int_env("DOWNLOAD_MAX_WORKERS_CAP") or 6
 BATCH_LINKS_MAX_ITEMS = _read_int_env("BATCH_LINKS_MAX_ITEMS") or 6
 BATCH_LINKS_MIN_CONCURRENCY = _read_int_env("BATCH_LINKS_MIN_CONCURRENCY") or 1
 BATCH_LINKS_MAX_CONCURRENCY = _read_int_env("BATCH_LINKS_MAX_CONCURRENCY") or 4
-BATCH_LINKS_PARALLEL_QUEUE_DEPTH_THRESHOLD = _read_int_env("BATCH_LINKS_PARALLEL_QUEUE_DEPTH_THRESHOLD") or 4
-BATCH_LINKS_PARALLEL_ACTIVE_JOBS_THRESHOLD = _read_int_env("BATCH_LINKS_PARALLEL_ACTIVE_JOBS_THRESHOLD") or 5
+BATCH_LINKS_PARALLEL_QUEUE_DEPTH_THRESHOLD = (
+    _read_int_env("BATCH_LINKS_PARALLEL_QUEUE_DEPTH_THRESHOLD") or 4
+)
+BATCH_LINKS_PARALLEL_ACTIVE_JOBS_THRESHOLD = (
+    _read_int_env("BATCH_LINKS_PARALLEL_ACTIVE_JOBS_THRESHOLD") or 5
+)
 MAX_FILE_SIZE = _read_int_env("MAX_FILE_SIZE") or int(1.5 * 1024 * 1024 * 1024)
 
 BOT_COMMANDS = [

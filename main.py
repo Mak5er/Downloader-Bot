@@ -357,6 +357,7 @@ async def main():
                 dp.message.outer_middleware(middleware)
                 dp.callback_query.outer_middleware(middleware)
                 dp.inline_query.outer_middleware(middleware)
+                dp.guest_message.outer_middleware(middleware)
 
             await bot.set_my_commands(commands=BOT_COMMANDS)
             await bot.delete_webhook(drop_pending_updates=True)
