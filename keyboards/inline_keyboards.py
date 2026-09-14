@@ -270,6 +270,11 @@ def admin_keyboard():
                 text="🏘 Check Groups", callback_data="check_active_groups"
             ),
         ],
+        [
+            InlineKeyboardButton(
+                text="📥 Download History", callback_data="admin_download_history"
+            )
+        ],
         [InlineKeyboardButton(text="📬 Mailing", callback_data="send_to_all")],
         [
             InlineKeyboardButton(

@@ -19,6 +19,7 @@ from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import StatesGroup, State
 from aiogram.types import BufferedInputFile
+from aiogram_dialog import DialogManager, StartMode
 
 import keyboards as kb
 import messages as bm
@@ -931,6 +932,17 @@ async def cancel_action(call: types.CallbackQuery, state: FSMContext):
             bm.canceled(),
             reply_markup=kb.return_back_to_admin_keyboard()
         )
+
+
+@router.callback_query(F.data == "admin_download_history")
+async def admin_download_history(call: types.CallbackQuery, dialog_manager: DialogManager):
+    if not await _ensure_admin_callback(call):
+        return
+
+    await call.answer()
+    from handlers.admin_history_dialog import AdminHistorySG
+
+    await dialog_manager.start(AdminHistorySG.history, mode=StartMode.RESET_STACK)
 
 
 @router.callback_query(F.data == 'message_chat_id')

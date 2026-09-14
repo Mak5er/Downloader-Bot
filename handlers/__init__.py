@@ -13,6 +13,7 @@ from . import (
     threads,
     guest,
 )
+from .admin_history_dialog import admin_history_dialog
 
 router = Router(name=__name__)
 
@@ -28,6 +29,7 @@ router.include_routers(
     threads.router,
     soundcloud.router,
     pinterest.router,
+    admin_history_dialog,
 )
 
 __all__ = [router]

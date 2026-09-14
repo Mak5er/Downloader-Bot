@@ -351,6 +351,9 @@ async def main():
                 os.makedirs(OUTPUT_DIR)
 
             dp.include_router(handlers.router)
+            from aiogram_dialog import setup_dialogs
+
+            setup_dialogs(dp)
 
             for middleware_cls in middlewares.__all__:
                 middleware = middleware_cls()
