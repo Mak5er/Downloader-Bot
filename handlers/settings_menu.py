@@ -177,7 +177,7 @@ async def change_setting(call: types.CallbackQuery):
         tb_exc = getattr(user_mod, "TelegramBadRequest", TelegramBadRequest)
         if isinstance(exc, (TelegramBadRequest, tb_exc)) or user_mod._is_message_not_modified_error(exc):
             if user_mod._is_message_not_modified_error(exc):
-                logging.info(
+                logging.debug(
                     "Settings keyboard already up to date: field=%s user_id=%s chat_id=%s",
                     field,
                     getattr(call.from_user, "id", None),

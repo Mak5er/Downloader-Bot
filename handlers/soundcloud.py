@@ -134,7 +134,7 @@ async def process_soundcloud(message: types.Message, direct_url: Optional[str] =
         if request_lease is None:
             return
 
-        logging.info(
+        logging.debug(
             "SoundCloud request: user_id=%s url=%s",
             message.from_user.id,
             summarize_url_for_log(source_url),

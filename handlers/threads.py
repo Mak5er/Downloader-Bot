@@ -99,7 +99,7 @@ async def process_threads(message: types.Message, direct_url: Optional[str] = No
         if request_lease is None:
             return
 
-        logging.info("Threads request: user_id=%s url=%s", message.from_user.id, summarize_url_for_log(source_url))
+        logging.debug("Threads request: user_id=%s url=%s", message.from_user.id, summarize_url_for_log(source_url))
         await send_analytics(user_id=message.from_user.id, chat_type=message.chat.type, action_name="threads_media")
         await react_to_message(message, "🧵", business_id=business_id)
         user_settings = await load_user_settings(db, message)

@@ -93,7 +93,7 @@ async def process_spotify(message: types.Message, direct_url: Optional[str] = No
         if request_lease is None:
             return
 
-        logging.info(
+        logging.debug(
             "Spotify track request: user_id=%s url=%s",
             message.from_user.id,
             summarize_url_for_log(source_url),

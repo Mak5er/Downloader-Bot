@@ -4,6 +4,7 @@ import json
 import logging
 import os
 import re
+import sys
 from contextlib import contextmanager, suppress
 from contextvars import ContextVar, Token
 from datetime import datetime
@@ -270,7 +271,7 @@ class ContextFilter(logging.Filter):
             record.duration_ms = "-"
 
         message = record.getMessage()
-        if message.startswith("[") and (" | " in message):
+        if message.startswith("["):
             record.text_context_block = ""
             record.text_message_block = f" | {message}"
         else:
@@ -425,6 +426,13 @@ def _console_verbose() -> bool:
     return os.getenv("LOG_CONSOLE_VERBOSE", "").strip().lower() in {"1", "true", "yes"}
 
 
+def _resolve_log_level(env_name: str, default: int = logging.INFO) -> int:
+    val = os.getenv(env_name, "").strip().upper()
+    if not val:
+        return default
+    return getattr(logging, val, default)
+
+
 def _format_bytes_compact(size_bytes: int) -> str:
     if size_bytes < 1024:
         return f"{size_bytes} B"
@@ -453,9 +461,10 @@ FILE_FORMAT = (
 )
 
 
-def _build_console_handler(level: int) -> logging.Handler:
-    handler = logging.StreamHandler()
-    handler.setLevel(level)
+def _build_console_handler(level: int | None = None) -> logging.Handler:
+    resolved_level = level if level is not None else _resolve_log_level("LOG_LEVEL", logging.INFO)
+    handler = logging.StreamHandler(sys.stdout)
+    handler.setLevel(resolved_level)
     formatter = colorlog.ColoredFormatter(
         CONSOLE_FORMAT,
         log_colors={
@@ -472,11 +481,13 @@ def _build_console_handler(level: int) -> logging.Handler:
     return handler
 
 
-def _build_file_handler(path: str, level: int) -> logging.Handler:
+def _build_file_handler(path: str, level: int, *, clean: bool = False) -> logging.Handler:
     handler = RotatingFileHandler(path, maxBytes=5 * 1024 * 1024, backupCount=5, encoding="utf-8")
     handler.setLevel(level)
     formatter = LocalTimeFormatter(FILE_FORMAT)
     handler.setFormatter(formatter)
+    if clean:
+        handler.addFilter(ConsoleCleanFilter())
     handler.addFilter(ContextFilter())
     return handler
 
@@ -523,8 +534,8 @@ def _safe_add_handler(
 if _sinks_disabled():
     _base_logger.addHandler(logging.NullHandler())
 else:
-    _base_logger.addHandler(_build_console_handler(logging.INFO))
-    _safe_add_handler(lambda: _build_file_handler(INFO_LOG, logging.INFO), description="info file logger", path=INFO_LOG)
+    _base_logger.addHandler(_build_console_handler())
+    _safe_add_handler(lambda: _build_file_handler(INFO_LOG, logging.INFO, clean=True), description="info file logger", path=INFO_LOG)
     _safe_add_handler(lambda: _build_file_handler(ERROR_LOG, logging.ERROR), description="error file logger", path=ERROR_LOG)
     _safe_add_handler(lambda: _build_json_handler(EVENT_LOG, "event"), description="event json logger", path=EVENT_LOG)
     _safe_add_handler(lambda: _build_json_handler(PERF_LOG, "perf"), description="perf json logger", path=PERF_LOG)

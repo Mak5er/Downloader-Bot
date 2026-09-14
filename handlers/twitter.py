@@ -334,7 +334,7 @@ async def _cleanup_tweet_dir(tweet_dir):
 
 async def reply_media(message, tweet_id, tweet_media, bot_url, business_id, user_settings):
     await send_analytics(user_id=message.from_user.id, chat_type=message.chat.type, action_name="twitter")
-    logging.info(
+    logging.debug(
         "Processing tweet media: user_id=%s tweet_id=%s",
         message.from_user.id,
         tweet_id,
@@ -372,7 +372,7 @@ async def reply_media(message, tweet_id, tweet_media, bot_url, business_id, user
                 request_id=f"twitter:{message.chat.id}:{message.message_id}:{tweet_id}",
                 download_dir_name=tweet_dir_name,
             )
-            logging.info(
+            logging.debug(
                 "Tweet media fetched: tweet_id=%s photos=%s videos=%s",
                 tweet_id,
                 sum(1 for item in media_entries if item["kind"] == "photo"),
@@ -417,7 +417,7 @@ async def reply_media(message, tweet_id, tweet_media, bot_url, business_id, user
         )
 
         if delivered:
-            logging.info(
+            logging.debug(
                 "Tweet media delivered: user_id=%s tweet_id=%s",
                 message.from_user.id,
                 tweet_id,
@@ -495,7 +495,7 @@ async def handle_tweet_links(message, direct_url: Optional[str] = None):
     business_id = message.business_connection_id
     text = direct_url or get_message_text(message)
 
-    logging.info(
+    logging.debug(
         "Twitter request received: user_id=%s username=%s business_id=%s text=%s",
         message.from_user.id,
         message.from_user.username,
@@ -522,7 +522,7 @@ async def handle_tweet_links(message, direct_url: Optional[str] = None):
         user_settings = await load_user_settings(db, message)
         tweet_ids = await extract_tweet_ids_async(text)
         if tweet_ids:
-            logging.info("Twitter links parsed: user_id=%s count=%s", message.from_user.id, len(tweet_ids))
+            logging.debug("Twitter links parsed: user_id=%s count=%s", message.from_user.id, len(tweet_ids))
             await send_chat_action_if_needed(bot, message.chat.id, "typing", business_id)
             prefetched_payloads = await _prefetch_tweet_payloads(tweet_ids)
 
@@ -539,7 +539,7 @@ async def handle_tweet_links(message, direct_url: Optional[str] = None):
                     logging.exception("Failed to process tweet: tweet_id=%s error=%s", tweet_id, e)
                     await message.reply(bm.something_went_wrong())
         else:
-            logging.info("No tweet links found: user_id=%s", message.from_user.id)
+            logging.debug("No tweet links found: user_id=%s", message.from_user.id)
             await react_to_message(message, "👎", business_id=business_id)
             await message.reply(bm.nothing_found())
     except Exception as e:

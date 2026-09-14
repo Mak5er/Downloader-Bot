@@ -208,7 +208,7 @@ async def get_spotify_track(url: str) -> dict[str, Any]:
                 params={"market": SPOTIFY_MARKET or "UA"},
             ) as response:
                 if response.status in {401, 403, 429}:
-                    logging.info(
+                    logging.debug(
                         "Spotify catalog metadata unavailable; continuing with oEmbed fallback: status=%s",
                         response.status,
                     )

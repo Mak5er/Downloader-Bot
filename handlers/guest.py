@@ -238,7 +238,7 @@ async def handle_guest_message(
 
     text = message.text or message.caption or ""
     has_reply = getattr(message, "reply_to_message", None) is not None
-    logging.info(
+    logging.debug(
         "Guest message received: user_id=%s guest_query_id=%s text=%s has_reply=%s",
         user_id,
         guest_query_id,

@@ -55,7 +55,7 @@ async def handle_tiktok_inline_query(
             chat_type=query.chat_type,
             action_name="inline_tiktok_video",
         )
-        logging.info(
+        logging.debug(
             "Inline TikTok request: user_id=%s query=%s",
             query.from_user.id,
             summarize_text_for_log(query.query),

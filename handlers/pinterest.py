@@ -118,7 +118,7 @@ async def process_pinterest(message: types.Message, direct_url: Optional[str] = 
         if request_lease is None:
             return
 
-        logging.info("Pinterest request: user_id=%s url=%s", message.from_user.id, summarize_url_for_log(source_url))
+        logging.debug("Pinterest request: user_id=%s url=%s", message.from_user.id, summarize_url_for_log(source_url))
         await send_analytics(user_id=message.from_user.id, chat_type=message.chat.type, action_name="pinterest_media")
         await react_to_message(message, "\U0001F47E", business_id=business_id)
         user_settings = await load_user_settings(db, message)

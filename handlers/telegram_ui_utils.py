@@ -113,7 +113,7 @@ async def should_skip_duplicate_business_message(
         cached_time is not None
         and now - cached_time < _business_message_dedup_ttl_seconds
     ):
-        logger.info(
+        logger.debug(
             "Skipping duplicate %s business message: sender_id=%s receiver_id=%s text_len=%s",
             service_name,
             sender_id,

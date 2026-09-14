@@ -141,7 +141,7 @@ async def process_tiktok(message: types.Message, direct_url: Optional[str] = Non
         show_service_status = business_id is None
         text = direct_url or get_message_text(message)
 
-        logging.info(
+        logging.debug(
             "TikTok request received: user_id=%s username=%s business_id=%s text=%s",
             message.from_user.id,
             message.from_user.username,
@@ -152,7 +152,7 @@ async def process_tiktok(message: types.Message, direct_url: Optional[str] = Non
         if await should_skip_duplicate_business_message(
             message, bot, service_name="TikTok", logger=logging
         ):
-            logging.info(
+            logging.debug(
                 "Skipping outgoing TikTok business message: user_id=%s business_id=%s chat_id=%s",
                 message.from_user.id,
                 business_id,
@@ -429,7 +429,7 @@ async def process_tiktok_photos(
         )
         await handle_download_error(message, business_id=business_id)
         return False
-    logging.info(
+    logging.debug(
         "Sending TikTok photo set: user_id=%s url=%s image_count=%s",
         message.from_user.id,
         summarize_url_for_log(video_url),
@@ -555,7 +555,7 @@ async def process_tiktok_profile(
         action_name="tiktok_profile",
     )
     username = full_url.split("@")[1].split("?")[0]
-    logging.info(
+    logging.debug(
         "Fetching TikTok profile: user_id=%s target=%s",
         message.from_user.id,
         username,
@@ -672,7 +672,7 @@ async def download_tiktok_audio_callback(call: types.CallbackQuery):
 
     _, _, author, video_id = parts
     video_url = f"https://www.tiktok.com/@{author}/video/{video_id}"
-    logging.info(
+    logging.debug(
         "Downloading TikTok MP3 via button: user_id=%s url=%s",
         call.from_user.id,
         summarize_url_for_log(video_url),

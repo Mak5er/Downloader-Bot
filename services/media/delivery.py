@@ -258,7 +258,7 @@ def make_video_or_document_senders(
     that hits TelegramBadRequest resolves to None so the flow re-downloads."""
 
     async def send_cached(file_id: str) -> types.Message | None:
-        logging.info(
+        logging.debug(
             "Serving cached %s: url=%s file_id=%s",
             cached_log_label,
             summarize_url_for_log(cached_log_url),

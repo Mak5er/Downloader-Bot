@@ -352,7 +352,7 @@ class YouTubeMediaService:
         try:
             await asyncio.to_thread(self._run_ytdlp_download, url, ydl_opts)
             resolved_path = self._resolve_downloaded_path(out_path)
-            logging.info("yt-dlp fallback succeeded: url=%s path=%s", url, resolved_path)
+            logging.debug("yt-dlp fallback succeeded: url=%s path=%s", url, resolved_path)
             return resolved_path
         except Exception as exc:
             logging.error("yt-dlp fallback failed: url=%s error=%s", url, exc)

@@ -274,7 +274,7 @@ async def download_video(message: types.Message, direct_url: Optional[str] = Non
         await update_info(message)
         return
 
-    logging.info(
+    logging.debug(
         "Downloading YouTube video : user_id=%s username=%s url=%s",
         message.from_user.id,
         message.from_user.username,
@@ -415,7 +415,7 @@ async def download_video(message: types.Message, direct_url: Optional[str] = Non
         )
         if sent_message and getattr(sent_message, "video", None):
             request_lease.mark_success()
-            logging.info(
+            logging.debug(
                 "YouTube video cached: url=%s file_id=%s",
                 summarize_url_for_log(yt["webpage_url"]),
                 sent_message.video.file_id,
@@ -462,7 +462,7 @@ async def download_music(message: types.Message, direct_url: Optional[str] = Non
         await update_info(message)
         return
 
-    logging.info(
+    logging.debug(
         "Downloading YouTube audio: user_id=%s username=%s url=%s",
         message.from_user.id,
         message.from_user.username,
@@ -643,7 +643,7 @@ async def download_youtube_mp3_callback(call: types.CallbackQuery):
         status_message = await call.message.answer(bm.downloading_audio_status())
     video_id = call.data.split(":", 2)[2]
     url = f"https://www.youtube.com/watch?v={video_id}"
-    logging.info(
+    logging.debug(
         "Downloading YouTube MP3 via button: user_id=%s url=%s",
         call.from_user.id,
         summarize_url_for_log(url),

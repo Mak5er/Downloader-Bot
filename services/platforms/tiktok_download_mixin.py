@@ -395,7 +395,7 @@ class TikTokDownloadMixin:
             logging.debug("Cobalt returned no usable URL for TikTok: status=%s", status)
             return None
 
-        logging.info("Cobalt resolved TikTok URL: source=%s cobalt_url=%s", source_url, video_url)
+        logging.debug("Cobalt resolved TikTok URL: source=%s cobalt_url=%s", source_url, video_url)
 
         try:
             return await self._downloader.download(
@@ -430,7 +430,7 @@ class TikTokDownloadMixin:
             try:
                 direct_metrics = await direct_download()
                 if direct_metrics:
-                    logging.info(
+                    logging.debug(
                         "TikTok direct %s download succeeded: source_url=%s path=%s cycle=%s",
                         media_kind,
                         source_url,
@@ -542,7 +542,7 @@ class TikTokDownloadMixin:
                 on_progress=on_progress,
             )
             if cobalt_result:
-                logging.info("TikTok video downloaded via Cobalt: source_url=%s", source_url)
+                logging.debug("TikTok video downloaded via Cobalt: source_url=%s", source_url)
                 return cobalt_result
 
             return await self._download_with_service_cycle(

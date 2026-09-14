@@ -138,7 +138,7 @@ async def probe_telegram_video_attrs(path: Optional[str]) -> TelegramVideoAttrs:
     )
 
     if normalized_width != width or normalized_height != height:
-        logging.info(
+        logging.debug(
             "Adjusted Telegram video dimensions from probed aspect metadata: path=%s width=%s height=%s adjusted_width=%s adjusted_height=%s",
             path,
             width,

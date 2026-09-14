@@ -142,7 +142,7 @@ async def process_instagram(message: types.Message, direct_url: Optional[str] = 
         if request_lease is None:
             return
 
-        logging.info(
+        logging.debug(
             "Instagram request: user_id=%s url=%s",
             message.from_user.id,
             summarize_url_for_log(url),
@@ -352,7 +352,7 @@ async def process_instagram_media_group(
         action_name="instagram_media_group",
     )
 
-    logging.info(
+    logging.debug(
         "Sending Instagram media group: user_id=%s media_count=%s url=%s",
         message.from_user.id,
         len(data.media_list),
@@ -418,7 +418,7 @@ async def process_instagram_media_group(
 
         await maybe_delete_user_message(message, user_settings["delete_message"])
 
-        logging.info(
+        logging.debug(
             "Successfully sent Instagram media group: user_id=%s media_count=%s",
             message.from_user.id,
             len(media_items),
@@ -452,7 +452,7 @@ async def download_instagram_audio_callback(call: types.CallbackQuery):
 
         db_file_id = await db.get_file_id(cache_key)
         if db_file_id:
-            logging.info(
+            logging.debug(
                 "Serving cached Instagram audio: url=%s file_id=%s",
                 summarize_url_for_log(original_url),
                 db_file_id,
@@ -542,7 +542,7 @@ async def download_instagram_audio_callback(call: types.CallbackQuery):
 
         try:
             await db.add_file(cache_key, sent_message.audio.file_id, "audio")
-            logging.info(
+            logging.debug(
                 "Cached Instagram audio: url=%s file_id=%s",
                 summarize_url_for_log(original_url),
                 sent_message.audio.file_id,

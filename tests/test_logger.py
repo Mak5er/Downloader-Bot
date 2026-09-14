@@ -186,3 +186,74 @@ def test_logger_download_summary_helpers():
     assert "[FAILED] user=123 | twitter | error=File too large | https://x.com/post/1" in output
 
 
+def test_console_handler_targets_stdout_and_respects_log_level(monkeypatch):
+    import sys
+    monkeypatch.delenv("LOG_LEVEL", raising=False)
+    handler_default = logger_module._build_console_handler()
+    assert handler_default.stream is sys.stdout
+    assert handler_default.level == logging.INFO
+
+    monkeypatch.setenv("LOG_LEVEL", "DEBUG")
+    handler_debug = logger_module._build_console_handler()
+    assert handler_debug.stream is sys.stdout
+    assert handler_debug.level == logging.DEBUG
+
+
+def test_context_filter_skips_context_block_for_bracketed_messages():
+    context_filter = logger_module.ContextFilter()
+    record = logging.LogRecord(
+        name="maxload",
+        level=logging.INFO,
+        pathname="",
+        lineno=0,
+        msg="[STARTUP] Bot started successfully. Listening for updates...",
+        args=(),
+        exc_info=None,
+    )
+    record.service = "main"
+    record.flow = "startup"
+    record.request_id = "bot-startup"
+
+    context_filter.filter(record)
+    assert record.text_context_block == ""
+    assert record.text_message_block == " | [STARTUP] Bot started successfully. Listening for updates..."
+
+
+def test_clean_file_handler_suppresses_telemetry_events(tmp_path):
+    log_file = tmp_path / "clean_test.log"
+    handler = logger_module._build_file_handler(str(log_file), logging.INFO, clean=True)
+    try:
+        record_event = logging.LogRecord(
+            name="maxload",
+            level=logging.INFO,
+            pathname="",
+            lineno=0,
+            msg="flow_started",
+            args=(),
+            exc_info=None,
+        )
+        record_event.kind = "event"
+
+        record_app = logging.LogRecord(
+            name="maxload",
+            level=logging.INFO,
+            pathname="",
+            lineno=0,
+            msg="[STARTUP] Bot initialized",
+            args=(),
+            exc_info=None,
+        )
+        record_app.kind = "app"
+
+        handler.handle(record_event)
+        handler.handle(record_app)
+        handler.flush()
+
+        content = log_file.read_text(encoding="utf-8")
+        assert "flow_started" not in content
+        assert "[STARTUP] Bot initialized" in content
+    finally:
+        handler.close()
+
+
+

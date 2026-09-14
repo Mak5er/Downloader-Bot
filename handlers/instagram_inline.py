@@ -53,7 +53,7 @@ async def handle_instagram_inline_query(
             chat_type=query.chat_type,
             action_name="inline_instagram_video",
         )
-        logging.info(
+        logging.debug(
             "Inline Instagram request: user_id=%s query=%s",
             query.from_user.id,
             summarize_text_for_log(query.query),

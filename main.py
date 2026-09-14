@@ -338,9 +338,12 @@ async def main():
         try:
             startup_started_at = asyncio.get_running_loop().time()
             bot_me = await bot.get_me()
+            bot_id = getattr(bot_me, "id", "-")
+            logging.info("[STARTUP] Bot starting up: @%s (ID: %s)", bot_me.username, bot_id)
             logging.event("bot_startup", bot_username=bot_me.username)
             set_app_context(bot=bot, db=db, send_analytics=send_analytics)
             await db.init_db()
+            logging.info("[STARTUP] Database initialized successfully")
             await start_analytics_workers()
             analytics_started = True
 
@@ -375,6 +378,7 @@ async def main():
                 bot_username=bot_me.username,
             )
             logging.event("polling_started")
+            logging.info("[STARTUP] Bot started successfully. Listening for updates...")
             await dp.start_polling(
                 bot,
                 allowed_updates=dp.resolve_used_update_types(),
@@ -383,6 +387,7 @@ async def main():
                 ),
             )
         finally:
+            logging.info("[SHUTDOWN] Bot shutting down...")
             logging.event("polling_stopping")
             if "heartbeat_task" in locals():
                 heartbeat_task.cancel()
