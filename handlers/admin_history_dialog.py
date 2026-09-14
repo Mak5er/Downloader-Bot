@@ -68,12 +68,17 @@ def format_history_entry(item: Any) -> str:
     service_title = service_raw.replace("_", " ").title()
 
     user_name = None
-    if getattr(item, "user", None):
-        user_obj = item.user
-        if getattr(user_obj, "user_username", None):
-            user_name = f"@{user_obj.user_username}"
-        elif getattr(user_obj, "user_name", None):
-            user_name = user_obj.user_name
+    u = getattr(item, "user", None)
+    if isinstance(u, list) and u:
+        u = u[0]
+
+    if u:
+        username = getattr(u, "user_username", None)
+        full_name = getattr(u, "user_name", None)
+        if username:
+            user_name = f"@{username.lstrip('@')}"
+        elif full_name:
+            user_name = full_name
 
     if not user_name:
         user_name = "User"
@@ -177,12 +182,16 @@ async def get_history_data(dialog_manager: DialogManager, **kwargs) -> dict[str,
         uid = getattr(item, "user_id", None)
         if uid and uid not in unique_users:
             uname = None
-            if getattr(item, "user", None):
-                u = item.user
-                if getattr(u, "user_username", None):
-                    uname = f"@{u.user_username}"
-                elif getattr(u, "user_name", None):
-                    uname = u.user_name
+            u = getattr(item, "user", None)
+            if isinstance(u, list) and u:
+                u = u[0]
+            if u:
+                username = getattr(u, "user_username", None)
+                full_name = getattr(u, "user_name", None)
+                if username:
+                    uname = f"@{username.lstrip('@')}"
+                elif full_name:
+                    uname = full_name
             if not uname:
                 uname = f"User {uid}"
             unique_users[uid] = uname

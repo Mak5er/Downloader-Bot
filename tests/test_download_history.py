@@ -143,3 +143,11 @@ async def test_cleanup_expired_history(monkeypatch):
     assert session.execute.await_count >= 2
     delete_statement = session.execute.await_args_list[1].args[0]
     assert "DELETE FROM download_history" in str(delete_statement)
+
+
+def test_download_history_user_relationship():
+    mapper = DownloadHistory.__mapper__
+    user_rel = mapper.relationships["user"]
+    assert user_rel.uselist is False
+    assert str(user_rel.direction) == "RelationshipDirection.MANYTOONE"
+

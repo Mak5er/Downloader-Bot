@@ -185,7 +185,7 @@ class DownloadHistory(Base):
 
     user = relationship(
         "User",
-        primaryjoin="DownloadHistory.user_id == foreign(User.user_id)",
+        primaryjoin="DownloadHistory.user_id == User.user_id",
         lazy="selectin",
     )
 

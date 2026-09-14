@@ -99,6 +99,45 @@ def test_format_history_entry_cached():
     assert "⚡ Cached" in formatted
 
 
+def test_format_history_entry_username_priority_over_fullname():
+    item = SimpleNamespace(
+        service="tiktok",
+        user_id=6013011895,
+        url="https://tiktok.com/@test/1",
+        title="TikTok Video",
+        status="success",
+        file_size_bytes=None,
+        duration_seconds=None,
+        chat_type="private",
+        error_message=None,
+        created_at=None,
+        user=SimpleNamespace(user_name="Mak5er Full", user_username="mak5er"),
+    )
+
+    formatted = format_history_entry(item)
+    assert "👤 <b>@mak5er</b> (<code>6013011895</code>)" in formatted
+
+
+def test_format_history_entry_list_user_handling():
+    item = SimpleNamespace(
+        service="youtube",
+        user_id=6013011895,
+        url="https://youtube.com/watch?v=xyz",
+        title="YouTube Video",
+        status="success",
+        file_size_bytes=None,
+        duration_seconds=None,
+        chat_type="private",
+        error_message=None,
+        created_at=None,
+        user=[SimpleNamespace(user_name="Mak5er", user_username="@mak5er")],
+    )
+
+    formatted = format_history_entry(item)
+    assert "👤 <b>@mak5er</b> (<code>6013011895</code>)" in formatted
+
+
+
 @pytest.mark.asyncio
 async def test_get_history_data():
     mock_db = SimpleNamespace(
