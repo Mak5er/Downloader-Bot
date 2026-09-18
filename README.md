@@ -297,11 +297,6 @@ Public bot: [@MaxLoadBot](https://t.me/MaxLoadBot)
 If Downloader-Bot saves you time, you can support ongoing development and infrastructure costs:
 
 - PayPal: [Donate](https://www.paypal.com/donate/?hosted_button_id=98QRTC2HFRA4Y)
-- TRC20: `TS4Ktovpwz9n2Ws8q9YXC3npW8gXi4QyYi`
-- BEP20: `0xE8F613484f84F1B70A777325771d3A3Ca33979Ab`
-- Solana: `8pfgWjfvDUpmeszVXbRzbifFzUDzeNeGWuJf6HCcjAF7`
-- ERC20: `0x9b38804F07A4ca4381a6Ef7F0022a3F4caBc5b6F`
-- TON: `UQBm9KPhtMw-XVVjirUoa09wzrlyWsbeZhKfefl1Uw-qNZ-r`
 
 ## License
 
