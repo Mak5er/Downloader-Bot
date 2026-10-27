@@ -13,4 +13,4 @@ mutagen==1.48.1
 pillow==12.3.0
 psycopg2-binary==2.9.12
 python-dotenv==1.2.3
-yt-dlp[default]==2026.8.19
+yt-dlp[default]==2026.10.26
