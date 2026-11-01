@@ -22,6 +22,15 @@ database_url = resolve_alembic_database_url(
     os.getenv("DATABASE_URL"),
 )
 if database_url:
+    if database_url.startswith("postgresql://"):
+        try:
+            import psycopg  # noqa: F401
+        except ImportError:
+            try:
+                import psycopg2  # noqa: F401
+                database_url = database_url.replace("postgresql://", "postgresql+psycopg2://", 1)
+            except ImportError:
+                pass
     config.set_main_option("sqlalchemy.url", database_url)
 target_metadata = Base.metadata
 

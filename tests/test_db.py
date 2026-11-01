@@ -83,8 +83,12 @@ def test_database_url_helpers_normalize_postgres_urls():
 
     assert to_sync_database_url(async_url) == sync_url
     assert to_sync_database_url(sync_url) == sync_url
+    assert to_sync_database_url("postgresql+psycopg2://user:pass@localhost/testdb") == sync_url
+    assert to_sync_database_url("postgresql+psycopg://user:pass@localhost/testdb") == sync_url
     assert to_async_database_url(sync_url) == async_url
     assert to_async_database_url(async_url) == async_url
+    assert to_async_database_url("postgresql+psycopg2://user:pass@localhost/testdb") == async_url
+    assert to_async_database_url("postgresql+psycopg://user:pass@localhost/testdb") == async_url
 
 
 def test_resolve_alembic_database_url_prefers_explicit_config():
@@ -99,6 +103,15 @@ def test_resolve_alembic_database_url_uses_env_placeholder_fallback():
         ALEMBIC_DATABASE_URL_PLACEHOLDER,
         "postgresql+asyncpg://env/db",
     ) == "postgresql://env/db"
+
+
+def test_build_alembic_config_falls_back_to_psycopg2_when_psycopg_missing(monkeypatch):
+    import sys
+    database = db_module.DataBase("postgresql://user:pass@localhost/testdb")
+    monkeypatch.setitem(sys.modules, "psycopg", None)
+    monkeypatch.setitem(sys.modules, "psycopg2", object())
+    cfg = database._build_alembic_config()
+    assert cfg.get_main_option("sqlalchemy.url") == "postgresql+psycopg2://user:pass@localhost/testdb"
 
 
 @pytest.mark.asyncio

@@ -5,7 +5,7 @@ ALEMBIC_DATABASE_URL_PLACEHOLDER = "${DATABASE_URL}"
 
 
 def to_sync_database_url(database_url: str) -> str:
-    return re.sub(r"^postgresql\+asyncpg:", "postgresql:", database_url)
+    return re.sub(r"^postgresql\+(?:asyncpg|psycopg|psycopg2):", "postgresql:", database_url)
 
 
 def to_async_database_url(database_url: str) -> str:

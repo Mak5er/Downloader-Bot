@@ -38,7 +38,17 @@ class SchemaManagerMixin:
         services_dir = Path(__file__).resolve().parent.parent
         config = AlembicConfig(str(services_dir / "alembic.ini"))
         config.set_main_option("script_location", str(services_dir / "alembic"))
-        config.set_main_option("sqlalchemy.url", self.sync_url)
+        sync_url = self.sync_url
+        if sync_url and sync_url.startswith("postgresql://"):
+            try:
+                import psycopg  # noqa: F401
+            except ImportError:
+                try:
+                    import psycopg2  # noqa: F401
+                    sync_url = sync_url.replace("postgresql://", "postgresql+psycopg2://", 1)
+                except ImportError:
+                    pass
+        config.set_main_option("sqlalchemy.url", sync_url)
         config.attributes["skip_logging_config"] = True
         return config
 
