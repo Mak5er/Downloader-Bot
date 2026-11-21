@@ -2,7 +2,7 @@
 
 FROM denoland/deno:2.9.8 AS deno
 
-FROM python:3.14-slim AS builder
+FROM python:3.15-slim AS builder
 
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
 
@@ -33,7 +33,7 @@ COPY requirements.txt ./
 RUN --mount=type=cache,target=/root/.cache/uv,sharing=locked \
     uv pip install --python "$VIRTUAL_ENV/bin/python" -r requirements.txt
 
-FROM python:3.14-slim
+FROM python:3.15-slim
 # Pin to a digest for reproducible builds:
 #   docker pull python:3.14-slim && docker inspect --format='{{index .RepoDigests 0}}' python:3.14-slim
 #   Then use: FROM python:3.14-slim@sha256:...
